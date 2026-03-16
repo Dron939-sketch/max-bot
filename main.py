@@ -220,12 +220,27 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
 def run_health_server():
-    try:
-        server = HTTPServer(('0.0.0.0', 10000), HealthHandler)
-        logger.info("✅ Health check server started on port 10000")
-        server.serve_forever()
-    except Exception as e:
-        logger.error(f"❌ Health check server error: {e}")
+    """Запускает health check сервер на доступном порту"""
+    ports = [10000, 10001, 10002, 10003, 10004]
+    
+    for port in ports:
+        try:
+            server = HTTPServer(('0.0.0.0', port), HealthHandler)
+            logger.info(f"✅ Health check server started on port {port}")
+            server.serve_forever()
+            return  # Выходим, если успешно запустились
+        except OSError as e:
+            if e.errno == 98:  # Address already in use
+                logger.debug(f"⚠️ Port {port} is busy, trying next...")
+                continue
+            else:
+                logger.error(f"❌ OS error on port {port}: {e}")
+                break
+        except Exception as e:
+            logger.error(f"❌ Unexpected error on port {port}: {e}")
+            break
+    
+    logger.warning("⚠️ Could not start health check server on any port")
 
 # Запускаем health check в отдельном потоке
 health_thread = threading.Thread(target=run_health_server, daemon=True)
