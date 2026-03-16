@@ -29,7 +29,7 @@ from handlers.stages import (
 from handlers.modes import show_mode_selection, show_mode_selected, show_main_menu_after_mode
 
 # Импорты обработчиков контекста
-from handlers.context import handle_context_callback
+from handlers.context import handle_context_callback, start_context
 
 # Импорты обработчиков reality check
 from handlers.reality import handle_reality_callback
@@ -94,9 +94,16 @@ def callback_handler(call: CallbackQuery):
     
     try:
         # ============================================
+        # КОНТЕКСТ (ДОБАВЛЕНО!)
+        # ============================================
+        if data == "start_context":
+            logger.info(f"📝 start_context для пользователя {user_id}")
+            start_context(call.message)
+        
+        # ============================================
         # ЭТАП 1
         # ============================================
-        if data == "show_stage_1_intro":
+        elif data == "show_stage_1_intro":
             logger.info(f"📢 show_stage_1_intro для пользователя {user_id}")
             state_data = get_state_data(user_id)
             show_stage_1_intro(call.message, user_id, state_data)
@@ -203,7 +210,7 @@ def callback_handler(call: CallbackQuery):
             handle_goodbye(call)
         
         # ============================================
-        # УТОЧНЯЮЩИЕ ВОПРОСЫ (ДОБАВЛЕНО!)
+        # УТОЧНЯЮЩИЕ ВОПРОСЫ
         # ============================================
         elif data.startswith("discrepancy_"):
             logger.info(f"🔍 discrepancy: {data} для пользователя {user_id}")
