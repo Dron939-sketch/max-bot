@@ -76,49 +76,76 @@ def start_context(message: Message):
     """
     user_id = message.chat.id
     
-    # Защита от повторных вызовов
-    if hasattr(message, '_context_started') and message._context_started:
-        logger.info(f"⚠️ start_context уже вызывался для user {user_id}, пропускаем")
+    # ========== ЖЕСТКАЯ ЗАЩИТА ОТ ДУБЛЕЙ ==========
+    from state import user_states, TestStates
+    import threading
+    
+    # Используем lock для потокобезопасности
+    if not hasattr(start_context, 'locks'):
+        start_context.locks = {}
+    
+    if user_id not in start_context.locks:
+        start_context.locks[user_id] = threading.Lock()
+    
+    # Пытаемся захватить lock
+    if not start_context.locks[user_id].acquire(blocking=False):
+        logger.info(f"⚠️ start_context уже выполняется для user {user_id}, пропускаем")
         return
-    message._context_started = True
     
-    logger.info(f"🚀 start_context вызван для user {user_id}")
-    
-    if user_id not in user_contexts:
-        logger.info(f"📝 Создаем новый контекст для user {user_id}")
-        user_contexts[user_id] = UserContext(user_id)
-    
-    context = user_contexts[user_id]
-    
-    # Принудительный сброс (чтобы точно спросило)
-    context.city = None
-    context.gender = None
-    context.age = None
-    context.awaiting_context = None
-    
-    # Получаем первый вопрос
-    logger.info(f"❓ Получаем первый вопрос от ask_for_context()")
-    question, keyboard = context.ask_for_context()
-    logger.info(f"📋 Первый вопрос: '{question}', клавиатура: {keyboard is not None}")
-    
-    if question:
-        logger.info(f"📤 Отправляем вопрос о городе...")
-        safe_send_message(
-            message,
-            f"📝 <b>Давайте познакомимся</b>\n\n{question}",
-            reply_markup=keyboard,
-            parse_mode='HTML',
-            delete_previous=True
-        )
-        logger.info(f"✅ Вопрос о городе отправлен, устанавливаем состояние awaiting_context")
-        # Устанавливаем состояние
-        set_state(user_id, TestStates.awaiting_context)
-        logger.info(f"📊 Состояние пользователя {user_id} установлено на {TestStates.awaiting_context}")
-    else:
-        logger.info(f"⚠️ Вопросов нет, показываем завершение")
-        # Если вопросы не нужны (уже всё есть), показываем завершение
-        show_context_complete(message, context)
-
+    try:
+        # Проверяем состояние
+        current_state = user_states.get(user_id)
+        if current_state == TestStates.awaiting_context:
+            logger.info(f"⚠️ Сбор контекста уже начат для user {user_id}, пропускаем")
+            return
+        
+        logger.info(f"🚀 start_context вызван для user {user_id}")
+        
+        if user_id not in user_contexts:
+            logger.info(f"📝 Создаем новый контекст для user {user_id}")
+            user_contexts[user_id] = UserContext(user_id)
+        
+        context = user_contexts[user_id]
+        
+        # Принудительный сброс
+        context.city = None
+        context.gender = None
+        context.age = None
+        context.awaiting_context = None
+        
+        # Получаем первый вопрос
+        logger.info(f"❓ Получаем первый вопрос от ask_for_context()")
+        question, keyboard = context.ask_for_context()
+        logger.info(f"📋 Первый вопрос: '{question}', клавиатура: {keyboard is not None}")
+        
+        if question:
+            logger.info(f"📤 Отправляем вопрос о городе...")
+            
+            # Удаляем предыдущее сообщение
+            try:
+                safe_delete_message(message.chat.id, message.message_id)
+            except:
+                pass
+            
+            safe_send_message(
+                message,
+                f"📝 <b>Давайте познакомимся</b>\n\n{question}",
+                reply_markup=keyboard,
+                parse_mode='HTML',
+                delete_previous=True
+            )
+            logger.info(f"✅ Вопрос о городе отправлен, устанавливаем состояние awaiting_context")
+            
+            # Устанавливаем состояние
+            set_state(user_id, TestStates.awaiting_context)
+            logger.info(f"📊 Состояние пользователя {user_id} установлено на {TestStates.awaiting_context}")
+        else:
+            logger.info(f"⚠️ Вопросов нет, показываем завершение")
+            show_context_complete(message, context)
+            
+    finally:
+        # Всегда освобождаем lock
+        start_context.locks[user_id].release()
 # ============================================
 # ОБРАБОТЧИКИ CALLBACK'ОВ ДЛЯ КОНТЕКСТА
 # ============================================
