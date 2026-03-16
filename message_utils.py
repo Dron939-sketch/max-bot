@@ -15,56 +15,55 @@ from formatters import clean_text_for_safe_display
 logger = logging.getLogger(__name__)
 
 
-def safe_send_message(
-    message: types.Message, 
-    text: str, 
-    reply_markup=None, 
-    parse_mode: str = 'HTML', 
-    delete_previous: bool = True
-) -> types.Message:
+def safe_send_message(message, text, reply_markup=None, parse_mode='HTML', delete_previous=False):
     """
-    Безопасно отправляет сообщение с HTML-разметкой и удаляет предыдущее
+    Безопасно отправляет сообщение с опцией удаления предыдущего
     
-    Аргументы:
-        message: сообщение пользователя (содержит chat.id)
+    Args:
+        message: исходное сообщение или chat_id
         text: текст для отправки
         reply_markup: клавиатура (опционально)
-        parse_mode: режим форматирования (HTML по умолчанию)
-        delete_previous: удалять ли предыдущее сообщение
-    
-    Возвращает:
-        отправленное сообщение
+        parse_mode: режим форматирования
+        delete_previous: удалить ли предыдущее сообщение бота
     """
-    chat_id = message.chat.id
-    
-    # Удаляем предыдущее сообщение бота, если оно было
-    if delete_previous and hasattr(message, 'message_id'):
-        try:
-            bot.delete_message(chat_id, message.message_id)
-            logger.debug(f"Удалено сообщение {message.message_id}")
-        except Exception as e:
-            if "message can't be deleted" not in str(e).lower():
-                logger.warning(f"Не удалось удалить сообщение: {e}")
-    
-    # Отправляем новое сообщение
     try:
-        sent_msg = bot.send_message(
-            chat_id, 
-            text, 
-            reply_markup=reply_markup, 
+        # Получаем chat_id
+        if hasattr(message, 'chat'):
+            chat_id = message.chat.id
+        else:
+            chat_id = message
+        
+        # Если нужно удалить предыдущее сообщение
+        if delete_previous:
+            try:
+                # Пытаемся найти и удалить предыдущее сообщение бота
+                # В MAX может не быть прямого доступа к истории, поэтому
+                # просто удаляем текущее сообщение пользователя
+                if hasattr(message, 'delete'):
+                    message.delete()
+            except Exception as e:
+                logger.warning(f"Не удалось удалить сообщение: {e}")
+        
+        # Отправляем новое сообщение
+        from bot_instance import bot
+        return bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
             parse_mode=parse_mode
         )
-        logger.debug(f"Отправлено сообщение {sent_msg.message_id}")
-        return sent_msg
     except Exception as e:
-        if "can't parse entities" in str(e).lower() or "parse" in str(e).lower():
-            # Если ошибка парсинга, отправляем без форматирования
-            clean_text = clean_text_for_safe_display(text)
-            logger.warning(f"Ошибка парсинга HTML, отправляем без форматирования: {e}")
-            return bot.send_message(chat_id, clean_text, reply_markup=reply_markup)
-        # Если другая ошибка - пробрасываем дальше
-        logger.error(f"Критическая ошибка при отправке: {e}")
-        raise
+        logger.error(f"Ошибка при отправке сообщения: {e}")
+        # Пробуем отправить без форматирования
+        try:
+            from bot_instance import bot
+            return bot.send_message(
+                chat_id=chat_id,
+                text=re.sub(r'<[^>]+>', '', text),
+                reply_markup=reply_markup
+            )
+        except:
+            return None
 
 
 def send_with_status_cleanup(
