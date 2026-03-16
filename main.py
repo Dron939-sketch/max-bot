@@ -3461,7 +3461,8 @@ def main():
     try:
         while retry_count < max_retries:
             try:
-                bot.polling(none_stop=True, interval=0, timeout=20)
+                # ИСПРАВЛЕНО: убрали none_stop и interval, оставили только timeout
+                bot.polling(timeout=20)
             except KeyboardInterrupt:
                 logger.info("👋 Бот остановлен пользователем")
                 break
