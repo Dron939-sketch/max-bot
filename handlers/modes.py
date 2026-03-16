@@ -17,10 +17,8 @@ from keyboards import (
 from formatters import bold
 from message_utils import safe_send_message, safe_edit_message
 
-# ИСПРАВЛЕННЫЕ ИМПОРТЫ
-from main import user_contexts, user_data, user_states, user_state_data
-from handlers.context import get_user_context, get_user_context_dict
-
+# ИСПРАВЛЕННЫЕ ИМПОРТЫ - используем только функции из context
+from handlers.context import get_user_context, get_user_state_data, update_user_state_data, get_user_context_dict
 import time
 
 logger = logging.getLogger(__name__)
@@ -34,9 +32,13 @@ def cmd_mode(message: types.Message):
     """Команда для смены режима"""
     user_id = message.from_user.id
     
-    # Получаем или создаем контекст
-    if user_id not in user_contexts:
-        user_contexts[user_id] = get_user_context(user_id) or UserContext(user_id)
+    # Получаем или создаем контекст через функцию
+    context = get_user_context(user_id)
+    if not context:
+        context = UserContext(user_id)
+        # Сохраняем через словарь контекстов
+        contexts_dict = get_user_context_dict()
+        contexts_dict[user_id] = context
     
     # Показываем выбор режима
     show_mode_selection(message)
@@ -46,9 +48,10 @@ def cmd_mode(message: types.Message):
 def cmd_menu(message: types.Message):
     """Команда для возврата в главное меню"""
     user_id = message.from_user.id
+    context = get_user_context(user_id)
     
-    if user_id in user_contexts:
-        show_main_menu_after_mode(message, user_contexts[user_id])
+    if context:
+        show_main_menu_after_mode(message, context)
     else:
         show_mode_selection(message)
 
@@ -69,11 +72,12 @@ def callback_mode_selected(call: types.CallbackQuery):
     user_id = call.from_user.id
     mode = call.data.replace('mode_', '')
     
-    # Получаем контекст
-    if user_id not in user_contexts:
-        user_contexts[user_id] = get_user_context(user_id) or UserContext(user_id)
-    
-    context = user_contexts[user_id]
+    # Получаем контекст через функцию
+    context = get_user_context(user_id)
+    if not context:
+        context = UserContext(user_id)
+        contexts_dict = get_user_context_dict()
+        contexts_dict[user_id] = context
     
     # Устанавливаем режим
     mode_map = {
@@ -87,8 +91,9 @@ def callback_mode_selected(call: types.CallbackQuery):
     new_mode = mode_map.get(mode, "coach")
     
     context.communication_mode = new_mode
-    # Сохраняем в глобальном хранилище
-    user_contexts[user_id] = context
+    # Сохраняем в словаре контекстов
+    contexts_dict = get_user_context_dict()
+    contexts_dict[user_id] = context
     
     # Показываем подтверждение
     show_mode_selected(call.message, new_mode)
@@ -104,9 +109,8 @@ def callback_back_to_modes(call: types.CallbackQuery):
 def callback_start_test(call: types.CallbackQuery):
     """Начать тест после выбора режима"""
     from .stages import show_stage_1_intro
-    # Получаем данные состояния
     user_id = call.from_user.id
-    state_data = user_state_data.get(user_id, {})
+    state_data = get_user_state_data(user_id)
     show_stage_1_intro(call.message, user_id, state_data)
 
 
@@ -114,9 +118,10 @@ def callback_start_test(call: types.CallbackQuery):
 def callback_main_menu(call: types.CallbackQuery):
     """Вернуться в главное меню"""
     user_id = call.from_user.id
+    context = get_user_context(user_id)
     
-    if user_id in user_contexts:
-        show_main_menu_after_mode(call.message, user_contexts[user_id])
+    if context:
+        show_main_menu_after_mode(call.message, context)
     else:
         show_mode_selection(call.message)
 
@@ -129,11 +134,12 @@ def show_mode_selection(message: types.Message):
     """Показывает выбор режима общения"""
     user_id = message.chat.id
     
-    # Получаем контекст
-    if user_id not in user_contexts:
-        user_contexts[user_id] = get_user_context(user_id) or UserContext(user_id)
-    
-    context = user_contexts[user_id]
+    # Получаем контекст через функцию
+    context = get_user_context(user_id)
+    if not context:
+        context = UserContext(user_id)
+        contexts_dict = get_user_context_dict()
+        contexts_dict[user_id] = context
     
     # Получаем данные профиля (из БД или контекста)
     profile_data = getattr(context, 'profile_data', {})
@@ -217,7 +223,7 @@ def show_mode_selection(message: types.Message):
 def show_mode_selected(message: types.Message, mode: str):
     """Показывает экран подтверждения выбранного режима"""
     user_id = message.chat.id
-    context = user_contexts.get(user_id)
+    context = get_user_context(user_id)
     user_name = context.name if context and context.name else "друг"
     
     # Получаем данные профиля
