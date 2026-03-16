@@ -459,56 +459,44 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     user_data[user_id]["perception_type"] = perception_type
     
     logger.info(f"✅ User {user_id}: Stage 1 complete, type={perception_type}")
-
+    
     # 💾 Сохраняем состояние в файл
     try:
-        # Создаем директорию для состояний, если её нет
         state_dir = '/tmp/user_states'
         os.makedirs(state_dir, exist_ok=True)
-        
         state_file = os.path.join(state_dir, f'user_{user_id}_stage1.json')
         
-        # Сохраняем данные
         with open(state_file, 'w', encoding='utf-8') as f:
             json.dump({
                 'perception_type': perception_type,
                 'perception_scores': perception_scores,
                 'timestamp': time.time()
             }, f, ensure_ascii=False, indent=2)
-        
-        # Проверяем, что файл действительно создан
-        if os.path.exists(state_file):
-            logger.info(f"✅ Состояние пользователя {user_id} сохранено в {state_file} (размер: {os.path.getsize(state_file)} байт)")
-        else:
-            logger.error(f"❌ Файл состояния не создан: {state_file}")
-            
+        logger.info(f"✅ Состояние пользователя {user_id} сохранено")
     except Exception as e:
-        logger.error(f"❌ Ошибка сохранения состояния пользователя {user_id}: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ Ошибка сохранения состояния: {e}")
     
     result_text = STAGE_1_FEEDBACK.get(perception_type, STAGE_1_FEEDBACK["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"])
-    logger.info(f"📋 result_text = {result_text[:100]}...")
+    result_text = clean_text_for_safe_display(result_text)
     
     text = f"{result_text}\n\n▶️ <b>Перейти к этапу 2</b>"
     
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 2", callback_data="show_stage_2_intro"))
     
-    safe_send_message(
-        message, 
-        text, 
-        reply_markup=keyboard, 
-        delete_previous=True,
-        keep_last=1
-    )
-    state_data["stage"] = 2
-    logger.info(f"✅ Этап 1 завершен, stage установлен в 2")
+    # ВАЖНО: Не удаляем предыдущее сообщение, чтобы не сломать состояние
+    safe_send_message(message, text, reply_markup=keyboard)
     
-    # Очищаем временные данные этапа 1
+    # Очищаем временные данные
     for key in ['stage1_current', 'stage1_last_answered', 'processing', 'perception_scores']:
         if key in state_data:
             del state_data[key]
+    
+    # НЕ меняем состояние здесь - пусть кнопка ведет на этап 2
+    logger.info(f"✅ Этап 1 завершен")
+    
+    # Возвращаем результат, чтобы основной обработчик знал, что этап завершен
+    return True
 
 # ============================================
 # ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ
