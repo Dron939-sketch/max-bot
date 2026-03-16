@@ -146,6 +146,107 @@ def calculate_profile_final(user_data: dict) -> dict:
         "dilts_counts": dilts_counts
     }
 
+def calculate_profile_confidence(profile: dict) -> float:
+    """Рассчитывает уверенность в профиле"""
+    confidence = 0.5
+    
+    stages_done = 0
+    if profile.get("perception_type"):
+        stages_done += 1
+    if profile.get("thinking_level"):
+        stages_done += 1
+    if profile.get("behavioral_levels"):
+        stages_done += 1
+    if profile.get("dilts_counts"):
+        stages_done += 1
+    if profile.get("deep_patterns"):
+        stages_done += 1
+    
+    confidence += stages_done * 0.1
+    
+    clarification_count = profile.get("clarification_iteration", 0)
+    confidence += clarification_count * 0.05
+    
+    return min(1.0, confidence)
+
+def convert_to_simple_language(scores, perception_type, thinking_level, deep_patterns=None):
+    """Конвертирует технические данные в простые описания"""
+    result = {}
+    
+    # 1. Внимание (куда смотрит)
+    if perception_type in ["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ", "СТАТУСНО-ОРИЕНТИРОВАННЫЙ"]:
+        result['attention_desc'] = "Для вас важно, что думают другие, вы чутко считываете настроение и ожидания окружающих."
+    else:
+        result['attention_desc'] = "Для вас важнее ваши внутренние ощущения и чувства, чем мнение других."
+    
+    # 2. Мышление
+    if thinking_level <= 3:
+        result['thinking_desc'] = "Вы хорошо видите отдельные ситуации, но не всегда замечаете общие закономерности."
+    elif thinking_level <= 6:
+        result['thinking_desc'] = "Вы замечаете закономерности, но не всегда видите, к чему они приведут в будущем."
+    else:
+        result['thinking_desc'] = "Вы видите общие законы и можете предсказывать развитие ситуаций."
+    
+    # 3. СБ (реакция на угрозу)
+    sb_level = scores.get("СБ", 3)
+    sb_profiles = {
+        1: "Под давлением вы замираете и не можете слова сказать.",
+        2: "Вы избегаете конфликтов — уходите, прячетесь, уворачиваетесь.",
+        3: "Вы соглашаетесь внешне, но внутри всё кипит.",
+        4: "Вы внешне спокойны, но внутри держите всё в себе.",
+        5: "Вы пытаетесь сгладить конфликт, перевести в шутку.",
+        6: "Вы умеете защищать себя, но можете и атаковать в ответ."
+    }
+    result['sb_desc'] = sb_profiles.get(int(sb_level), "Вы по-разному реагируете на давление.")
+    
+    # 4. ТФ (деньги)
+    tf_level = scores.get("ТФ", 3)
+    tf_profiles = {
+        1: "Деньги приходят и уходят — как повезёт.",
+        2: "Вы ищете возможности, но каждый раз как с нуля.",
+        3: "Вы умеете зарабатывать своим трудом.",
+        4: "Вы хорошо зарабатываете и можете копить.",
+        5: "Вы создаёте системы дохода и управляете финансами.",
+        6: "Вы управляете капиталом и создаёте финансовые структуры."
+    }
+    result['tf_desc'] = tf_profiles.get(int(tf_level), "У вас свои отношения с деньгами.")
+    
+    # 5. УБ (понимание мира)
+    ub_level = scores.get("УБ", 3)
+    ub_profiles = {
+        1: "Вы стараетесь не думать о сложном — само как-то решится.",
+        2: "Вы верите в знаки, судьбу, высшие силы.",
+        3: "Вы доверяете экспертам и авторитетам.",
+        4: "Вы ищете скрытые смыслы и заговоры.",
+        5: "Вы анализируете факты и делаете выводы сами.",
+        6: "Вы строите теории и ищете закономерности."
+    }
+    result['ub_desc'] = ub_profiles.get(int(ub_level), "Вы по-своему понимаете мир.")
+    
+    # 6. ЧВ (отношения)
+    chv_level = scores.get("ЧВ", 3)
+    chv_profiles = {
+        1: "Вы сильно привязываетесь к людям, тяжело без них.",
+        2: "Вы подстраиваетесь под других, теряя себя.",
+        3: "Вы хотите нравиться, показываете себя с лучшей стороны.",
+        4: "Вы умеете влиять на людей, добиваться своего.",
+        5: "Вы строите равные партнёрские отношения.",
+        6: "Вы создаёте сообщества и сети контактов."
+    }
+    result['chv_desc'] = chv_profiles.get(int(chv_level), "У вас свои паттерны в отношениях.")
+    
+    # 7. Точка роста
+    growth_map = {
+        "ENVIRONMENT": "Посмотрите вокруг — может, дело в обстоятельствах?",
+        "BEHAVIOR": "Попробуйте делать хоть что-то по-другому — маленькие шаги многое меняют.",
+        "CAPABILITIES": "Развивайте новые навыки — они откроют новые возможности.",
+        "VALUES": "Поймите, что для вас действительно важно — это изменит всё.",
+        "IDENTITY": "Ответьте себе на вопрос «кто я?» — в этом ключ к изменениям."
+    }
+    result['growth_point'] = growth_map.get(perception_type, "Начните с малого — и увидите, куда приведёт.")
+    
+    return result
+
 # ============================================
 # ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ
 # ============================================
@@ -274,11 +375,11 @@ def handle_stage_1_answer(call, user_id: int, state_data: dict):
 
 def finish_stage_1(message, user_id: int, state_data: dict):
     """Завершение ЭТАПА 1"""
+    from main import user_data
+    
     perception_scores = state_data.get("perception_scores", {})
     perception_type = determine_perception_type(perception_scores)
     
-    # Сохраняем в глобальные данные пользователя
-    from main import user_data
     if user_id not in user_data:
         user_data[user_id] = {}
     user_data[user_id]["perception_type"] = perception_type
@@ -819,7 +920,6 @@ def finish_stage_4(message, user_id: int, state_data: dict):
 def show_preliminary_profile(message, user_id: int, state_data: dict):
     """Показывает предварительный портрет после 4 этапа"""
     from main import user_data, user_contexts
-    from profiles import convert_to_simple_language
     
     data = user_data.get(user_id, {})
     context = user_contexts.get(user_id)
@@ -868,29 +968,6 @@ def show_preliminary_profile(message, user_id: int, state_data: dict):
     
     safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     state_data["stage"] = "profile_confirmation"
-
-def calculate_profile_confidence(profile: dict) -> float:
-    """Рассчитывает уверенность в профиле"""
-    confidence = 0.5
-    
-    stages_done = 0
-    if profile.get("perception_type"):
-        stages_done += 1
-    if profile.get("thinking_level"):
-        stages_done += 1
-    if profile.get("behavioral_levels"):
-        stages_done += 1
-    if profile.get("dilts_counts"):
-        stages_done += 1
-    if profile.get("deep_patterns"):
-        stages_done += 1
-    
-    confidence += stages_done * 0.1
-    
-    clarification_count = profile.get("clarification_iteration", 0)
-    confidence += clarification_count * 0.05
-    
-    return min(1.0, confidence)
 
 # ============================================
 # ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ
