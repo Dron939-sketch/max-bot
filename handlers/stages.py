@@ -296,7 +296,7 @@ def show_stage_1_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_1"))
     
-    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     state_data["stage"] = 1
     state_data["stage1_current"] = 0
     logger.info(f"✅ stage1 инициализирован, stage1_current=0")
@@ -554,7 +554,7 @@ def show_stage_2_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_2"))
     
-    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
 
 def start_stage_2(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 2"""
@@ -754,7 +754,7 @@ def show_stage_3_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_3"))
     
-    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
 
 def start_stage_3(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 3"""
@@ -945,7 +945,7 @@ def show_stage_4_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_4"))
     
-    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
 
 def start_stage_4(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 4"""
@@ -1169,7 +1169,7 @@ def show_stage_5_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_5"))
     
-    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     state_data["stage"] = 5
 
 def start_stage_5(message, user_id: int, state_data: dict):
