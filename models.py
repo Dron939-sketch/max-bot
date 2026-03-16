@@ -13,8 +13,9 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any, Tuple
 from collections import defaultdict
 
-# ВАЖНО: добавляем все необходимые импорты из aiogram
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
+# ✅ ЗАМЕНИЛИ aiogram НА maxibot
+from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton
+# BufferedInputFile не нужен в MAX (для голосовых используется другой подход)
 
 from config import OPENWEATHER_API_KEY, COMMUNICATION_MODES, DESTINATIONS
 
@@ -1007,13 +1008,8 @@ class DelayedTaskManager:
                     if YANDEX_API_KEY:
                         audio_data = await text_to_speech(message_text, mode)
                         if audio_data:
-                            audio_file = BufferedInputFile(audio_data, filename="motivation.ogg")
-                            await self.bot_instance.send_voice(
-                                user_id,
-                                audio_file,
-                                caption="🎙 *Мотивационное сообщение*",
-                                parse_mode='Markdown'
-                            )
+                            # В MAX нет send_voice, используем другой подход
+                            logger.info(f"Голосовое сообщение для {user_id} не отправлено (не поддерживается в MAX)")
                 except Exception as e:
                     logger.error(f"Ошибка при отправке мотивационного сообщения пользователю {user_id}: {e}")
         
