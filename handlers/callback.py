@@ -10,7 +10,7 @@ from typing import Optional
 from maxibot.types import CallbackQuery
 
 # Импорты из наших модулей
-from state import get_state, get_state_data, user_contexts, user_data
+from state import get_state, get_state_data, user_contexts, user_data, clear_state
 from message_utils import safe_send_message
 
 # Импорты обработчиков этапов
@@ -51,6 +51,9 @@ from handlers.help import show_help, show_benefits, show_tale
 # Импорты обработчиков профиля
 from handlers.profile import show_profile, show_ai_profile, show_psychologist_thought
 
+# Импорты обработчиков старта
+from handlers.start import cmd_start
+
 logger = logging.getLogger(__name__)
 
 # ============================================
@@ -76,6 +79,45 @@ def handle_error_callback(call: CallbackQuery, error: Exception):
     )
 
 # ============================================
+# ФУНКЦИЯ ПЕРЕЗАПУСКА ТЕСТА
+# ============================================
+
+def restart_test(call: CallbackQuery):
+    """Перезапускает тест с начала"""
+    user_id = call.from_user.id
+    logger.info(f"🔄 Перезапуск теста для пользователя {user_id}")
+    
+    # Очищаем все данные пользователя
+    if user_id in user_data:
+        # Сохраняем только базовую информацию
+        old_data = user_data[user_id]
+        user_data[user_id] = {
+            "perception_type": None,
+            "thinking_level": None,
+            "behavioral_levels": {},
+            "dilts_counts": {},
+            "deep_patterns": {},
+            "profile_data": {},
+            "ai_generated_profile": None
+        }
+    
+    # Очищаем состояние
+    clear_state(user_id)
+    
+    # Отправляем сообщение о перезапуске
+    safe_send_message(
+        call.message,
+        "🔄 Перезапускаю тест...\n\n"
+        "Все предыдущие ответы сброшены. Начинаем заново!",
+        delete_previous=True
+    )
+    
+    # Показываем введение в этап 1
+    from handlers.stages import show_stage_1_intro
+    state_data = get_state_data(user_id)
+    show_stage_1_intro(call.message, user_id, state_data)
+
+# ============================================
 # ОСНОВНОЙ ОБРАБОТЧИК
 # ============================================
 
@@ -94,9 +136,15 @@ def callback_handler(call: CallbackQuery):
     
     try:
         # ============================================
-        # КОНТЕКСТ (ДОБАВЛЕНО!)
+        # ПЕРЕЗАПУСК ТЕСТА (ДОБАВЛЕНО!)
         # ============================================
-        if data == "start_context":
+        if data == "restart_test":
+            restart_test(call)
+        
+        # ============================================
+        # КОНТЕКСТ
+        # ============================================
+        elif data == "start_context":
             logger.info(f"📝 start_context для пользователя {user_id}")
             start_context(call.message)
         
