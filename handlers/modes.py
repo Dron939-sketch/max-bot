@@ -17,8 +17,13 @@ from keyboards import (
 from formatters import bold
 from message_utils import safe_send_message, safe_edit_message
 
-# ИСПРАВЛЕННЫЕ ИМПОРТЫ - используем только функции из context
-from handlers.context import get_user_context, get_user_state_data, update_user_state_data, get_user_context_dict
+# Импорты из state.py (новый модуль)
+from state import (
+    get_user_context, 
+    get_user_context_dict, 
+    get_user_state_data,
+    update_state_data
+)
 import time
 
 logger = logging.getLogger(__name__)
