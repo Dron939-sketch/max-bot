@@ -174,6 +174,48 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============================================
+# HEALTH CHECK ДЛЯ RENDER (ОБЯЗАТЕЛЬНО)
+# ============================================
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/health':
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'OK')
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        # Отключаем логи health check
+        pass
+
+def run_health_server():
+    """Запускает health check сервер на порту из переменной PORT"""
+    port = int(os.environ.get('PORT', 10000))
+    
+    # Проверяем, не занят ли порт
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    result = sock.connect_ex(('127.0.0.1', port))
+    if result == 0:
+        logger.info(f"⚠️ Порт {port} уже используется, health check не запущен")
+        return
+    
+    try:
+        server = HTTPServer(('0.0.0.0', port), HealthHandler)
+        logger.info(f"✅ Health check server started on port {port}")
+        server.serve_forever()
+    except Exception as e:
+        logger.error(f"❌ Health check server error: {e}")
+
+# Запускаем health check в отдельном потоке
+health_thread = threading.Thread(target=run_health_server)
+health_thread.daemon = True
+health_thread.start()
+
+
+# ============================================
 # ЭКЗЕМПЛЯР БОТА
 # ============================================
 
