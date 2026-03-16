@@ -21,7 +21,8 @@ from handlers.stages import (
     show_stage_4_intro, start_stage_4, handle_stage_4_answer,
     show_stage_5_intro, start_stage_5, handle_stage_5_answer,
     show_preliminary_profile, profile_confirm, profile_doubt, profile_reject,
-    handle_goodbye
+    handle_goodbye, ask_whats_wrong, handle_discrepancy, clarify_next,
+    handle_clarifying_answer
 )
 
 # Импорты обработчиков режимов
@@ -200,6 +201,22 @@ def callback_handler(call: CallbackQuery):
         elif data == "goodbye":
             logger.info(f"👋 goodbye для пользователя {user_id}")
             handle_goodbye(call)
+        
+        # ============================================
+        # УТОЧНЯЮЩИЕ ВОПРОСЫ (ДОБАВЛЕНО!)
+        # ============================================
+        elif data.startswith("discrepancy_"):
+            logger.info(f"🔍 discrepancy: {data} для пользователя {user_id}")
+            discrepancy = data.replace("discrepancy_", "")
+            handle_discrepancy(call, discrepancy)
+        
+        elif data == "clarify_next":
+            logger.info(f"➡️ clarify_next для пользователя {user_id}")
+            clarify_next(call)
+        
+        elif data.startswith("clarify_answer_"):
+            logger.info(f"❓ clarify answer: {data} для пользователя {user_id}")
+            handle_clarifying_answer(call)
         
         # ============================================
         # РЕЖИМЫ ОБЩЕНИЯ
