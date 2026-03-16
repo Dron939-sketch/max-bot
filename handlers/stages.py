@@ -296,7 +296,13 @@ def show_stage_1_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_1"))
     
-    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
+    safe_send_message(
+        message, 
+        intro_text, 
+        reply_markup=keyboard, 
+        delete_previous=True,
+        keep_last=1
+    )
     state_data["stage"] = 1
     state_data["stage1_current"] = 0
     logger.info(f"✅ stage1 инициализирован, stage1_current=0")
@@ -347,7 +353,15 @@ def ask_stage_1_question(message, user_id: int, state_data: dict):
             callback_data=f"stage1_{current}_{option_id}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+    # Используем delete_previous=True для удаления предыдущего вопроса
+    # и keep_last=1 чтобы оставить только последнее сообщение
+    safe_send_message(
+        message, 
+        question_text, 
+        reply_markup=keyboard, 
+        delete_previous=True,
+        keep_last=1
+    )
     logger.info(f"✅ Вопрос {current+1} отправлен")
 
 def handle_stage_1_answer(call, user_id: int, state_data: dict):
@@ -481,7 +495,13 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 2", callback_data="show_stage_2_intro"))
     
-    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(
+        message, 
+        text, 
+        reply_markup=keyboard, 
+        delete_previous=True,
+        keep_last=1
+    )
     state_data["stage"] = 2
     logger.info(f"✅ Этап 1 завершен, stage установлен в 2")
     
@@ -554,7 +574,13 @@ def show_stage_2_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_2"))
     
-    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
+    safe_send_message(
+        message, 
+        intro_text, 
+        reply_markup=keyboard, 
+        delete_previous=True,
+        keep_last=1
+    )
 
 def start_stage_2(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 2"""
@@ -609,7 +635,13 @@ def ask_stage_2_question(message, user_id: int, state_data: dict):
             callback_data=f"stage2_{current}_{level_num}_{measures}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(
+        message, 
+        question_text, 
+        reply_markup=keyboard, 
+        delete_previous=True,
+        keep_last=1
+    )
 
 def handle_stage_2_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 2"""
@@ -721,7 +753,13 @@ def finish_stage_2(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 3", callback_data="show_stage_3_intro"))
     
-    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(
+        message, 
+        text, 
+        reply_markup=keyboard, 
+        delete_previous=True,
+        keep_last=1
+    )
     state_data["stage"] = 3
 
 # ============================================
@@ -754,7 +792,13 @@ def show_stage_3_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_3"))
     
-    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
+    safe_send_message(
+        message, 
+        intro_text, 
+        reply_markup=keyboard, 
+        delete_previous=True,
+        keep_last=1
+    )
 
 def start_stage_3(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 3"""
@@ -800,7 +844,13 @@ def ask_stage_3_question(message, user_id: int, state_data: dict):
             callback_data=f"stage3_{current}_{option_id}_{strategy}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(
+        message, 
+        question_text, 
+        reply_markup=keyboard, 
+        delete_previous=True,
+        keep_last=1
+    )
 
 def handle_stage_3_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 3"""
@@ -912,7 +962,13 @@ def finish_stage_3(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 4", callback_data="show_stage_4_intro"))
     
-    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(
+        message, 
+        text, 
+        reply_markup=keyboard, 
+        delete_previous=True,
+        keep_last=1
+    )
     state_data["stage"] = 4
 
 # ============================================
@@ -945,7 +1001,13 @@ def show_stage_4_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_4"))
     
-    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
+    safe_send_message(
+        message, 
+        intro_text, 
+        reply_markup=keyboard, 
+        delete_previous=True,
+        keep_last=1
+    )
 
 def start_stage_4(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 4"""
@@ -989,7 +1051,13 @@ def ask_stage_4_question(message, user_id: int, state_data: dict):
             callback_data=f"stage4_{current}_{option_id}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(
+        message, 
+        question_text, 
+        reply_markup=keyboard, 
+        delete_previous=True,
+        keep_last=1
+    )
 
 def handle_stage_4_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 4"""
@@ -1136,7 +1204,14 @@ def show_preliminary_profile(message, user_id: int, state_data: dict):
     )
     keyboard.row(InlineKeyboardButton("🔄 НЕТ", callback_data="profile_reject"))
     
-    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(
+        message, 
+        text, 
+        reply_markup=keyboard, 
+        parse_mode='HTML', 
+        delete_previous=True,
+        keep_last=1
+    )
     state_data["stage"] = "profile_confirmation"
     logger.info(f"✅ Предварительный профиль показан")
 
@@ -1169,7 +1244,13 @@ def show_stage_5_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_5"))
     
-    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
+    safe_send_message(
+        message, 
+        intro_text, 
+        reply_markup=keyboard, 
+        delete_previous=True,
+        keep_last=1
+    )
     state_data["stage"] = 5
 
 def start_stage_5(message, user_id: int, state_data: dict):
@@ -1212,7 +1293,13 @@ def ask_stage_5_question(message, user_id: int, state_data: dict):
             callback_data=f"stage5_{current}_{option_id}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(
+        message, 
+        question_text, 
+        reply_markup=keyboard, 
+        delete_previous=True,
+        keep_last=1
+    )
 
 def handle_stage_5_answer(call, user_id: int, state_data: dict):
     """Обработка ответа 5-го этапа"""
