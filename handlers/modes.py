@@ -16,14 +16,14 @@ from keyboards import (
 )
 from formatters import bold
 from message_utils import safe_send_message, safe_edit_message
-from database import get_user_context, save_user_context
-from states import UserState
+
+# ИСПРАВЛЕННЫЕ ИМПОРТЫ
+from main import user_contexts, user_data, user_states, user_state_data
+from handlers.context import get_user_context, get_user_context_dict
+
 import time
 
 logger = logging.getLogger(__name__)
-
-# Хранилище контекстов пользователей (можно перенести в БД)
-user_contexts = {}
 
 # ============================================
 # ОБРАБОТЧИКИ КОМАНД
@@ -87,7 +87,8 @@ def callback_mode_selected(call: types.CallbackQuery):
     new_mode = mode_map.get(mode, "coach")
     
     context.communication_mode = new_mode
-    save_user_context(user_id, context)
+    # Сохраняем в глобальном хранилище
+    user_contexts[user_id] = context
     
     # Показываем подтверждение
     show_mode_selected(call.message, new_mode)
@@ -103,7 +104,10 @@ def callback_back_to_modes(call: types.CallbackQuery):
 def callback_start_test(call: types.CallbackQuery):
     """Начать тест после выбора режима"""
     from .stages import show_stage_1_intro
-    show_stage_1_intro(call.message)
+    # Получаем данные состояния
+    user_id = call.from_user.id
+    state_data = user_state_data.get(user_id, {})
+    show_stage_1_intro(call.message, user_id, state_data)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'main_menu')
@@ -123,7 +127,7 @@ def callback_main_menu(call: types.CallbackQuery):
 
 def show_mode_selection(message: types.Message):
     """Показывает выбор режима общения"""
-    user_id = message.from_user.id
+    user_id = message.chat.id
     
     # Получаем контекст
     if user_id not in user_contexts:
