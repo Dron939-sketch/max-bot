@@ -15,6 +15,7 @@ import re
 import time
 import threading
 import fcntl
+import socket
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, List, Any, Tuple, Union
 from statistics import mean
