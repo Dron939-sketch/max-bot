@@ -1,9 +1,11 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Утилиты для отправки сообщений в MAX
 """
 import logging
 from maxibot import types
-from maxibot.api import MAXBotAPI
+from maxibot import MaxiBot  # вместо MAXBotAPI
 
 # Импортируем бота (убедись, что bot_instance.py существует)
 from bot_instance import bot
