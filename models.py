@@ -769,11 +769,11 @@ class ReminderManager:
             else:
                 text = f"🔔 *Напоминание*"
             
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅ ВЫПОЛНИЛ", callback_data="route_step_done")],
-                [InlineKeyboardButton(text="❓ НУЖНА ПОМОЩЬ", callback_data="smart_questions")],
-                [InlineKeyboardButton(text="⏭️ ОТЛОЖИТЬ", callback_data="reminder_snooze")]
-            ])
+            # 👇 ИСПРАВЛЕНО: правильный синтаксис для MAX
+            keyboard = InlineKeyboardMarkup()
+            keyboard.add(InlineKeyboardButton(text="✅ ВЫПОЛНИЛ", callback_data="route_step_done"))
+            keyboard.add(InlineKeyboardButton(text="❓ НУЖНА ПОМОЩЬ", callback_data="smart_questions"))
+            keyboard.add(InlineKeyboardButton(text="⏭️ ОТЛОЖИТЬ", callback_data="reminder_snooze"))
             
             await self.bot.send_message(user_id, text, reply_markup=keyboard)
         
@@ -1014,11 +1014,11 @@ class DelayedTaskManager:
                         address = context.get_address() if context and context.communication_mode == "friend" else ""
                         message_text = f"Слушайте{', ' + address if address else ''}...\n\nКак вы? Я рядом."
                     
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions")],
-                        [InlineKeyboardButton(text="🧠 К ПОРТРЕТУ", callback_data="show_results")],
-                        [InlineKeyboardButton(text="🎯 ЧЕМ ПОМОЧЬ", callback_data="show_help")]
-                    ])
+                    # 👇 ИСПРАВЛЕНО: правильный синтаксис для MAX
+                    keyboard = InlineKeyboardMarkup()
+                    keyboard.add(InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions"))
+                    keyboard.add(InlineKeyboardButton(text="🧠 К ПОРТРЕТУ", callback_data="show_results"))
+                    keyboard.add(InlineKeyboardButton(text="🎯 ЧЕМ ПОМОЧЬ", callback_data="show_help"))
                     
                     await self.bot_instance.send_message(
                         user_id,
@@ -1058,11 +1058,11 @@ class DelayedTaskManager:
             await asyncio.sleep(delay_hours * 3600)
             if self.bot_instance:
                 try:
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions")],
-                        [InlineKeyboardButton(text="🧠 К ПОРТРЕТУ", callback_data="show_results")],
-                        [InlineKeyboardButton(text="🔄 ПРОЙТИ ТЕСТ ЗАНОВО", callback_data="restart_test")]
-                    ])
+                    # 👇 ИСПРАВЛЕНО: правильный синтаксис для MAX
+                    keyboard = InlineKeyboardMarkup()
+                    keyboard.add(InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions"))
+                    keyboard.add(InlineKeyboardButton(text="🧠 К ПОРТРЕТУ", callback_data="show_results"))
+                    keyboard.add(InlineKeyboardButton(text="🔄 ПРОЙТИ ТЕСТ ЗАНОВО", callback_data="restart_test"))
                     
                     await self.bot_instance.send_message(
                         user_id,
