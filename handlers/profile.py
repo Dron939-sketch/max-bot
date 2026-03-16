@@ -195,7 +195,6 @@ def show_ai_profile(message: Message, user_id: int):
         if not ai_profile:
             # Безопасно запускаем асинхронную функцию
             try:
-                # Пробуем запустить асинхронно
                 import asyncio
                 try:
                     loop = asyncio.get_event_loop()
@@ -340,7 +339,10 @@ def show_psychologist_thought(message: Message, user_id: int):
             except RuntimeError:
                 thought = asyncio.run(generate_psychologist_thought(user_id, data))
         except Exception as e:
-            logger.error(f"❌ Ошибка при вызове generate_psychologist_thought: {e}")
+            if str(e):
+                logger.error(f"❌ Ошибка при вызове generate_psychologist_thought: {e}")
+            else:
+                logger.info("⚠️ Пустая ошибка при генерации мысли психолога, но продолжаем работу")
             thought = None
         
         # Удаляем статусное сообщение
@@ -416,7 +418,11 @@ def show_final_profile(message: Message, user_id: int):
     """Показывает финальный профиль после всех этапов"""
     data = user_data.get(user_id, {})
     
+    # Проверяем, есть ли уже AI профиль
     if data.get("ai_generated_profile"):
+        logger.info(f"✅ Найден сохраненный AI профиль для пользователя {user_id}")
+        # Используем send_with_status_cleanup для красивого перехода
+        from handlers.profile import show_ai_profile
         show_ai_profile(message, user_id)
         return
     
@@ -430,7 +436,7 @@ def show_final_profile(message: Message, user_id: int):
         delete_previous=True
     )
     
-    # ИСПРАВЛЕНИЕ: Используем безопасный вызов асинхронной функции
+    # Генерируем AI профиль
     ai_profile = None
     try:
         import asyncio
@@ -446,21 +452,31 @@ def show_final_profile(message: Message, user_id: int):
         except RuntimeError:
             ai_profile = asyncio.run(generate_ai_profile(user_id, data))
     except Exception as e:
-        logger.error(f"❌ Ошибка при генерации AI профиля в show_final_profile: {e}")
+        if str(e):
+            logger.error(f"❌ Ошибка при генерации AI профиля в show_final_profile: {e}")
+        else:
+            logger.info("⚠️ Пустая ошибка при генерации AI профиля")
         ai_profile = None
     
+    # Сохраняем и показываем AI профиль, если он сгенерирован
     if ai_profile:
+        logger.info(f"✅ AI профиль успешно сгенерирован для пользователя {user_id}")
         user_data[user_id]["ai_generated_profile"] = ai_profile
-        # Удаляем статусное сообщение и показываем AI профиль
+        
+        # Удаляем статусное сообщение
         if status_msg:
             try:
                 safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
+        
+        # Показываем AI профиль
+        from handlers.profile import show_ai_profile
         show_ai_profile(message, user_id)
         return
     
     # Если не удалось сгенерировать AI профиль, показываем старый
+    logger.warning(f"⚠️ Не удалось сгенерировать AI профиль для пользователя {user_id}, показываем стандартный")
     show_old_final_profile(message, user_id, status_msg)
 
 
