@@ -8,6 +8,7 @@
 import logging
 import re
 import time
+import threading
 from typing import Dict, Any, Optional, Tuple
 
 from bot_instance import bot
@@ -15,7 +16,7 @@ from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 
 # Наши модули
 from config import COMMUNICATION_MODES
-from message_utils import safe_send_message, safe_edit_message
+from message_utils import safe_send_message, safe_edit_message, safe_delete_message
 from keyboards import (
     get_gender_keyboard, get_age_keyboard, get_skip_keyboard,
     get_confirm_keyboard, get_back_keyboard
@@ -30,6 +31,13 @@ from state import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ГЛОБАЛЬНАЯ БЛОКИРОВКА ДЛЯ ПРЕДОТВРАЩЕНИЯ ДВОЙНЫХ ВЫЗОВОВ
+# ============================================
+
+_context_lock = threading.Lock()
+_executing_context = False
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -74,25 +82,27 @@ def start_context(message: Message):
     """
     Начинает сбор контекста (обязательный)
     """
+    global _executing_context
+    
     user_id = message.chat.id
     
-    # ========== ЖЕСТКАЯ ЗАЩИТА ОТ ДУБЛЕЙ ==========
-    from state import user_states, TestStates
-    import threading
-    
-    # Используем lock для потокобезопасности
-    if not hasattr(start_context, 'locks'):
-        start_context.locks = {}
-    
-    if user_id not in start_context.locks:
-        start_context.locks[user_id] = threading.Lock()
-    
-    # Пытаемся захватить lock
-    if not start_context.locks[user_id].acquire(blocking=False):
-        logger.info(f"⚠️ start_context уже выполняется для user {user_id}, пропускаем")
+    # ========== ГЛОБАЛЬНАЯ БЛОКИРОВКА ==========
+    if not _context_lock.acquire(blocking=False):
+        logger.info(f"⚠️ start_context уже выполняется (блокировка), пропускаем для user {user_id}")
         return
     
     try:
+        if _executing_context:
+            logger.info(f"⚠️ start_context уже выполняется (флаг), пропускаем для user {user_id}")
+            return
+        
+        _executing_context = True
+    finally:
+        _context_lock.release()
+    
+    try:
+        from state import user_states, TestStates
+        
         # Проверяем состояние
         current_state = user_states.get(user_id)
         if current_state == TestStates.awaiting_context:
@@ -107,7 +117,7 @@ def start_context(message: Message):
         
         context = user_contexts[user_id]
         
-        # Принудительный сброс
+        # Принудительный сброс (чтобы точно спросило)
         context.city = None
         context.gender = None
         context.age = None
@@ -141,11 +151,13 @@ def start_context(message: Message):
             logger.info(f"📊 Состояние пользователя {user_id} установлено на {TestStates.awaiting_context}")
         else:
             logger.info(f"⚠️ Вопросов нет, показываем завершение")
+            # Если вопросы не нужны (уже всё есть), показываем завершение
             show_context_complete(message, context)
             
     finally:
-        # Всегда освобождаем lock
-        start_context.locks[user_id].release()
+        # Сбрасываем флаг
+        _executing_context = False
+
 # ============================================
 # ОБРАБОТЧИКИ CALLBACK'ОВ ДЛЯ КОНТЕКСТА
 # ============================================
