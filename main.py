@@ -96,10 +96,41 @@ from weekend_planner import get_weekend_planner, get_weekend_ideas_keyboard
 from keyboards import *
 from message_utils import safe_send_message, safe_edit_message, safe_delete_message
 
-# ===== ДОБАВЛЕННЫЕ ИМПОРТЫ =====
-from handlers.context import handle_context_message
+# Импорты из новых модулей
+from state import (
+    user_data, user_names, user_contexts, user_routes,
+    user_states, user_state_data, get_state, set_state,
+    get_state_data, update_state_data, clear_state,
+    get_user_context, get_user_context_dict
+)
+from handlers.context import handle_context_message, start_context, show_context_complete
 from handlers.reality import process_life_context, process_goal_context
 from handlers.callback import callback_handler
+from handlers.modes import show_mode_selection, show_mode_selected, show_main_menu_after_mode
+from handlers.start import cmd_start as start_cmd, show_why_details
+from handlers.profile import show_profile, show_ai_profile, show_psychologist_thought, show_final_profile
+from handlers.stages import (
+    show_stage_1_intro, start_stage_1, handle_stage_1_answer, finish_stage_1,
+    show_stage_2_intro, start_stage_2, handle_stage_2_answer, finish_stage_2,
+    show_stage_3_intro, start_stage_3, handle_stage_3_answer, finish_stage_3,
+    show_stage_4_intro, start_stage_4, handle_stage_4_answer, finish_stage_4,
+    show_stage_5_intro, start_stage_5, handle_stage_5_answer, finish_stage_5,
+    show_preliminary_profile
+)
+from handlers.help import show_help, show_tale, show_benefits
+from handlers.goals import (
+    show_goals_categories, show_goals_for_category, select_goal,
+    show_dynamic_destinations, handle_dynamic_destination, custom_destination,
+    build_route, show_route_step, show_fallback_route, route_step_done, complete_route
+)
+from handlers.questions import (
+    show_smart_questions, handle_smart_question, show_question_input,
+    process_text_question, process_voice_message
+)
+from handlers.admin import (
+    cmd_stats, cmd_apistatus, show_admin_panel, show_admin_stats,
+    start_broadcast, process_broadcast, show_users_list
+)
 
 # Настройка логирования
 logging.basicConfig(
@@ -120,13 +151,11 @@ bot = MaxiBot(MAX_TOKEN)
 logger.info("✅ Экземпляр бота MAX создан")
 
 # ============================================
-# ГЛОБАЛЬНЫЕ ХРАНИЛИЩА
+# ГЛОБАЛЬНЫЕ ХРАНИЛИЩА (теперь в state.py)
 # ============================================
 
-user_data: Dict[int, Dict[str, Any]] = {}
-user_names: Dict[int, str] = {}
-user_contexts: Dict[int, UserContext] = {}
-user_routes: Dict[int, Dict[str, Any]] = {}
+# Все глобальные переменные перенесены в state.py
+# Здесь оставляем только инициализацию менеджеров
 
 # Инициализируем менеджеры
 reminder_manager = ReminderManager()
@@ -144,7 +173,7 @@ anchoring = Anchoring()
 weekend_planner = get_weekend_planner()
 
 # ============================================
-# FSM СОСТОЯНИЯ (ЭМУЛЯЦИЯ)
+# FSM СОСТОЯНИЯ (теперь в state.py)
 # ============================================
 
 class TestStates:
@@ -175,37 +204,6 @@ class TestStates:
     theoretical_path_shown = "theoretical_path_shown"
     reality_check_active = "reality_check_active"
     feasibility_result = "feasibility_result"
-
-# Хранилище состояний пользователей
-user_states: Dict[int, str] = {}
-user_state_data: Dict[int, Dict[str, Any]] = {}
-
-def get_state(user_id: int) -> str:
-    """Получает состояние пользователя"""
-    return user_states.get(user_id, "")
-
-def set_state(user_id: int, state: str):
-    """Устанавливает состояние пользователя"""
-    user_states[user_id] = state
-
-def get_state_data(user_id: int) -> Dict[str, Any]:
-    """Получает данные состояния пользователя"""
-    if user_id not in user_state_data:
-        user_state_data[user_id] = {}
-    return user_state_data[user_id]
-
-def update_state_data(user_id: int, **kwargs):
-    """Обновляет данные состояния"""
-    if user_id not in user_state_data:
-        user_state_data[user_id] = {}
-    user_state_data[user_id].update(kwargs)
-
-def clear_state(user_id: int):
-    """Очищает состояние пользователя"""
-    if user_id in user_states:
-        del user_states[user_id]
-    if user_id in user_state_data:
-        del user_state_data[user_id]
 
 # ============================================
 # HEALTH CHECK ДЛЯ RENDER
@@ -913,7 +911,6 @@ def cmd_menu(message: types.Message):
     user_id = message.from_user.id
     
     if user_id in user_contexts:
-        from handlers.modes import show_main_menu_after_mode
         show_main_menu_after_mode(message, user_contexts[user_id])
     else:
         cmd_start(message)
@@ -926,7 +923,6 @@ def cmd_mode(message: types.Message):
     if user_id not in user_contexts:
         user_contexts[user_id] = UserContext(user_id)
     
-    from handlers.modes import show_mode_selection
     show_mode_selection(message)
 
 @bot.message_handler(commands=['stats'])
@@ -973,7 +969,6 @@ def cmd_context(message: types.Message):
     context.weather_cache = {}
     
     safe_send_message(message, "🔄 Давайте обновим ваш контекст")
-    from handlers.context import start_context
     start_context(message)
 
 # ============================================
