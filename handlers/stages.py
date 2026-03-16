@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики этапов тестирования (1-5) для MAX
-Восстановлено из оригинального bot3.py и адаптировано
 """
 
 import time
@@ -12,7 +11,7 @@ import json
 from typing import Dict, Any, Optional
 
 from bot_instance import bot
-from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 
 # Наши модули
 from config import COMMUNICATION_MODES
@@ -28,7 +27,8 @@ from questions import (
     get_stage4_question, get_stage4_total,
     get_stage5_question, get_stage5_total,
     get_question_text, get_option_text, get_option_value,
-    map_to_stage3_feedback_level, analyze_stage5_results
+    map_to_stage3_feedback_level, analyze_stage5_results,
+    get_clarifying_questions
 )
 from profiles import (
     STAGE_1_FEEDBACK, STAGE_2_FEEDBACK, STAGE_3_FEEDBACK,
@@ -36,6 +36,7 @@ from profiles import (
 )
 from models import ConfinementModel9
 from services import generate_ai_profile
+from state import get_state_data, update_state_data, user_data, user_contexts
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +261,6 @@ def cleanup_old_state_files(max_age_hours=24):
         for filename in os.listdir(state_dir):
             filepath = os.path.join(state_dir, filename)
             if os.path.isfile(filepath):
-                # Проверяем возраст файла
                 file_age = current_time - os.path.getmtime(filepath)
                 if file_age > max_age_hours * 3600:
                     os.remove(filepath)
@@ -296,13 +296,7 @@ def show_stage_1_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_1"))
     
-    safe_send_message(
-        message, 
-        intro_text, 
-        reply_markup=keyboard, 
-        delete_previous=True,
-        keep_last=1
-    )
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     state_data["stage"] = 1
     state_data["stage1_current"] = 0
     logger.info(f"✅ stage1 инициализирован, stage1_current=0")
@@ -353,15 +347,7 @@ def ask_stage_1_question(message, user_id: int, state_data: dict):
             callback_data=f"stage1_{current}_{option_id}"
         ))
     
-    # Используем delete_previous=True для удаления предыдущего вопроса
-    # и keep_last=1 чтобы оставить только последнее сообщение
-    safe_send_message(
-        message, 
-        question_text, 
-        reply_markup=keyboard, 
-        delete_previous=True,
-        keep_last=1
-    )
+    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     logger.info(f"✅ Вопрос {current+1} отправлен")
 
 def handle_stage_1_answer(call, user_id: int, state_data: dict):
@@ -444,8 +430,6 @@ def handle_stage_1_answer(call, user_id: int, state_data: dict):
 
 def finish_stage_1(message, user_id: int, state_data: dict):
     """Завершение ЭТАПА 1"""
-    from main import user_data
-    
     logger.info(f"🏁 finish_stage_1 для user {user_id}")
     
     perception_scores = state_data.get("perception_scores", {})
@@ -477,26 +461,20 @@ def finish_stage_1(message, user_id: int, state_data: dict):
         logger.error(f"❌ Ошибка сохранения состояния: {e}")
     
     result_text = STAGE_1_FEEDBACK.get(perception_type, STAGE_1_FEEDBACK["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"])
-    result_text = clean_text_for_safe_display(result_text)
     
     text = f"{result_text}\n\n▶️ <b>Перейти к этапу 2</b>"
     
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 2", callback_data="show_stage_2_intro"))
     
-    # ВАЖНО: Не удаляем предыдущее сообщение, чтобы не сломать состояние
-    safe_send_message(message, text, reply_markup=keyboard)
+    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True, keep_last=1)
+    state_data["stage"] = 2
+    logger.info(f"✅ Этап 1 завершен")
     
     # Очищаем временные данные
     for key in ['stage1_current', 'stage1_last_answered', 'processing', 'perception_scores']:
         if key in state_data:
             del state_data[key]
-    
-    # НЕ меняем состояние здесь - пусть кнопка ведет на этап 2
-    logger.info(f"✅ Этап 1 завершен")
-    
-    # Возвращаем результат, чтобы основной обработчик знал, что этап завершен
-    return True
 
 # ============================================
 # ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ
@@ -504,46 +482,10 @@ def finish_stage_1(message, user_id: int, state_data: dict):
 
 def show_stage_2_intro(message, user_id: int, state_data: dict):
     """Экран перед ЭТАПОМ 2"""
-    from main import user_data
-    
     logger.info(f"📢 show_stage_2_intro для user {user_id}")
-
-    # Пытаемся загрузить сохраненное состояние из файла
-    state_file = f'/tmp/user_states/user_{user_id}_stage1.json'
-    if os.path.exists(state_file):
-        try:
-            with open(state_file, 'r', encoding='utf-8') as f:
-                saved_state = json.load(f)
-            
-            # Проверяем, что файл содержит нужные данные
-            if saved_state and 'perception_type' in saved_state:
-                # Восстанавливаем данные в user_data
-                if user_id not in user_data:
-                    user_data[user_id] = {}
-                
-                # Восстанавливаем perception_type, если его нет в памяти
-                if "perception_type" not in user_data[user_id]:
-                    user_data[user_id]["perception_type"] = saved_state.get('perception_type')
-                    logger.info(f"✅ Восстановлен perception_type для user {user_id}: {saved_state.get('perception_type')}")
-                    
-                # Также восстанавливаем в state_data, если нужно
-                if "perception_scores" not in state_data and "perception_scores" in saved_state:
-                    state_data["perception_scores"] = saved_state.get('perception_scores')
-                    
-                logger.info(f"✅ Состояние успешно восстановлено из {state_file}")
-            else:
-                logger.warning(f"⚠️ Файл состояния {state_file} не содержит нужных данных")
-                
-        except Exception as e:
-            logger.error(f"❌ Ошибка загрузки состояния для user {user_id}: {e}")
-    else:
-        logger.info(f"ℹ️ Файл состояния {state_file} не найден")
     
-    # Получаем perception_type (либо из памяти, либо из восстановленного)
     perception_type = user_data.get(user_id, {}).get("perception_type", "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ")
     total_questions = get_stage2_total(perception_type)
-    
-    logger.info(f"📊 Используется perception_type: {perception_type}")
     
     intro_text = f"""
 🧠 <b>ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ</b>
@@ -562,13 +504,7 @@ def show_stage_2_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_2"))
     
-    safe_send_message(
-        message, 
-        intro_text, 
-        reply_markup=keyboard, 
-        delete_previous=True,
-        keep_last=1
-    )
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
 
 def start_stage_2(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 2"""
@@ -586,8 +522,6 @@ def start_stage_2(message, user_id: int, state_data: dict):
 
 def ask_stage_2_question(message, user_id: int, state_data: dict):
     """Задаёт вопрос ЭТАПА 2"""
-    from main import user_data
-    
     perception_type = user_data.get(user_id, {}).get("perception_type", "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ")
     current = state_data.get("stage2_current", 0)
     total_questions = get_stage2_total(perception_type)
@@ -595,13 +529,11 @@ def ask_stage_2_question(message, user_id: int, state_data: dict):
     logger.info(f"❓ ask_stage_2_question: current={current}, total={total_questions}")
     
     if current >= total_questions:
-        logger.info(f"🎯 Все вопросы этапа 2 отвечены, завершаем")
         finish_stage_2(message, user_id, state_data)
         return
     
     question = get_stage2_question(perception_type, current)
     if not question:
-        logger.error(f"❌ Вопрос {current} не найден для типа {perception_type}")
         finish_stage_2(message, user_id, state_data)
         return
     
@@ -623,18 +555,10 @@ def ask_stage_2_question(message, user_id: int, state_data: dict):
             callback_data=f"stage2_{current}_{level_num}_{measures}"
         ))
     
-    safe_send_message(
-        message, 
-        question_text, 
-        reply_markup=keyboard, 
-        delete_previous=True,
-        keep_last=1
-    )
+    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
 
 def handle_stage_2_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 2"""
-    from main import user_data
-    
     logger.info(f"📥 handle_stage_2_answer для user {user_id}, data={call.data}")
     
     if state_data.get("processing", False):
@@ -709,8 +633,6 @@ def handle_stage_2_answer(call, user_id: int, state_data: dict):
 
 def finish_stage_2(message, user_id: int, state_data: dict):
     """Завершение ЭТАПА 2"""
-    from main import user_data
-    
     logger.info(f"🏁 finish_stage_2 для user {user_id}")
     
     level_scores_dict = state_data.get("stage2_level_scores_dict", {})
@@ -723,7 +645,6 @@ def finish_stage_2(message, user_id: int, state_data: dict):
         user_data[user_id] = {}
     user_data[user_id]["thinking_level"] = thinking_level
     
-    # Сохраняем стратегии
     strategy_levels = state_data.get("strategy_levels", {})
     user_data[user_id]["behavioral_levels"] = strategy_levels
     
@@ -741,13 +662,7 @@ def finish_stage_2(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 3", callback_data="show_stage_3_intro"))
     
-    safe_send_message(
-        message, 
-        text, 
-        reply_markup=keyboard, 
-        delete_previous=True,
-        keep_last=1
-    )
+    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     state_data["stage"] = 3
 
 # ============================================
@@ -780,13 +695,7 @@ def show_stage_3_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_3"))
     
-    safe_send_message(
-        message, 
-        intro_text, 
-        reply_markup=keyboard, 
-        delete_previous=True,
-        keep_last=1
-    )
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
 
 def start_stage_3(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 3"""
@@ -832,13 +741,7 @@ def ask_stage_3_question(message, user_id: int, state_data: dict):
             callback_data=f"stage3_{current}_{option_id}_{strategy}"
         ))
     
-    safe_send_message(
-        message, 
-        question_text, 
-        reply_markup=keyboard, 
-        delete_previous=True,
-        keep_last=1
-    )
+    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
 
 def handle_stage_3_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 3"""
@@ -912,8 +815,6 @@ def handle_stage_3_answer(call, user_id: int, state_data: dict):
 
 def finish_stage_3(message, user_id: int, state_data: dict):
     """Завершение ЭТАПА 3"""
-    from main import user_data
-    
     logger.info(f"🏁 finish_stage_3 для user {user_id}")
     
     stage2_level = user_data.get(user_id, {}).get("thinking_level", 1)
@@ -928,7 +829,6 @@ def finish_stage_3(message, user_id: int, state_data: dict):
         user_data[user_id] = {}
     user_data[user_id]["final_level"] = final_level
     
-    # Сохраняем поведенческие уровни
     behavioral_levels = state_data.get("behavioral_levels", {})
     if "behavioral_levels" not in user_data[user_id]:
         user_data[user_id]["behavioral_levels"] = {}
@@ -950,13 +850,7 @@ def finish_stage_3(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 4", callback_data="show_stage_4_intro"))
     
-    safe_send_message(
-        message, 
-        text, 
-        reply_markup=keyboard, 
-        delete_previous=True,
-        keep_last=1
-    )
+    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     state_data["stage"] = 4
 
 # ============================================
@@ -989,13 +883,7 @@ def show_stage_4_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_4"))
     
-    safe_send_message(
-        message, 
-        intro_text, 
-        reply_markup=keyboard, 
-        delete_previous=True,
-        keep_last=1
-    )
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
 
 def start_stage_4(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 4"""
@@ -1039,13 +927,7 @@ def ask_stage_4_question(message, user_id: int, state_data: dict):
             callback_data=f"stage4_{current}_{option_id}"
         ))
     
-    safe_send_message(
-        message, 
-        question_text, 
-        reply_markup=keyboard, 
-        delete_previous=True,
-        keep_last=1
-    )
+    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
 
 def handle_stage_4_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 4"""
@@ -1107,8 +989,6 @@ def handle_stage_4_answer(call, user_id: int, state_data: dict):
 
 def finish_stage_4(message, user_id: int, state_data: dict):
     """Завершение ЭТАПА 4"""
-    from main import user_data
-    
     logger.info(f"🏁 finish_stage_4 для user {user_id}")
     
     dilts_counts = state_data.get("dilts_counts", {})
@@ -1122,11 +1002,9 @@ def finish_stage_4(message, user_id: int, state_data: dict):
     user_data[user_id]["dilts_counts"] = dilts_counts
     user_data[user_id]["dominant_dilts"] = dominant_dilts
     
-    # Рассчитываем финальный профиль
     profile_data = calculate_profile_final(user_data[user_id])
     user_data[user_id]["profile_data"] = profile_data
     
-    # Строим конфайнмент-модель
     scores = {}
     for vector in ["СБ", "ТФ", "УБ", "ЧВ"]:
         levels = user_data[user_id].get("behavioral_levels", {}).get(vector, [])
@@ -1138,17 +1016,17 @@ def finish_stage_4(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 4 complete, profile={profile_data.get('display_name', 'unknown')}")
     
-    # Показываем предварительный профиль
     show_preliminary_profile(message, user_id, state_data)
+
+# ============================================
+# ПРЕДВАРИТЕЛЬНЫЙ ПРОФИЛЬ И ПОДТВЕРЖДЕНИЕ
+# ============================================
 
 def show_preliminary_profile(message, user_id: int, state_data: dict):
     """Показывает предварительный портрет после 4 этапа"""
-    from main import user_data, user_contexts
-    
     logger.info(f"📢 show_preliminary_profile для user {user_id}")
     
     data = user_data.get(user_id, {})
-    context = user_contexts.get(user_id)
     
     scores = {}
     for k in VECTORS:
@@ -1192,16 +1070,242 @@ def show_preliminary_profile(message, user_id: int, state_data: dict):
     )
     keyboard.row(InlineKeyboardButton("🔄 НЕТ", callback_data="profile_reject"))
     
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True, keep_last=1)
+    state_data["stage"] = "profile_confirmation"
+    logger.info(f"✅ Предварительный профиль показан")
+
+def profile_confirm(call):
+    """Пользователь подтвердил профиль"""
+    user_id = call.from_user.id
+    logger.info(f"✅ profile_confirm для пользователя {user_id}")
+    
+    safe_send_message(call.message, "✅ Отлично! Тогда исследуем глубину...", delete_previous=True, keep_last=1)
+    
+    state_data = get_state_data(user_id)
+    show_stage_5_intro(call.message, user_id, state_data)
+
+def profile_doubt(call):
+    """Пользователь сомневается"""
+    user_id = call.from_user.id
+    logger.info(f"❓ profile_doubt для пользователя {user_id}")
+    
+    data = user_data.get(user_id, {})
+    
+    current_levels = {}
+    for vector in VECTORS:
+        levels = data.get("behavioral_levels", {}).get(vector, [])
+        current_levels[vector] = sum(levels) / len(levels) if levels else 3
+    
+    ask_whats_wrong(call, current_levels)
+
+def profile_reject(call):
+    """Пользователь полностью не согласен"""
+    user_id = call.from_user.id
+    logger.info(f"🔄 profile_reject для пользователя {user_id}")
+    
+    anecdote = """
+🧠 <b>ЧЕСТНОСТЬ - ЛУЧШАЯ ПОЛИТИКА</b>
+
+Две подруги решили сходить на ипподром. Приходят, а там скачки, все ставки делают. Решили и они ставку сделать — вдруг повезёт? Одна другой и говорит: «Слушай, у тебя какой размер груди?». Вторая: «Второй… а у тебя?». Первая: «Третий… ну давай на пятую поставим — чтоб сумма была…».
+
+Поставили на пятую, лошадь приходит первая, они счастливые прибегают домой с деньгами и мужьям рассказывают, как было дело.
+
+На следующий день мужики тоже решили сходить на скачки — а вдруг им повезёт? Когда решали, на какую ставить, один говорит: «Ты сколько раз за ночь свою жену можешь удовлетворить?». Другой говорит: «Ну, три…». Первый: «А я четыре… ну давай на седьмую поставим».
+
+Поставили на седьмую, первой пришла вторая.
+
+Мужики переглянулись: «Не напиздили бы — выиграли…».
+
+<b>Мораль:</b> Если врать в тесте — результат будет как у мужиков на скачках. Хотите попробовать еще раз?
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(InlineKeyboardButton("🔄 ПРОЙТИ ТЕСТ ЕЩЕ РАЗ", callback_data="restart_test"))
+    keyboard.row(InlineKeyboardButton("👋 ДОСВИДУЛИ", callback_data="goodbye"))
+    
     safe_send_message(
-        message, 
-        text, 
-        reply_markup=keyboard, 
-        parse_mode='HTML', 
+        call.message,
+        anecdote,
+        reply_markup=keyboard,
+        parse_mode='HTML',
         delete_previous=True,
         keep_last=1
     )
-    state_data["stage"] = "profile_confirmation"
-    logger.info(f"✅ Предварительный профиль показан")
+
+def handle_goodbye(call):
+    """Обработчик кнопки Досвидули"""
+    user_id = call.from_user.id
+    logger.info(f"👋 goodbye для пользователя {user_id}")
+    
+    safe_send_message(
+        call.message,
+        f"👋 <b>До свидания!</b>\n\nБуду рад помочь, если решите вернуться. Просто напишите /start",
+        parse_mode='HTML',
+        delete_previous=True,
+        keep_last=1
+    )
+    
+    from state import clear_state
+    clear_state(user_id)
+
+def ask_whats_wrong(call, current_levels: dict):
+    """Спрашивает, что именно не так"""
+    user_id = call.from_user.id
+    logger.info(f"❓ ask_whats_wrong для пользователя {user_id}")
+    
+    text = f"""
+🔍 <b>ДАВАЙ УТОЧНИМ</b>
+
+Что именно вам не подходит?
+(можно выбрать несколько)
+
+🎭 Про людей — я не так сильно завишу от чужого мнения
+💰 Про деньги — у меня с ними по-другому
+🔍 Про знаки — я вполне себе анализирую
+🤝 Про отношения — я знаю, чего хочу
+🛡 Про давление — я реагирую иначе
+
+👇 <b>Выберите и нажмите ДАЛЬШЕ</b>
+"""
+    
+    update_state_data(user_id, clarifying_levels=current_levels)
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(InlineKeyboardButton("🎭 Про людей", callback_data="discrepancy_people"))
+    keyboard.row(InlineKeyboardButton("💰 Про деньги", callback_data="discrepancy_money"))
+    keyboard.row(InlineKeyboardButton("🔍 Про знаки", callback_data="discrepancy_signs"))
+    keyboard.row(InlineKeyboardButton("🤝 Про отношения", callback_data="discrepancy_relations"))
+    keyboard.row(InlineKeyboardButton("🛡 Про давление", callback_data="discrepancy_sb"))
+    keyboard.row(InlineKeyboardButton("➡️ ДАЛЬШЕ", callback_data="clarify_next"))
+    
+    safe_send_message(call.message, text, reply_markup=keyboard, delete_previous=True, keep_last=1)
+    
+    from state import set_state
+    from handlers.stages import TestStates
+    set_state(user_id, TestStates.clarifying_selection)
+    
+    update_state_data(user_id, discrepancies=[])
+
+def handle_discrepancy(call, discrepancy: str):
+    """Обрабатывает выбор расхождения"""
+    user_id = call.from_user.id
+    logger.info(f"🔍 handle_discrepancy: {discrepancy} для пользователя {user_id}")
+    
+    data = get_state_data(user_id)
+    discrepancies = data.get("discrepancies", [])
+    
+    if discrepancy not in discrepancies:
+        discrepancies.append(discrepancy)
+        update_state_data(user_id, discrepancies=discrepancies)
+        safe_send_message(call.message, f"✅ Добавлено", delete_previous=True, keep_last=1)
+    else:
+        discrepancies.remove(discrepancy)
+        update_state_data(user_id, discrepancies=discrepancies)
+        safe_send_message(call.message, f"❌ Убрано", delete_previous=True, keep_last=1)
+
+def clarify_next(call):
+    """Переходит к уточняющим вопросам"""
+    user_id = call.from_user.id
+    logger.info(f"➡️ clarify_next для пользователя {user_id}")
+    
+    data = get_state_data(user_id)
+    discrepancies = data.get("discrepancies", [])
+    current_levels = data.get("clarifying_levels", {})
+    
+    if not discrepancies:
+        safe_send_message(call.message, "Выберите хотя бы одно расхождение!", delete_previous=True, keep_last=1)
+        return
+    
+    questions = get_clarifying_questions(discrepancies, current_levels)
+    
+    if not questions:
+        safe_send_message(call.message, "Зададим общие уточняющие вопросы", delete_previous=True, keep_last=1)
+        return
+    
+    update_state_data(user_id,
+        clarifying_questions=questions,
+        clarifying_current=0,
+        clarifying_answers=[]
+    )
+    
+    ask_clarifying_question(call.message, user_id)
+
+def ask_clarifying_question(message, user_id: int):
+    """Задаёт уточняющий вопрос"""
+    data = get_state_data(user_id)
+    questions = data.get("clarifying_questions", [])
+    current = data.get("clarifying_current", 0)
+    
+    if current >= len(questions):
+        update_profile_with_clarifications(message, user_id)
+        return
+    
+    question = questions[current]
+    
+    question_text = f"""
+🔍 <b>УТОЧНЯЮЩИЙ ВОПРОС {current + 1}/{len(questions)}</b>
+
+{question['text']}
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    options = question.get('options', {})
+    for opt_key, opt_text in options.items():
+        keyboard.add(InlineKeyboardButton(
+            text=opt_text,
+            callback_data=f"clarify_answer_{current}_{opt_key}"
+        ))
+    
+    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
+
+def handle_clarifying_answer(call):
+    """Обрабатывает ответ на уточняющий вопрос"""
+    user_id = call.from_user.id
+    logger.info(f"❓ handle_clarifying_answer для пользователя {user_id}, data={call.data}")
+    
+    data = get_state_data(user_id)
+    
+    parts = call.data.split("_")
+    if len(parts) < 4:
+        return
+    
+    if not parts[2].isdigit():
+        return
+    current = int(parts[2])
+    answer_key = parts[3]
+    
+    questions = data.get("clarifying_questions", [])
+    if current >= len(questions):
+        return
+    
+    question = questions[current]
+    
+    answers = data.get("clarifying_answers", [])
+    answers.append({
+        "question": question['text'],
+        "answer_key": answer_key,
+        "answer_text": question['options'].get(answer_key, ""),
+        "type": question.get('type'),
+        "target": question.get('target') or question.get('vector')
+    })
+    
+    update_state_data(user_id,
+        clarifying_answers=answers,
+        clarifying_current=current + 1
+    )
+    
+    ask_clarifying_question(call.message, user_id)
+
+def update_profile_with_clarifications(message, user_id: int):
+    """Обновляет профиль с учётом уточнений"""
+    logger.info(f"🔄 update_profile_with_clarifications для пользователя {user_id}")
+    
+    data = get_state_data(user_id)
+    
+    iteration = data.get("clarification_iteration", 0) + 1
+    update_state_data(user_id, clarification_iteration=iteration)
+    
+    show_preliminary_profile(message, user_id, data)
 
 # ============================================
 # ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ
@@ -1232,13 +1336,7 @@ def show_stage_5_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_5"))
     
-    safe_send_message(
-        message, 
-        intro_text, 
-        reply_markup=keyboard, 
-        delete_previous=True,
-        keep_last=1
-    )
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     state_data["stage"] = 5
 
 def start_stage_5(message, user_id: int, state_data: dict):
@@ -1281,13 +1379,7 @@ def ask_stage_5_question(message, user_id: int, state_data: dict):
             callback_data=f"stage5_{current}_{option_id}"
         ))
     
-    safe_send_message(
-        message, 
-        question_text, 
-        reply_markup=keyboard, 
-        delete_previous=True,
-        keep_last=1
-    )
+    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
 
 def handle_stage_5_answer(call, user_id: int, state_data: dict):
     """Обработка ответа 5-го этапа"""
@@ -1344,8 +1436,6 @@ def handle_stage_5_answer(call, user_id: int, state_data: dict):
 
 def finish_stage_5(message, user_id: int, state_data: dict):
     """Завершение 5-го этапа"""
-    from main import user_data
-    
     logger.info(f"🏁 finish_stage_5 для user {user_id}")
     
     stage5_answers = state_data.get("stage5_answers", [])
@@ -1360,14 +1450,50 @@ def finish_stage_5(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 5 complete")
     
-    # Импортируем здесь, чтобы избежать циклических импортов
     try:
         from handlers.profile import show_final_profile
+        show_final_profile(message, user_id)
     except ImportError:
-        # Если не получается, пробуем другой путь
-        from profile import show_final_profile
-    
-    show_final_profile(message, user_id)
+        logger.error("❌ Не удалось импортировать show_final_profile")
+        safe_send_message(
+            message,
+            "✅ Тестирование завершено! Спасибо за участие.",
+            delete_previous=True,
+            keep_last=1
+        )
+
+# ============================================
+# КЛАСС СОСТОЯНИЙ (для совместимости)
+# ============================================
+
+class TestStates:
+    """Состояния для FSM"""
+    stage_1 = "stage_1"
+    stage_2 = "stage_2"
+    stage_3 = "stage_3"
+    stage_4 = "stage_4"
+    stage_5 = "stage_5"
+    results = "results"
+    awaiting_question = "awaiting_question"
+    pretest_question = "pretest_question"
+    awaiting_context = "awaiting_context"
+    mode_selection = "mode_selection"
+    profile_confirmation = "profile_confirmation"
+    clarifying_selection = "clarifying_selection"
+    clarifying_test = "clarifying_test"
+    alternative_test = "alternative_test"
+    viewing_confinement = "viewing_confinement"
+    viewing_intervention = "viewing_intervention"
+    profile_generated = "profile_generated"
+    destination_selection = "destination_selection"
+    route_generation = "route_generation"
+    route_active = "route_active"
+    route_step_active = "route_step_active"
+    collecting_life_context = "collecting_life_context"
+    collecting_goal_context = "collecting_goal_context"
+    theoretical_path_shown = "theoretical_path_shown"
+    reality_check_active = "reality_check_active"
+    feasibility_result = "feasibility_result"
 
 # ============================================
 # ЭКСПОРТ
@@ -1394,7 +1520,18 @@ __all__ = [
     'show_stage_5_intro', 'start_stage_5', 'ask_stage_5_question',
     'handle_stage_5_answer', 'finish_stage_5',
     
+    # Предварительный профиль и подтверждение
+    'show_preliminary_profile', 'profile_confirm', 'profile_doubt',
+    'profile_reject', 'handle_goodbye',
+    
+    # Уточняющие вопросы
+    'ask_whats_wrong', 'handle_discrepancy', 'clarify_next',
+    'ask_clarifying_question', 'handle_clarifying_answer',
+    'update_profile_with_clarifications',
+    
+    # Состояния
+    'TestStates',
+    
     # Вспомогательные
-    'show_preliminary_profile',
     'cleanup_old_state_files'
 ]
