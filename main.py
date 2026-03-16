@@ -3470,8 +3470,43 @@ def main():
     print("="*80 + "\n")
     
     logger.info("🚀 Бот для MAX запущен!")
-    bot.polling()
+    
+    # Исправление для предотвращения двойного запуска
+    try:
+        bot.polling()
+    except KeyboardInterrupt:
+        logger.info("👋 Бот остановлен пользователем")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при запуске бота: {e}")
+
 
 if __name__ == "__main__":
     os.makedirs("stats", exist_ok=True)
-    main()
+    
+    # Создаём файл с PID для предотвращения двойного запуска
+    try:
+        import os
+        pid_file = 'bot.pid'
+        
+        # Проверяем, не запущен ли уже бот
+        if os.path.exists(pid_file):
+            with open(pid_file, 'r') as f:
+                old_pid = f.read().strip()
+            logger.warning(f"⚠️ Предыдущий экземпляр бота с PID {old_pid} возможно уже запущен")
+        
+        # Записываем текущий PID
+        with open(pid_file, 'w') as f:
+            f.write(str(os.getpid()))
+        
+        # Запускаем бота
+        main()
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при запуске: {e}")
+    finally:
+        # Удаляем PID файл при выходе
+        try:
+            if os.path.exists('bot.pid'):
+                os.remove('bot.pid')
+        except:
+            pass
