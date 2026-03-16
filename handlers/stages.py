@@ -253,6 +253,7 @@ def convert_to_simple_language(scores, perception_type, thinking_level, deep_pat
 
 def show_stage_1_intro(message, user_id: int, state_data: dict):
     """Экран перед ЭТАПОМ 1"""
+    logger.info(f"📢 show_stage_1_intro для user {user_id}")
     intro_text = f"""
 🧠 <b>ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ</b>
 
@@ -274,9 +275,11 @@ def show_stage_1_intro(message, user_id: int, state_data: dict):
     safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True)
     state_data["stage"] = 1
     state_data["stage1_current"] = 0
+    logger.info(f"✅ stage1 инициализирован, stage1_current=0")
 
 def start_stage_1(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 1"""
+    logger.info(f"🎬 start_stage_1 для user {user_id}")
     state_data.update({
         "stage1_current": 0,
         "stage1_last_answered": -1,
@@ -284,6 +287,7 @@ def start_stage_1(message, user_id: int, state_data: dict):
         "perception_scores": {"EXTERNAL": 0, "INTERNAL": 0, "SYMBOLIC": 0, "MATERIAL": 0},
         "stage": 1
     })
+    logger.info(f"✅ state_data обновлен: stage1_current=0")
     
     ask_stage_1_question(message, user_id, state_data)
 
@@ -292,11 +296,16 @@ def ask_stage_1_question(message, user_id: int, state_data: dict):
     current = state_data.get("stage1_current", 0)
     total = get_stage1_total()
     
+    logger.info(f"❓ ask_stage_1_question: current={current}, total={total}")
+    
     if current >= total:
+        logger.info(f"🎯 Все вопросы отвечены (current={current} >= total={total}), вызываем finish_stage_1")
         finish_stage_1(message, user_id, state_data)
         return
     
     question = get_stage1_question(current)
+    logger.info(f"📋 Вопрос {current+1}/{total}: {question['text'][:50]}...")
+    
     progress = calculate_progress(current + 1, total)
     
     question_text = f"""
@@ -315,10 +324,15 @@ def ask_stage_1_question(message, user_id: int, state_data: dict):
         ))
     
     safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+    logger.info(f"✅ Вопрос {current+1} отправлен")
 
 def handle_stage_1_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 1"""
+    logger.info(f"📥 handle_stage_1_answer для user {user_id}, data={call.data}")
+    logger.info(f"📊 stage1_current до обработки = {state_data.get('stage1_current')}")
+    
     if state_data.get("processing", False):
+        logger.info(f"⚠️ Уже обрабатывается, пропускаем")
         return
     
     state_data["processing"] = True
@@ -326,27 +340,39 @@ def handle_stage_1_answer(call, user_id: int, state_data: dict):
     try:
         parts = call.data.split("_")
         if len(parts) < 3:
+            logger.error(f"❌ Неправильный формат callback: {call.data}")
             return
         
         if not parts[1].isdigit():
+            logger.error(f"❌ Неправильный индекс вопроса: {parts[1]}")
             return
         current = int(parts[1])
         option_id = parts[2]
         
+        logger.info(f"📝 Обработка ответа на вопрос {current}, опция {option_id}")
+        
         last_answered = state_data.get("stage1_last_answered", -1)
         if current <= last_answered:
+            logger.info(f"⏭️ Вопрос {current} уже отвечен (last_answered={last_answered}), пропускаем")
             return
         
         question = get_stage1_question(current)
-        selected_option = question["options"].get(option_id)
-        
-        if not selected_option:
+        if not question:
+            logger.error(f"❌ Вопрос {current} не найден")
             return
+            
+        selected_option = question["options"].get(option_id)
+        if not selected_option:
+            logger.error(f"❌ Опция {option_id} не найдена в вопросе {current}")
+            return
+        
+        logger.info(f"✅ Ответ: {selected_option['text']}")
         
         perception_scores = state_data.get("perception_scores", {})
         for axis, score in selected_option.get("scores", {}).items():
             if axis in ["EXTERNAL", "INTERNAL", "SYMBOLIC", "MATERIAL"]:
                 perception_scores[axis] = perception_scores.get(axis, 0) + score
+                logger.info(f"📊 {axis} +{score} = {perception_scores[axis]}")
         
         all_answers = state_data.get("all_answers", [])
         all_answers.append({
@@ -358,17 +384,22 @@ def handle_stage_1_answer(call, user_id: int, state_data: dict):
             'scores': selected_option.get('scores', {})
         })
         
+        new_current = current + 1
         state_data.update({
             "perception_scores": perception_scores,
             "stage1_last_answered": current,
-            "stage1_current": current + 1,
+            "stage1_current": new_current,
             "all_answers": all_answers
         })
+        
+        logger.info(f"📈 stage1_current обновлен: {current} -> {new_current}")
         
         ask_stage_1_question(call.message, user_id, state_data)
         
     except Exception as e:
-        logger.error(f"Ошибка в stage1: {e}")
+        logger.error(f"❌ Ошибка в stage1: {e}")
+        import traceback
+        traceback.print_exc()
         ask_stage_1_question(call.message, user_id, state_data)
     finally:
         state_data["processing"] = False
@@ -377,8 +408,13 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     """Завершение ЭТАПА 1"""
     from main import user_data
     
+    logger.info(f"🏁 finish_stage_1 для user {user_id}")
+    
     perception_scores = state_data.get("perception_scores", {})
     perception_type = determine_perception_type(perception_scores)
+    
+    logger.info(f"📊 perception_scores = {perception_scores}")
+    logger.info(f"🎯 perception_type = {perception_type}")
     
     if user_id not in user_data:
         user_data[user_id] = {}
@@ -387,6 +423,7 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     logger.info(f"✅ User {user_id}: Stage 1 complete, type={perception_type}")
     
     result_text = STAGE_1_FEEDBACK.get(perception_type, STAGE_1_FEEDBACK["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"])
+    logger.info(f"📋 result_text = {result_text[:100]}...")
     
     text = f"{result_text}\n\n▶️ <b>Перейти к этапу 2</b>"
     
@@ -395,6 +432,7 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     
     safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
     state_data["stage"] = 2
+    logger.info(f"✅ Этап 1 завершен, stage установлен в 2")
 
 # ============================================
 # ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ
@@ -403,6 +441,8 @@ def finish_stage_1(message, user_id: int, state_data: dict):
 def show_stage_2_intro(message, user_id: int, state_data: dict):
     """Экран перед ЭТАПОМ 2"""
     from main import user_data
+    
+    logger.info(f"📢 show_stage_2_intro для user {user_id}")
     
     perception_type = user_data.get(user_id, {}).get("perception_type", "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ")
     total_questions = get_stage2_total(perception_type)
@@ -428,6 +468,7 @@ def show_stage_2_intro(message, user_id: int, state_data: dict):
 
 def start_stage_2(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 2"""
+    logger.info(f"🎬 start_stage_2 для user {user_id}")
     state_data.update({
         "stage2_current": 0,
         "stage2_last_answered": -1,
@@ -447,12 +488,16 @@ def ask_stage_2_question(message, user_id: int, state_data: dict):
     current = state_data.get("stage2_current", 0)
     total_questions = get_stage2_total(perception_type)
     
+    logger.info(f"❓ ask_stage_2_question: current={current}, total={total_questions}")
+    
     if current >= total_questions:
+        logger.info(f"🎯 Все вопросы этапа 2 отвечены, завершаем")
         finish_stage_2(message, user_id, state_data)
         return
     
     question = get_stage2_question(perception_type, current)
     if not question:
+        logger.error(f"❌ Вопрос {current} не найден для типа {perception_type}")
         finish_stage_2(message, user_id, state_data)
         return
     
@@ -479,6 +524,8 @@ def ask_stage_2_question(message, user_id: int, state_data: dict):
 def handle_stage_2_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 2"""
     from main import user_data
+    
+    logger.info(f"📥 handle_stage_2_answer для user {user_id}, data={call.data}")
     
     if state_data.get("processing", False):
         return
@@ -512,12 +559,14 @@ def handle_stage_2_answer(call, user_id: int, state_data: dict):
         if measures == "thinking":
             points = get_stage2_score(perception_type, current, selected_level)
             stage2_level_scores_dict[selected_level] = stage2_level_scores_dict.get(selected_level, 0) + points
+            logger.info(f"📊 thinking score +{points} для уровня {selected_level}")
         
         strategy_levels = state_data.get("strategy_levels", {"СБ": [], "ТФ": [], "УБ": [], "ЧВ": []})
         if measures in ["СБ", "ТФ", "УБ", "ЧВ"]:
             try:
                 value = int(selected_level)
                 strategy_levels[measures].append(value)
+                logger.info(f"📊 strategy {measures} +{value}")
             except ValueError:
                 pass
         
@@ -552,8 +601,13 @@ def finish_stage_2(message, user_id: int, state_data: dict):
     """Завершение ЭТАПА 2"""
     from main import user_data
     
+    logger.info(f"🏁 finish_stage_2 для user {user_id}")
+    
     level_scores_dict = state_data.get("stage2_level_scores_dict", {})
     thinking_level = calculate_thinking_level_by_scores(level_scores_dict)
+    
+    logger.info(f"📊 level_scores_dict = {level_scores_dict}")
+    logger.info(f"🎯 thinking_level = {thinking_level}")
     
     if user_id not in user_data:
         user_data[user_id] = {}
@@ -586,6 +640,8 @@ def finish_stage_2(message, user_id: int, state_data: dict):
 
 def show_stage_3_intro(message, user_id: int, state_data: dict):
     """Экран перед ЭТАПОМ 3"""
+    logger.info(f"📢 show_stage_3_intro для user {user_id}")
+    
     intro_text = f"""
 🧠 <b>ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ</b>
 
@@ -612,6 +668,7 @@ def show_stage_3_intro(message, user_id: int, state_data: dict):
 
 def start_stage_3(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 3"""
+    logger.info(f"🎬 start_stage_3 для user {user_id}")
     state_data.update({
         "stage3_current": 0,
         "stage3_last_answered": -1,
@@ -627,6 +684,8 @@ def ask_stage_3_question(message, user_id: int, state_data: dict):
     """Задаёт вопрос ЭТАПА 3"""
     current = state_data.get("stage3_current", 0)
     total = get_stage3_total()
+    
+    logger.info(f"❓ ask_stage_3_question: current={current}, total={total}")
     
     if current >= total:
         finish_stage_3(message, user_id, state_data)
@@ -655,6 +714,8 @@ def ask_stage_3_question(message, user_id: int, state_data: dict):
 
 def handle_stage_3_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 3"""
+    logger.info(f"📥 handle_stage_3_answer для user {user_id}, data={call.data}")
+    
     if state_data.get("processing", False):
         return
     
@@ -725,10 +786,15 @@ def finish_stage_3(message, user_id: int, state_data: dict):
     """Завершение ЭТАПА 3"""
     from main import user_data
     
+    logger.info(f"🏁 finish_stage_3 для user {user_id}")
+    
     stage2_level = user_data.get(user_id, {}).get("thinking_level", 1)
     stage3_scores = state_data.get("stage3_level_scores", [])
     
     final_level = calculate_final_level(stage2_level, stage3_scores)
+    
+    logger.info(f"📊 stage2_level={stage2_level}, stage3_scores={stage3_scores}")
+    logger.info(f"🎯 final_level={final_level}")
     
     if user_id not in user_data:
         user_data[user_id] = {}
@@ -765,6 +831,8 @@ def finish_stage_3(message, user_id: int, state_data: dict):
 
 def show_stage_4_intro(message, user_id: int, state_data: dict):
     """Экран перед ЭТАПОМ 4"""
+    logger.info(f"📢 show_stage_4_intro для user {user_id}")
+    
     intro_text = f"""
 🧠 <b>ЭТАП 4: ТОЧКА РОСТА</b>
 
@@ -791,6 +859,7 @@ def show_stage_4_intro(message, user_id: int, state_data: dict):
 
 def start_stage_4(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 4"""
+    logger.info(f"🎬 start_stage_4 для user {user_id}")
     state_data.update({
         "stage4_current": 0,
         "stage4_last_answered": -1,
@@ -805,6 +874,8 @@ def ask_stage_4_question(message, user_id: int, state_data: dict):
     """Задаёт вопрос ЭТАПА 4"""
     current = state_data.get("stage4_current", 0)
     total = get_stage4_total()
+    
+    logger.info(f"❓ ask_stage_4_question: current={current}, total={total}")
     
     if current >= total:
         finish_stage_4(message, user_id, state_data)
@@ -832,6 +903,8 @@ def ask_stage_4_question(message, user_id: int, state_data: dict):
 
 def handle_stage_4_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 4"""
+    logger.info(f"📥 handle_stage_4_answer для user {user_id}, data={call.data}")
+    
     if state_data.get("processing", False):
         return
     
@@ -890,8 +963,13 @@ def finish_stage_4(message, user_id: int, state_data: dict):
     """Завершение ЭТАПА 4"""
     from main import user_data
     
+    logger.info(f"🏁 finish_stage_4 для user {user_id}")
+    
     dilts_counts = state_data.get("dilts_counts", {})
     dominant_dilts = determine_dominant_dilts(dilts_counts)
+    
+    logger.info(f"📊 dilts_counts = {dilts_counts}")
+    logger.info(f"🎯 dominant_dilts = {dominant_dilts}")
     
     if user_id not in user_data:
         user_data[user_id] = {}
@@ -920,6 +998,8 @@ def finish_stage_4(message, user_id: int, state_data: dict):
 def show_preliminary_profile(message, user_id: int, state_data: dict):
     """Показывает предварительный портрет после 4 этапа"""
     from main import user_data, user_contexts
+    
+    logger.info(f"📢 show_preliminary_profile для user {user_id}")
     
     data = user_data.get(user_id, {})
     context = user_contexts.get(user_id)
@@ -968,6 +1048,7 @@ def show_preliminary_profile(message, user_id: int, state_data: dict):
     
     safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     state_data["stage"] = "profile_confirmation"
+    logger.info(f"✅ Предварительный профиль показан")
 
 # ============================================
 # ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ
@@ -975,6 +1056,8 @@ def show_preliminary_profile(message, user_id: int, state_data: dict):
 
 def show_stage_5_intro(message, user_id: int, state_data: dict):
     """Экран перед 5-м этапом"""
+    logger.info(f"📢 show_stage_5_intro для user {user_id}")
+    
     intro_text = f"""
 🧠 <b>ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ</b>
 
@@ -1001,6 +1084,7 @@ def show_stage_5_intro(message, user_id: int, state_data: dict):
 
 def start_stage_5(message, user_id: int, state_data: dict):
     """Начало 5-го этапа"""
+    logger.info(f"🎬 start_stage_5 для user {user_id}")
     state_data.update({
         "stage5_current": 0,
         "stage5_last_answered": -1,
@@ -1013,6 +1097,8 @@ def ask_stage_5_question(message, user_id: int, state_data: dict):
     """Задаёт вопрос 5-го этапа"""
     current = state_data.get("stage5_current", 0)
     total = get_stage5_total()
+    
+    logger.info(f"❓ ask_stage_5_question: current={current}, total={total}")
     
     if current >= total:
         finish_stage_5(message, user_id, state_data)
@@ -1040,6 +1126,8 @@ def ask_stage_5_question(message, user_id: int, state_data: dict):
 
 def handle_stage_5_answer(call, user_id: int, state_data: dict):
     """Обработка ответа 5-го этапа"""
+    logger.info(f"📥 handle_stage_5_answer для user {user_id}, data={call.data}")
+    
     if state_data.get("processing", False):
         return
     
@@ -1093,9 +1181,13 @@ def finish_stage_5(message, user_id: int, state_data: dict):
     """Завершение 5-го этапа"""
     from main import user_data
     
+    logger.info(f"🏁 finish_stage_5 для user {user_id}")
+    
     stage5_answers = state_data.get("stage5_answers", [])
     
     deep_patterns = analyze_stage5_results(stage5_answers)
+    
+    logger.info(f"📊 deep_patterns = {deep_patterns}")
     
     if user_id not in user_data:
         user_data[user_id] = {}
