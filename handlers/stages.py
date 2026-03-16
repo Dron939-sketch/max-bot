@@ -7,8 +7,8 @@
 
 import time
 import logging
-import json
 import os
+import json
 from typing import Dict, Any, Optional
 
 from bot_instance import bot
@@ -249,6 +249,28 @@ def convert_to_simple_language(scores, perception_type, thinking_level, deep_pat
     
     return result
 
+def cleanup_old_state_files(max_age_hours=24):
+    """Удаляет старые файлы состояний"""
+    try:
+        state_dir = '/tmp/user_states'
+        if not os.path.exists(state_dir):
+            return
+        
+        current_time = time.time()
+        for filename in os.listdir(state_dir):
+            filepath = os.path.join(state_dir, filename)
+            if os.path.isfile(filepath):
+                # Проверяем возраст файла
+                file_age = current_time - os.path.getmtime(filepath)
+                if file_age > max_age_hours * 3600:
+                    os.remove(filepath)
+                    logger.info(f"🧹 Удален старый файл состояния: {filename}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при очистке старых файлов: {e}")
+
+# Вызываем при загрузке модуля
+cleanup_old_state_files()
+
 # ============================================
 # ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ
 # ============================================
@@ -427,18 +449,29 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     # 💾 Сохраняем состояние в файл
     try:
         # Создаем директорию для состояний, если её нет
-        os.makedirs('/tmp/user_states', exist_ok=True)
-        state_file = f'/tmp/user_states/user_{user_id}_stage1.json'
+        state_dir = '/tmp/user_states'
+        os.makedirs(state_dir, exist_ok=True)
         
+        state_file = os.path.join(state_dir, f'user_{user_id}_stage1.json')
+        
+        # Сохраняем данные
         with open(state_file, 'w', encoding='utf-8') as f:
             json.dump({
                 'perception_type': perception_type,
                 'perception_scores': perception_scores,
                 'timestamp': time.time()
             }, f, ensure_ascii=False, indent=2)
-        logger.info(f"✅ Состояние пользователя {user_id} сохранено в {state_file}")
+        
+        # Проверяем, что файл действительно создан
+        if os.path.exists(state_file):
+            logger.info(f"✅ Состояние пользователя {user_id} сохранено в {state_file} (размер: {os.path.getsize(state_file)} байт)")
+        else:
+            logger.error(f"❌ Файл состояния не создан: {state_file}")
+            
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения состояния пользователя {user_id}: {e}")
+        import traceback
+        traceback.print_exc()
     
     result_text = STAGE_1_FEEDBACK.get(perception_type, STAGE_1_FEEDBACK["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"])
     logger.info(f"📋 result_text = {result_text[:100]}...")
@@ -451,6 +484,11 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
     state_data["stage"] = 2
     logger.info(f"✅ Этап 1 завершен, stage установлен в 2")
+    
+    # Очищаем временные данные этапа 1
+    for key in ['stage1_current', 'stage1_last_answered', 'processing', 'perception_scores']:
+        if key in state_data:
+            del state_data[key]
 
 # ============================================
 # ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ
@@ -459,35 +497,45 @@ def finish_stage_1(message, user_id: int, state_data: dict):
 def show_stage_2_intro(message, user_id: int, state_data: dict):
     """Экран перед ЭТАПОМ 2"""
     from main import user_data
-    import json
-    import os
     
     logger.info(f"📢 show_stage_2_intro для user {user_id}")
 
-    # Восстанавливаем состояние из файла, если нужно
+    # Пытаемся загрузить сохраненное состояние из файла
     state_file = f'/tmp/user_states/user_{user_id}_stage1.json'
     if os.path.exists(state_file):
         try:
             with open(state_file, 'r', encoding='utf-8') as f:
                 saved_state = json.load(f)
             
-            # Восстанавливаем данные в user_data
-            if user_id not in user_data:
-                user_data[user_id] = {}
-            
-            # Восстанавливаем perception_type, если его нет в памяти
-            if "perception_type" not in user_data[user_id]:
-                user_data[user_id]["perception_type"] = saved_state.get('perception_type')
-                logger.info(f"✅ Восстановлен perception_type для user {user_id}: {saved_state.get('perception_type')}")
-            
-            # Можно также удалить файл после успешного восстановления
-            # os.remove(state_file)
-            
+            # Проверяем, что файл содержит нужные данные
+            if saved_state and 'perception_type' in saved_state:
+                # Восстанавливаем данные в user_data
+                if user_id not in user_data:
+                    user_data[user_id] = {}
+                
+                # Восстанавливаем perception_type, если его нет в памяти
+                if "perception_type" not in user_data[user_id]:
+                    user_data[user_id]["perception_type"] = saved_state.get('perception_type')
+                    logger.info(f"✅ Восстановлен perception_type для user {user_id}: {saved_state.get('perception_type')}")
+                    
+                # Также восстанавливаем в state_data, если нужно
+                if "perception_scores" not in state_data and "perception_scores" in saved_state:
+                    state_data["perception_scores"] = saved_state.get('perception_scores')
+                    
+                logger.info(f"✅ Состояние успешно восстановлено из {state_file}")
+            else:
+                logger.warning(f"⚠️ Файл состояния {state_file} не содержит нужных данных")
+                
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки состояния для user {user_id}: {e}")
+    else:
+        logger.info(f"ℹ️ Файл состояния {state_file} не найден")
     
+    # Получаем perception_type (либо из памяти, либо из восстановленного)
     perception_type = user_data.get(user_id, {}).get("perception_type", "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ")
     total_questions = get_stage2_total(perception_type)
+    
+    logger.info(f"📊 Используется perception_type: {perception_type}")
     
     intro_text = f"""
 🧠 <b>ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ</b>
@@ -1237,8 +1285,13 @@ def finish_stage_5(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 5 complete")
     
-    # Переходим к финальному профилю
-    from .profile import show_final_profile
+    # Импортируем здесь, чтобы избежать циклических импортов
+    try:
+        from handlers.profile import show_final_profile
+    except ImportError:
+        # Если не получается, пробуем другой путь
+        from profile import show_final_profile
+    
     show_final_profile(message, user_id)
 
 # ============================================
@@ -1267,5 +1320,6 @@ __all__ = [
     'handle_stage_5_answer', 'finish_stage_5',
     
     # Вспомогательные
-    'show_preliminary_profile'
+    'show_preliminary_profile',
+    'cleanup_old_state_files'
 ]
