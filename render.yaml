@@ -4,6 +4,8 @@ services:
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
+    # 👇 ЯВНО УКАЗЫВАЕМ ОДИН ЭКЗЕМПЛЯР
+    numInstances: 1
     envVars:
       - key: MAX_TOKEN
         sync: false
