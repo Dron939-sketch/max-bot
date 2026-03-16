@@ -167,6 +167,7 @@ class PsychologistMode(BaseMode):
         """
         question_lower = question.lower()
         self.last_tools_used = []
+        hypnotic_suggestion = False
         
         logger.info(f"🧠 PsychologistMode обрабатывает вопрос: {question[:50]}...")
         
@@ -175,33 +176,36 @@ class PsychologistMode(BaseMode):
             response = self._generate_hypnotic_induction()
             self.last_tools_used.append("hypnosis")
             hypnotic_suggestion = True
-        else:
-            hypnotic_suggestion = False
         
         # 2. Если работа с защитой
         elif self._detect_defense(question):
             response = self._work_with_defense(question)
             self.last_tools_used.append("defense_work")
+            hypnotic_suggestion = False
         
         # 3. Если работа с привязанностью
         elif any(word in question_lower for word in ["мама", "папа", "детство", "родители", "ребёнком"]):
             response = self._explore_attachment(question)
             self.last_tools_used.append("attachment_work")
+            hypnotic_suggestion = False
         
         # 4. Если работа с чувствами
         elif any(word in question_lower for word in ["чувствую", "эмоции", "больно", "страшно", "грустно", "одиноко"]):
             response = self._work_with_feelings(question)
             self.last_tools_used.append("feelings_work")
+            hypnotic_suggestion = False
         
         # 5. Если работа с отношениями
         elif any(word in question_lower for word in ["отношения", "партнёр", "люблю", "один", "близость"]):
             response = self._work_with_relations(question)
             self.last_tools_used.append("relations_work")
+            hypnotic_suggestion = False
         
         # 6. По умолчанию - глубинное исследование
         else:
             response = self._depth_inquiry(question)
             self.last_tools_used.append("depth_inquiry")
+            hypnotic_suggestion = False
         
         # Сохраняем в историю
         self.save_to_history(question, response, self.last_tools_used)
