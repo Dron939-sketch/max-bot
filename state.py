@@ -23,7 +23,10 @@ user_states: Dict[int, str] = {}
 user_state_data: Dict[int, Dict[str, Any]] = {}
 
 # Контексты пользователей
-user_contexts: Dict[int, Any] = {}  # <--- ДОБАВЛЕНО
+user_contexts: Dict[int, Any] = {}
+
+# Маршруты пользователей
+user_routes: Dict[int, Dict[str, Any]] = {}
 
 
 # ============================================
@@ -116,7 +119,8 @@ def clear_state(user_id: int):
 
 def get_user_context(user_id: int):
     """Получает контекст пользователя"""
-    # Импортируем здесь, чтобы избежать циклических импортов
+    global user_contexts
+    
     if user_id not in user_contexts:
         from models import UserContext
         user_contexts[user_id] = UserContext(user_id)
@@ -146,9 +150,10 @@ __all__ = [
     # Глобальные хранилища
     'user_data',
     'user_names',
+    'user_contexts',
+    'user_routes',
     'user_states',
     'user_state_data',
-    'user_contexts',  # <--- ДОБАВЛЕНО В ЭКСПОРТ
     
     # Состояния
     'TestStates',
