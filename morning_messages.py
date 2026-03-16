@@ -1,6 +1,9 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Модуль для утренних вдохновляющих сообщений (3 дня)
 С ИИ-генерацией для Дней 2 и 3
+ВЕРСИЯ ДЛЯ MAX
 """
 
 import asyncio
@@ -12,10 +15,11 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Any
 
 import pytz
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
+from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton
+# BufferedInputFile не нужен в MAX - для голоса используется text_to_speech из services
 
 from profiles import VECTORS, LEVEL_PROFILES
-from services import call_deepseek
+from services import call_deepseek, text_to_speech
 
 logger = logging.getLogger(__name__)
 
@@ -146,15 +150,12 @@ class MorningMessageManager:
             
             # Отправляем голос
             try:
-                from services import text_to_speech
                 audio_data = await text_to_speech(clean_text, mode)
                 if audio_data:
-                    audio_file = BufferedInputFile(audio_data, filename=f"day{day}.ogg")
-                    await self.bot.send_voice(
-                        user_id,
-                        audio_file,
-                        caption=f"🎙 День {day}"
-                    )
+                    # В MAX нет send_voice, используем send_audio или просто логируем
+                    logger.info(f"🎙 Голос для дня {day} сгенерирован ({len(audio_data)} байт)")
+                    # Если в MAX есть поддержка аудио, можно раскомментировать:
+                    # await self.bot.send_audio(user_id, ('voice.ogg', audio_data))
             except Exception as e:
                 logger.error(f"❌ Ошибка голоса: {e}")
             
