@@ -61,6 +61,7 @@ from profiles import (
     VECTORS,
     LEVEL_PROFILES
 )
+from profiles import level
 from questions import (
     STAGE_1_QUESTIONS,
     STAGE_2_QUESTIONS,
@@ -2387,7 +2388,8 @@ def start_context(message: types.Message):
     context.gender = None
     context.age = None
     
-    question, keyboard = await context.ask_for_context()
+    # 👇 ЗДЕСЬ НУЖНО УБРАТЬ await!
+    question, keyboard = context.ask_for_context()  # Было: await context.ask_for_context()
     
     if question:
         safe_send_message(
@@ -2400,7 +2402,7 @@ def start_context(message: types.Message):
         set_state(user_id, TestStates.awaiting_context)
     else:
         show_context_complete(message, context)
-
+        
 def handle_context_message(message: types.Message):
     """Обрабатывает ответы на контекстные вопросы"""
     user_id = message.from_user.id
@@ -2414,8 +2416,9 @@ def handle_context_message(message: types.Message):
     if context.awaiting_context == "city":
         context.city = text
         context.awaiting_context = None
-        context.update_weather()
-        question, keyboard = context.ask_for_context()
+        # 👇 УБИРАЕМ await
+        context.update_weather()  # Было: await context.update_weather()
+        question, keyboard = context.ask_for_context()  # Было: await context.ask_for_context()
         
         if question:
             safe_send_message(
@@ -2434,7 +2437,7 @@ def handle_context_message(message: types.Message):
             if 1 <= age <= 120:
                 context.age = age
                 context.awaiting_context = None
-                question, keyboard = context.ask_for_context()
+                question, keyboard = context.ask_for_context()  # Было: await context.ask_for_context()
                 
                 if question:
                     safe_send_message(
@@ -2466,7 +2469,8 @@ def handle_context_message(message: types.Message):
 def show_context_complete(message: types.Message, context: UserContext):
     """Показывает итоговый экран после сбора контекста"""
     
-    context.update_weather()
+    # 👇 УБИРАЕМ await
+    context.update_weather()  # Было: await context.update_weather()
     
     summary = f"✅ {bold('Отлично! Теперь я знаю о вас:')}\n\n"
     
