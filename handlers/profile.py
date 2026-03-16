@@ -20,92 +20,21 @@ from formatters import bold
 # Импорты из state.py
 from state import user_data, get_user_context, get_user_context_dict
 
-# Импорты из profiles.py (только константы)
+# Импорты из profiles.py - ТОЛЬКО КОНСТАНТЫ
 from profiles import (
-    VECTORS, LEVEL_PROFILES, DILTS_LEVELS,
-    STAGE_1_FEEDBACK, STAGE_2_FEEDBACK, STAGE_3_FEEDBACK
+    VECTORS, 
+    LEVEL_PROFILES, 
+    DILTS_LEVELS,
+    STAGE_1_FEEDBACK, 
+    STAGE_2_FEEDBACK, 
+    STAGE_3_FEEDBACK,
+    FALLBACK_ANALYSIS
 )
 from services import generate_ai_profile, generate_psychologist_thought
 from confinement_model import build_confinement_model
 from models import UserContext
 
 logger = logging.getLogger(__name__)
-
-# ============================================
-# ФУНКЦИИ ДЛЯ ФОРМАТИРОВАНИЯ ПРОФИЛЯ (ДОБАВЛЕНЫ)
-# ============================================
-
-def get_profile_display(profile_data: Dict[str, Any]) -> str:
-    """Возвращает отображаемое название профиля"""
-    return profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
-
-def get_perception_description(perception_type: str) -> str:
-    """Возвращает описание типа восприятия"""
-    descriptions = {
-        "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ": "Вы ориентируетесь на мнение других, чутко считываете настроение и ожидания окружающих.",
-        "СТАТУСНО-ОРИЕНТИРОВАННЫЙ": "Для вас важны статус, положение в обществе, внешние атрибуты успеха.",
-        "СМЫСЛО-ОРИЕНТИРОВАННЫЙ": "Вы ищете глубинные смыслы, важнее понимание, чем внешние проявления.",
-        "ПРАКТИКО-ОРИЕНТИРОВАННЫЙ": "Вы ориентируетесь на практические результаты, конкретные действия и факты."
-    }
-    return descriptions.get(perception_type, "Тип восприятия не определен")
-
-def get_dilts_description(dominant_dilts: str) -> str:
-    """Возвращает описание доминирующего уровня Дилтса"""
-    descriptions = {
-        "ENVIRONMENT": "Вы часто ищете причины проблем в окружении, обстоятельствах, других людях.",
-        "BEHAVIOR": "Вы фокусируетесь на действиях и поведении — своём и других.",
-        "CAPABILITIES": "Для вас важны навыки, способности, компетенции.",
-        "VALUES": "Вы руководствуетесь ценностями и убеждениями, они определяют ваш выбор.",
-        "IDENTITY": "Вы ищете ответы на вопросы «кто я?», «какова моя миссия?»."
-    }
-    return descriptions.get(dominant_dilts, "Уровень не определен")
-
-def get_vectors_description(sb: int, tf: int, ub: int, chv: int) -> str:
-    """Возвращает описание векторов"""
-    lines = []
-    
-    sb_desc = {
-        1: "Под давлением замираете, теряетесь",
-        2: "Избегаете конфликтов, уходите",
-        3: "Внешне соглашаетесь, внутри кипите",
-        4: "Внешне спокойны, внутри держите всё в себе",
-        5: "Пытаетесь сгладить конфликт",
-        6: "Умеете защищать себя и других"
-    }.get(sb, "Реагируете по-разному")
-    
-    tf_desc = {
-        1: "Деньги приходят и уходят хаотично",
-        2: "Ищете возможности, но не системно",
-        3: "Умеете зарабатывать трудом",
-        4: "Можете копить и планировать",
-        5: "Создаёте системы дохода",
-        6: "Управляете капиталом"
-    }.get(tf, "Свои отношения с деньгами")
-    
-    ub_desc = {
-        1: "Не задумываетесь о сложном",
-        2: "Верите в знаки и судьбу",
-        3: "Доверяете экспертам",
-        4: "Ищете скрытые смыслы",
-        5: "Анализируете факты",
-        6: "Строите теории"
-    }.get(ub, "По-своему понимаете мир")
-    
-    chv_desc = {
-        1: "Сильно привязываетесь к людям",
-        2: "Подстраиваетесь под других",
-        3: "Хотите нравиться, показываете себя",
-        4: "Умеете влиять на людей",
-        5: "Строите равные партнёрства",
-        6: "Создаёте сообщества"
-    }.get(chv, "Свои паттерны в отношениях")
-    
-    lines.append(f"• СБ (реакция на давление): {sb_desc}")
-    lines.append(f"• ТФ (деньги): {tf_desc}")
-    lines.append(f"• УБ (понимание мира): {ub_desc}")
-    lines.append(f"• ЧВ (отношения): {chv_desc}")
-    
-    return "\n".join(lines)
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ПРОФИЛЕМ
@@ -132,6 +61,68 @@ def is_test_completed(user_data_dict: dict) -> bool:
     if all(field in user_data_dict for field in required_minimal):
         return True
     return False
+
+# ============================================
+# ФУНКЦИИ ДЛЯ ФОРМАТИРОВАНИЯ (из данных profiles.py)
+# ============================================
+
+def get_profile_display(profile_data: Dict[str, Any]) -> str:
+    """Возвращает отображаемое название профиля"""
+    return profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
+
+def get_perception_description(perception_type: str) -> str:
+    """Возвращает описание типа восприятия"""
+    # Используем данные из STAGE_1_FEEDBACK
+    if perception_type in STAGE_1_FEEDBACK:
+        text = STAGE_1_FEEDBACK[perception_type]
+        # Извлекаем первую строку с описанием после заголовка
+        lines = text.strip().split('\n')
+        for line in lines:
+            if ':' in line and 'Твой тип' not in line and 'ЭТАП' not in line:
+                return line.strip()
+    return "Тип восприятия не определен"
+
+def get_dilts_description(dominant_dilts: str) -> str:
+    """Возвращает описание доминирующего уровня Дилтса"""
+    return DILTS_LEVELS.get(dominant_dilts, "Уровень не определен")
+
+def get_vectors_description(sb: int, tf: int, ub: int, chv: int) -> str:
+    """Возвращает описание векторов используя LEVEL_PROFILES"""
+    lines = []
+    
+    sb_profile = LEVEL_PROFILES.get("СБ", {}).get(sb, {})
+    tf_profile = LEVEL_PROFILES.get("ТФ", {}).get(tf, {})
+    ub_profile = LEVEL_PROFILES.get("УБ", {}).get(ub, {})
+    chv_profile = LEVEL_PROFILES.get("ЧВ", {}).get(chv, {})
+    
+    sb_quote = sb_profile.get('quote', '...')[:50] + "..." if len(sb_profile.get('quote', '')) > 50 else sb_profile.get('quote', '...')
+    tf_quote = tf_profile.get('quote', '...')[:50] + "..." if len(tf_profile.get('quote', '')) > 50 else tf_profile.get('quote', '...')
+    ub_quote = ub_profile.get('quote', '...')[:50] + "..." if len(ub_profile.get('quote', '')) > 50 else ub_profile.get('quote', '...')
+    chv_quote = chv_profile.get('quote', '...')[:50] + "..." if len(chv_profile.get('quote', '')) > 50 else chv_profile.get('quote', '...')
+    
+    lines.append(f"• СБ (реакция на давление): {sb_quote}")
+    lines.append(f"• ТФ (деньги): {tf_quote}")
+    lines.append(f"• УБ (понимание мира): {ub_quote}")
+    lines.append(f"• ЧВ (отношения): {chv_quote}")
+    
+    return "\n".join(lines)
+
+def get_vector_name(vector: str) -> str:
+    """Возвращает название вектора"""
+    return VECTORS.get(vector, {}).get('name', vector)
+
+def get_vector_emoji(vector: str) -> str:
+    """Возвращает эмодзи вектора"""
+    return VECTORS.get(vector, {}).get('emoji', '•')
+
+def get_vector_level_description(vector: str, level: int) -> str:
+    """Возвращает описание уровня вектора"""
+    profile = LEVEL_PROFILES.get(vector, {}).get(level, {})
+    return profile.get('archetype_desc', profile.get('quote', '...'))
+
+def get_fallback_advice(vector: str, level: int) -> str:
+    """Возвращает совет из FALLBACK_ANALYSIS"""
+    return FALLBACK_ANALYSIS.get(vector, {}).get(level, "Продолжай исследовать себя")
 
 # ============================================
 # ОСНОВНЫЕ ФУНКЦИИ
@@ -199,9 +190,6 @@ def format_profile_display(user_data_dict: Dict[str, Any], context: Optional[Use
     # Векторные описания
     vectors_desc = get_vectors_description(sb, tf, ub, chv)
     
-    # Точка роста
-    growth = profile_data.get('growth_area', 'Поведение')
-    
     text = f"""
 📊 ПРОФИЛЬ {name}
 
@@ -215,13 +203,12 @@ def format_profile_display(user_data_dict: Dict[str, Any], context: Optional[Use
 📈 ВЕКТОРЫ:
 {vectors_desc}
 
-🎯 ТОЧКА РОСТА: {growth}
 {dilts_desc}
 
 💭 Что дальше?
 • AI-профиль — глубинный анализ
-• Мысли психолога — взгляд со стороны
-• Выбрать цель — начать работу
+• Мысли психолога — взгляд на твою систему
+• Выбрать цель — начать работу над собой
 """
     return text
 
@@ -653,7 +640,7 @@ def show_ai_analysis(call: CallbackQuery):
         )
 
 
-def show_saved_psychologist_thought(message: types.Message, user_id: int, thought: str):
+def show_saved_psychologist_thought(message: Message, user_id: int, thought: str):
     """Показывает сохраненные мысли психолога с красивым форматированием"""
     from formatters import format_psychologist_text
     
