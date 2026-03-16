@@ -39,7 +39,8 @@ from .stages import (
 from .modes import show_mode_selection, show_mode_selected
 from .profile import (
     show_profile, show_ai_profile, show_psychologist_thought,
-    show_final_profile
+    show_final_profile, profile_confirm, profile_doubt, profile_reject,
+    handle_goodbye, handle_discrepancy, clarify_next, handle_clarifying_answer
 )
 from .start import show_why_details, cmd_start
 
@@ -51,34 +52,39 @@ logger = logging.getLogger(__name__)
 
 def get_user_state_data(user_id: int) -> Dict[str, Any]:
     """Получает данные состояния пользователя"""
-    from main import user_state_data
+    from state import user_state_data
     if user_id not in user_state_data:
         user_state_data[user_id] = {}
     return user_state_data[user_id]
 
 def update_user_state_data(user_id: int, **kwargs):
     """Обновляет данные состояния пользователя"""
-    from main import user_state_data
+    from state import user_state_data
     if user_id not in user_state_data:
         user_state_data[user_id] = {}
     user_state_data[user_id].update(kwargs)
 
 def get_user_data(user_id: int) -> Dict[str, Any]:
     """Получает данные пользователя"""
-    from main import user_data
+    from state import user_data
     if user_id not in user_data:
         user_data[user_id] = {}
     return user_data[user_id]
 
 def get_user_context(user_id: int):
     """Получает контекст пользователя"""
-    from main import user_contexts
+    from state import user_contexts
     return user_contexts.get(user_id)
 
 def set_user_state(user_id: int, state: str):
     """Устанавливает состояние пользователя"""
-    from main import user_states
+    from state import user_states
     user_states[user_id] = state
+
+def get_state(user_id: int) -> str:
+    """Получает состояние пользователя"""
+    from state import user_states
+    return user_states.get(user_id, "")
 
 # ============================================
 # ОСНОВНОЙ ОБРАБОТЧИК CALLBACK'ОВ
@@ -123,6 +129,7 @@ def callback_handler(call: CallbackQuery):
     # Начать сбор контекста
     elif data == "start_context":
         from .context import start_context
+        logger.info(f"🔘 Вызов start_context для user {user_id}")
         start_context(call.message)
         return
     
@@ -245,19 +252,15 @@ def callback_handler(call: CallbackQuery):
     # ============================================
     
     elif data == "profile_confirm":
-        from .profile import profile_confirm
         profile_confirm(call)
         return
     elif data == "profile_doubt":
-        from .profile import profile_doubt
         profile_doubt(call)
         return
     elif data == "profile_reject":
-        from .profile import profile_reject
         profile_reject(call)
         return
     elif data == "goodbye":
-        from .profile import handle_goodbye
         handle_goodbye(call)
         return
     
@@ -266,16 +269,13 @@ def callback_handler(call: CallbackQuery):
     # ============================================
     
     elif data.startswith("discrepancy_"):
-        from .profile import handle_discrepancy
         disc = data.replace("discrepancy_", "")
         handle_discrepancy(call, disc)
         return
     elif data == "clarify_next":
-        from .profile import clarify_next
         clarify_next(call)
         return
     elif data.startswith("clarify_answer_"):
-        from .profile import handle_clarifying_answer
         handle_clarifying_answer(call)
         return
     
@@ -496,7 +496,7 @@ def callback_handler(call: CallbackQuery):
     
     elif data == "restart_test":
         # Очищаем данные пользователя
-        from main import user_data, user_state_data
+        from state import user_data, user_state_data
         if user_id in user_data:
             user_data[user_id] = {}
         if user_id in user_state_data:
