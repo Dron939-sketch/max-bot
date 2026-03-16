@@ -96,6 +96,11 @@ from weekend_planner import get_weekend_planner, get_weekend_ideas_keyboard
 from keyboards import *
 from message_utils import safe_send_message, safe_edit_message, safe_delete_message
 
+# ===== ДОБАВЛЕННЫЕ ИМПОРТЫ =====
+from handlers.context import handle_context_message
+from handlers.reality import process_life_context, process_goal_context
+from handlers.callback import callback_handler
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -899,6 +904,7 @@ def cmd_start(message: types.Message):
         return
     
     # Если контекст уже заполнен, показываем меню
+    from handlers.modes import show_main_menu
     show_main_menu(message, context)
 
 @bot.message_handler(commands=['menu'])
@@ -907,6 +913,7 @@ def cmd_menu(message: types.Message):
     user_id = message.from_user.id
     
     if user_id in user_contexts:
+        from handlers.modes import show_main_menu_after_mode
         show_main_menu_after_mode(message, user_contexts[user_id])
     else:
         cmd_start(message)
@@ -919,6 +926,7 @@ def cmd_mode(message: types.Message):
     if user_id not in user_contexts:
         user_contexts[user_id] = UserContext(user_id)
     
+    from handlers.modes import show_mode_selection
     show_mode_selection(message)
 
 @bot.message_handler(commands=['stats'])
@@ -965,6 +973,7 @@ def cmd_context(message: types.Message):
     context.weather_cache = {}
     
     safe_send_message(message, "🔄 Давайте обновим ваш контекст")
+    from handlers.context import start_context
     start_context(message)
 
 # ============================================
@@ -2388,8 +2397,7 @@ def start_context(message: types.Message):
     context.gender = None
     context.age = None
     
-    # 👇 ЗДЕСЬ НУЖНО УБРАТЬ await!
-    question, keyboard = context.ask_for_context()  # Было: await context.ask_for_context()
+    question, keyboard = context.ask_for_context()
     
     if question:
         safe_send_message(
@@ -2416,9 +2424,10 @@ def handle_context_message(message: types.Message):
     if context.awaiting_context == "city":
         context.city = text
         context.awaiting_context = None
-        # 👇 УБИРАЕМ await
-        context.update_weather()  # Было: await context.update_weather()
-        question, keyboard = context.ask_for_context()  # Было: await context.ask_for_context()
+        context.update_weather()
+        context.detect_timezone_from_city()
+        
+        question, keyboard = context.ask_for_context()
         
         if question:
             safe_send_message(
@@ -2430,6 +2439,8 @@ def handle_context_message(message: types.Message):
             )
         else:
             show_context_complete(message, context)
+        
+        return True
     
     elif context.awaiting_context == "age":
         try:
@@ -2437,7 +2448,8 @@ def handle_context_message(message: types.Message):
             if 1 <= age <= 120:
                 context.age = age
                 context.awaiting_context = None
-                question, keyboard = context.ask_for_context()  # Было: await context.ask_for_context()
+                
+                question, keyboard = context.ask_for_context()
                 
                 if question:
                     safe_send_message(
@@ -2463,14 +2475,15 @@ def handle_context_message(message: types.Message):
                 parse_mode='HTML',
                 delete_previous=True
             )
+        
+        return True
     
-    return True
+    return False
 
 def show_context_complete(message: types.Message, context: UserContext):
     """Показывает итоговый экран после сбора контекста"""
     
-    # 👇 УБИРАЕМ await
-    context.update_weather()  # Было: await context.update_weather()
+    context.update_weather()
     
     summary = f"✅ {bold('Отлично! Теперь я знаю о вас:')}\n\n"
     
@@ -3369,333 +3382,34 @@ def show_route_complete(call: CallbackQuery):
     update_state_data(call.from_user.id, route_step=None, current_destination=None)
 
 # ============================================
-# CALLBACK-ОБРАБОТЧИКИ
+# CALLBACK-ОБРАБОТЧИК
 # ============================================
 
 @bot.callback_query_handler(func=lambda call: True)
-def callback_handler(call: CallbackQuery):
-    """Основной обработчик callback'ов"""
-    
-    data = call.data
-    
-    # Обработчики режимов
-    if data == "show_modes":
-        show_mode_selection(call.message)
-    elif data.startswith("mode_"):
-        mode = data.replace("mode_", "")
-        context = user_contexts.get(call.from_user.id)
-        if context:
-            context.communication_mode = mode
-        show_mode_selected(call.message, mode)
-    
-    # Обработчики навигации
-    elif data == "back_to_mode_selected":
-        state_data = get_state_data(call.from_user.id)
-        mode = state_data.get("communication_mode", "coach")
-        show_mode_selected(call.message, mode)
-    elif data == "back_to_start":
-        cmd_start(call.message)
-    
-    # Обработчики контекста
-    elif data == "start_context":
-        start_context(call.message)
-    elif data == "set_gender_male":
-        context = user_contexts.get(call.from_user.id)
-        if context:
-            context.gender = "male"
-            question, keyboard = context.ask_for_context()
-            if question:
-                safe_send_message(
-                    call.message,
-                    f"📝 {bold('Давайте познакомимся')}\n\n{question}",
-                    reply_markup=keyboard,
-                    delete_previous=True
-                )
-    elif data == "set_gender_female":
-        context = user_contexts.get(call.from_user.id)
-        if context:
-            context.gender = "female"
-            question, keyboard = context.ask_for_context()
-            if question:
-                safe_send_message(
-                    call.message,
-                    f"📝 {bold('Давайте познакомимся')}\n\n{question}",
-                    reply_markup=keyboard,
-                    delete_previous=True
-                )
-    
-    # Обработчики этапов
-    elif data == "show_stage_1_intro":
-        show_stage_1_intro(call.message)
-    elif data == "start_stage_1":
-        start_stage_1(call)
-    elif data.startswith("stage1_"):
-        handle_stage_1_answer(call)
-    
-    elif data == "show_stage_2_intro":
-        show_stage_2_intro(call.message)
-    elif data == "start_stage_2":
-        start_stage_2(call)
-    elif data.startswith("stage2_"):
-        handle_stage_2_answer(call)
-    
-    elif data == "show_stage_3_intro":
-        show_stage_3_intro(call.message)
-    elif data == "start_stage_3":
-        start_stage_3(call)
-    elif data.startswith("stage3_"):
-        handle_stage_3_answer(call)
-    
-    elif data == "show_stage_4_intro":
-        show_stage_4_intro(call.message)
-    elif data == "start_stage_4":
-        start_stage_4(call)
-    elif data.startswith("stage4_"):
-        handle_stage_4_answer(call)
-    
-    elif data == "show_stage_5_intro":
-        show_stage_5_intro(call.message)
-    elif data == "start_stage_5":
-        start_stage_5(call)
-    elif data.startswith("stage5_"):
-        handle_stage_5_answer(call)
-    
-    # Обработчики подтверждения профиля
-    elif data == "profile_confirm":
-        profile_confirm(call)
-    elif data == "profile_doubt":
-        profile_doubt(call)
-    elif data == "profile_reject":
-        profile_reject(call)
-    elif data == "goodbye":
-        handle_goodbye(call)
-    
-    # Обработчики расхождений
-    elif data.startswith("discrepancy_"):
-        disc = data.replace("discrepancy_", "")
-        handle_discrepancy(call, disc)
-    elif data == "clarify_next":
-        clarify_next(call)
-    elif data.startswith("clarify_answer_"):
-        handle_clarifying_answer(call)
-    
-    # Обработчики результатов
-    elif data == "show_results":
-        show_final_profile(call.message, call.from_user.id)
-    elif data == "psychologist_thought":
-        show_ai_analysis(call)
-    elif data == "smart_questions":
-        show_smart_questions(call)
-    
-    # Обработчики целей
-    elif data == "show_dynamic_destinations":
-        show_dynamic_destinations(call)
-    elif data.startswith("dynamic_dest_"):
-        handle_dynamic_destination(call)
-    
-    # Обработчики проверки реальности
-    elif data == "check_reality":
-        show_reality_check(call)
-    elif data == "skip_life_context":
-        skip_life_context(call)
-    elif data == "skip_goal_questions":
-        skip_goal_questions(call)
-    elif data == "skip_to_route":
-        skip_to_route(call)
-    elif data == "accept_feasibility_plan":
-        accept_feasibility_plan(call)
-    
-    # Обработчики маршрутов
-    elif data == "route_step_done":
-        route_step_done(call)
+def handle_callback(call: types.CallbackQuery):
+    """Обработчик всех callback'ов"""
+    callback_handler(call)
 
-def show_ai_analysis(call: CallbackQuery):
-    """Показывает мысли психолога"""
-    user_id = call.from_user.id
-    data = user_data.get(user_id, {})
-    context = user_contexts.get(user_id)
-    user_name = context.name if context and context.name else ""
-    
-    if data.get("psychologist_thought"):
-        show_saved_psychologist_thought(call.message, user_id, data["psychologist_thought"])
-        return
-    
-    # Отправляем статусное сообщение
-    status_msg = safe_send_message(
-        call.message,
-        "🧠 Анализирую через конфайнмент-модель...\n\nЭто займёт около 15-20 секунд",
-        delete_previous=True
-    )
-    
-    # Здесь должен быть вызов generate_psychologist_thought
-    # thought = generate_psychologist_thought(user_id, data)
-    thought = None  # Заглушка
-    
-    if thought:
-        user_data[user_id]["psychologist_thought"] = thought
-        safe_delete_message(call.message.chat.id, status_msg.message_id)
-        show_saved_psychologist_thought(call.message, user_id, thought)
-    else:
-        safe_delete_message(call.message.chat.id, status_msg.message_id)
-        keyboard = InlineKeyboardMarkup()
-        keyboard.add(InlineKeyboardButton("◀️ НАЗАД", callback_data="show_results"))
-        safe_send_message(
-            call.message,
-            "❌ Не удалось сгенерировать анализ",
-            reply_markup=keyboard,
-            delete_previous=True
-        )
-
-def show_saved_psychologist_thought(message: types.Message, user_id: int, thought: str):
-    """Показывает сохраненные мысли психолога с красивым форматированием"""
-    
-    context = user_contexts.get(user_id)
-    user_name = context.name if context and context.name else ""
-    
-    # Форматируем текст
-    formatted_thought = format_psychologist_text(thought, user_name)
-    
-    # Добавляем заголовок, если его нет
-    if not formatted_thought.startswith("🧠"):
-        formatted_thought = f"🧠 {bold('МЫСЛИ ПСИХОЛОГА')}\n\n{formatted_thought}"
-    
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
-    keyboard.row(InlineKeyboardButton("◀️ К ПОРТРЕТУ", callback_data="show_results"))
-    
-    safe_send_message(
-        message,
-        formatted_thought,
-        reply_markup=keyboard,
-        parse_mode='HTML',
-        delete_previous=True
-    )
-
-def show_smart_questions(call: CallbackQuery):
-    """Показывает умные вопросы"""
-    user_id = call.from_user.id
-    data = user_data.get(user_id, {})
-    context = user_contexts.get(user_id)
-    
-    scores = {}
-    for k in VECTORS:
-        levels = data.get("behavioral_levels", {}).get(k, [])
-        scores[k] = sum(levels) / len(levels) if levels else 3.0
-    
-    questions = generate_smart_questions(scores)
-    update_state_data(user_id, smart_questions=questions)
-    
-    mode = context.communication_mode if context else "coach"
-    mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
-    
-    if mode == "coach":
-        header = f"{mode_config['emoji']} {bold('ЗАДАЙТЕ ВОПРОС (КОУЧ)')}\n\n{italic('Я буду задавать открытые вопросы, помогая вам найти ответы внутри себя.')}\n\n"
-    elif mode == "psychologist":
-        header = f"{mode_config['emoji']} {bold('РАССКАЖИТЕ МНЕ (ПСИХОЛОГ)')}\n\n{italic('Я здесь, чтобы помочь исследовать глубинные паттерны.')}\n\n"
-    elif mode == "trainer":
-        header = f"{mode_config['emoji']} {bold('ПОСТАВЬТЕ ЗАДАЧУ (ТРЕНЕР)')}\n\n{italic('Чётко сформулируйте, что хотите решить. Я дам конкретные шаги.')}\n\n"
-    else:
-        header = f"❓ {bold('ЗАДАЙТЕ ВОПРОС')}\n\n"
-    
-    keyboard = InlineKeyboardMarkup()
-    for i, q in enumerate(questions, 1):
-        q_short = q[:40] + "..." if len(q) > 40 else q
-        keyboard.add(InlineKeyboardButton(
-            text=f"{q_short}",
-            callback_data=f"ask_{i}"
-        ))
-    
-    keyboard.row(
-        InlineKeyboardButton("🗣 Отношения", callback_data="help_cat_relations"),
-        InlineKeyboardButton("💰 Деньги", callback_data="help_cat_money")
-    )
-    keyboard.row(
-        InlineKeyboardButton("🧠 Самоощущение", callback_data="help_cat_self"),
-        InlineKeyboardButton("📚 Знания", callback_data="help_cat_knowledge")
-    )
-    keyboard.row(
-        InlineKeyboardButton("💪 Поддержка", callback_data="help_cat_support"),
-        InlineKeyboardButton("🎨 Муза", callback_data="help_cat_muse")
-    )
-    keyboard.row(InlineKeyboardButton("🍏 Забота о себе", callback_data="help_cat_care"))
-    keyboard.row(InlineKeyboardButton("✏️ Написать самому", callback_data="ask_question"))
-    keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="show_results"))
-    
-    safe_send_message(
-        call.message,
-        header,
-        reply_markup=keyboard,
-        delete_previous=True
-    )
-
-def generate_smart_questions(scores):
-    """Генерирует вопросы на основе профиля"""
-    questions = []
-    
-    tf = level(scores.get("ТФ", 3))
-    sb = level(scores.get("СБ", 3))
-    ub = level(scores.get("УБ", 3))
-    cv = level(scores.get("ЧВ", 3))
-    
-    if tf <= 2:
-        questions.append("Как начать зарабатывать, если нет денег?")
-        questions.append("Почему мне не везет с деньгами?")
-    elif tf <= 4:
-        questions.append("Как увеличить доход без новых вложений?")
-        questions.append("Как создать финансовую подушку?")
-    
-    if sb <= 2:
-        questions.append("Как перестать бояться конфликтов?")
-        questions.append("Как научиться говорить 'нет'?")
-    elif sb <= 4:
-        questions.append("Почему я злюсь внутри, но молчу?")
-        questions.append("Как защищать границы без агрессии?")
-    
-    if ub <= 2:
-        questions.append("Как понять, что происходит в жизни?")
-    elif ub == 4:
-        questions.append("Как перестать искать заговоры?")
-    
-    if cv <= 2:
-        questions.append("Как перестать зависеть от других?")
-    elif cv <= 4:
-        questions.append("Почему отношения поверхностные?")
-    
-    general = [
-        "С чего начать изменения?",
-        "Что мне делать с этой ситуацией?",
-        "Как не срываться на близких?"
-    ]
-    
-    while len(questions) < 5:
-        for q in general:
-            if q not in questions and len(questions) < 5:
-                questions.append(q)
-    
-    return questions[:5]
 
 # ============================================
 # ОБРАБОТЧИКИ СООБЩЕНИЙ (ПОРЯДОК ВАЖЕН!)
 # ============================================
 
-# 1. Сначала обработчики с состояниями (самые специфичные)
+# 1. Сначала обработчики с состояниями
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.collecting_life_context)
 def handle_life_context_wrapper(message: types.Message):
     """Обработчик сообщений в состоянии сбора жизненного контекста"""
-    from handlers.reality import process_life_context
     process_life_context(message)
 
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.collecting_goal_context)
 def handle_goal_context_wrapper(message: types.Message):
     """Обработчик сообщений в состоянии сбора целевого контекста"""
-    from handlers.reality import process_goal_context
     process_goal_context(message)
 
-# 2. ПОТОМ обработчик контекста (тоже проверяет состояние)
+# 2. ПОТОМ обработчик контекста
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_context)
 def handle_context_message_wrapper(message: types.Message):
     """Обработчик сообщений в состоянии сбора контекста"""
-    from handlers.context import handle_context_message
     handled = handle_context_message(message)
     if not handled:
         safe_send_message(
@@ -3704,7 +3418,7 @@ def handle_context_message_wrapper(message: types.Message):
             delete_previous=True
         )
 
-# 3. В САМОМ КОНЦЕ - обработчик по умолчанию (самый общий)
+# 3. В САМОМ КОНЦЕ - обработчик по умолчанию
 @bot.message_handler(func=lambda message: True)
 def handle_unknown_message(message: types.Message):
     """Обработчик неизвестных сообщений"""
@@ -3713,10 +3427,8 @@ def handle_unknown_message(message: types.Message):
     
     # Если пользователь в состоянии сбора контекста - НЕ показываем это сообщение
     if state == TestStates.awaiting_context:
-        # Пропускаем, обработчик контекста сам разберется
         return
     
-    # Для всех остальных случаев
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("🧠 К ПОРТРЕТУ", callback_data="show_results"))
     keyboard.row(InlineKeyboardButton("🎯 ЧЕМ ПОМОЧЬ", callback_data="show_help"))
