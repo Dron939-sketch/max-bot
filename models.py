@@ -134,7 +134,7 @@ class UserContext:
             return "сестрёнка"
         return ""
     
-    async def ask_for_context(self) -> Tuple[Optional[str], Optional[InlineKeyboardMarkup]]:
+    def ask_for_context(self) -> Tuple[Optional[str], Optional[InlineKeyboardMarkup]]:
         """Возвращает первый вопрос для сбора контекста (ОБЯЗАТЕЛЬНЫЙ, БЕЗ ПРОПУСКА)"""
         if not self.city:
             self.awaiting_context = "city"
