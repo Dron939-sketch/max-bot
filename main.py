@@ -3678,10 +3678,28 @@ def generate_smart_questions(scores):
 # ОБРАБОТЧИКИ СООБЩЕНИЙ
 # ============================================
 
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_context)
-def handle_context_message_wrapper(message: types.Message):
-    """Обработчик сообщений в состоянии сбора контекста"""
-    handle_context_message(message)
+@bot.message_handler(func=lambda message: True)
+def handle_unknown_message(message: types.Message):
+    """Обработчик неизвестных сообщений"""
+    user_id = message.from_user.id
+    state = get_state(user_id)
+    
+    # Если пользователь в состоянии сбора контекста - НЕ показываем это сообщение
+    if state == TestStates.awaiting_context:
+        # Пропускаем, обработчик контекста сам разберется
+        return
+    
+    # Для всех остальных случаев
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(InlineKeyboardButton("🧠 К ПОРТРЕТУ", callback_data="show_results"))
+    keyboard.row(InlineKeyboardButton("🎯 ЧЕМ ПОМОЧЬ", callback_data="show_help"))
+    keyboard.row(InlineKeyboardButton("❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions"))
+    
+    safe_send_message(
+        message,
+        "Используйте кнопки для навигации:",
+        reply_markup=keyboard
+    )
 
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.collecting_life_context)
 def handle_life_context_wrapper(message: types.Message):
