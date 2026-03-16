@@ -22,6 +22,13 @@ from keyboards import (
 )
 from models import UserContext
 
+# ИСПРАВЛЕННЫЕ ИМПОРТЫ - используем state.py
+from state import (
+    user_data, user_names, user_contexts, user_states, user_state_data,
+    get_user_context, get_user_context_dict,
+    get_state, set_state, get_state_data, update_state_data, clear_state
+)
+
 logger = logging.getLogger(__name__)
 
 # ============================================
@@ -30,34 +37,34 @@ logger = logging.getLogger(__name__)
 
 def get_user_data(user_id: int) -> Dict[str, Any]:
     """Получает данные пользователя"""
-    from main import user_data
     if user_id not in user_data:
         user_data[user_id] = {}
     return user_data[user_id]
 
 def get_user_state_data(user_id: int) -> Dict[str, Any]:
     """Получает данные состояния пользователя"""
-    from main import user_state_data
     if user_id not in user_state_data:
         user_state_data[user_id] = {}
     return user_state_data[user_id]
 
 def update_user_state_data(user_id: int, **kwargs):
     """Обновляет данные состояния пользователя"""
-    from main import user_state_data
     if user_id not in user_state_data:
         user_state_data[user_id] = {}
     user_state_data[user_id].update(kwargs)
 
+# get_user_context уже есть в state.py, но переопределим для единообразия
 def get_user_context(user_id: int) -> Optional[UserContext]:
     """Получает контекст пользователя"""
-    from main import user_contexts
     return user_contexts.get(user_id)
 
 def get_user_names(user_id: int) -> str:
     """Получает имя пользователя"""
-    from main import user_names
     return user_names.get(user_id, "друг")
+
+def get_user_context_dict() -> Dict[int, UserContext]:
+    """Возвращает словарь контекстов пользователей"""
+    return user_contexts
 
 # ============================================
 # НАЧАЛО СБОРА КОНТЕКСТА
@@ -69,11 +76,10 @@ def start_context(message: Message):
     """
     user_id = message.chat.id
     
-    if user_id not in get_user_context_dict():
-        from main import user_contexts
+    if user_id not in user_contexts:
         user_contexts[user_id] = UserContext(user_id)
     
-    context = get_user_context(user_id)
+    context = user_contexts[user_id]
     
     # Принудительный сброс (чтобы точно спросило)
     context.city = None
@@ -93,16 +99,10 @@ def start_context(message: Message):
             delete_previous=True
         )
         # Устанавливаем состояние
-        from main import user_states
         user_states[user_id] = "awaiting_context"
     else:
         # Если вопросы не нужны (уже всё есть), показываем завершение
         show_context_complete(message, context)
-
-def get_user_context_dict() -> Dict[int, UserContext]:
-    """Возвращает словарь контекстов пользователей"""
-    from main import user_contexts
-    return user_contexts
 
 # ============================================
 # ОБРАБОТЧИКИ CALLBACK'ОВ ДЛЯ КОНТЕКСТА
@@ -213,7 +213,7 @@ def handle_context_message(message: Message) -> bool:
         context.city = text
         context.awaiting_context = None
         
-        # 👇 ИСПРАВЛЕНО: синхронные вызовы
+        # 👇 СИНХРОННЫЕ ВЫЗОВЫ
         context.update_weather()
         context.detect_timezone_from_city()
         
@@ -309,7 +309,7 @@ def show_context_complete(message: Message, context: UserContext):
     """
     Показывает итоговый экран после сбора контекста
     """
-    # 👇 ИСПРАВЛЕНО: синхронный вызов
+    # 👇 СИНХРОННЫЙ ВЫЗОВ
     context.update_weather()
     
     # Формируем сводку
@@ -346,7 +346,6 @@ def show_context_complete(message: Message, context: UserContext):
     )
     
     # Очищаем состояние
-    from main import user_states
     if message.chat.id in user_states:
         del user_states[message.chat.id]
 
@@ -360,11 +359,10 @@ def cmd_context(message: Message):
     """
     user_id = message.chat.id
     
-    if user_id not in get_user_context_dict():
-        from main import user_contexts
+    if user_id not in user_contexts:
         user_contexts[user_id] = UserContext(user_id)
     
-    context = get_user_context(user_id)
+    context = user_contexts[user_id]
     
     # Сбрасываем контекст
     context.city = None
