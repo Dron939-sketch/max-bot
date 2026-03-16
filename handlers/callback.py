@@ -125,10 +125,18 @@ def callback_handler(call: CallbackQuery):
     elif data == "why_details":
         show_why_details(call)
         return
-    
+
     # Начать сбор контекста
     elif data == "start_context":
         from .context import start_context
+        from state import user_states, TestStates
+        
+        # Проверяем состояние перед вызовом
+        if user_states.get(user_id) == TestStates.awaiting_context:
+            logger.info(f"⚠️ Контекст уже собирается для user {user_id}, игнорируем")
+            call.answer("Сбор контекста уже начат!", show_alert=False)
+            return
+        
         logger.info(f"🔘 Вызов start_context для user {user_id}")
         start_context(call.message)
         return
