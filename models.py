@@ -137,55 +137,67 @@ class UserContext:
     
     def ask_for_context(self) -> Tuple[Optional[str], Optional[InlineKeyboardMarkup]]:
         """Возвращает первый вопрос для сбора контекста (ОБЯЗАТЕЛЬНЫЙ, БЕЗ ПРОПУСКА)"""
+        logger.info(f"🔍 ask_for_context вызван: city={self.city}, gender={self.gender}, age={self.age}")
+        
         if not self.city:
             self.awaiting_context = "city"
-            # ❌ УБРАНА КНОПКА ПРОПУСКА
+            logger.info(f"🏙️ Возвращаем вопрос о городе")
             return self.bold("🌆 В каком городе вы находитесь? (Это нужно для погоды)"), None
         
         if not self.gender:
             self.awaiting_context = "gender"
-            # 👇 ТОЛЬКО КНОПКИ ВЫБОРА ПОЛА, ПРОПУСКА НЕТ
+            logger.info(f"👤 Возвращаем вопрос о поле с клавиатурой")
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="👨 Мужской", callback_data="set_gender_male")],
                 [InlineKeyboardButton(text="👩 Женский", callback_data="set_gender_female")]
-                # ❌ КНОПКА ПРОПУСКА УДАЛЕНА
             ])
             return self.bold("👤 Укажите ваш пол:"), keyboard
         
         if not self.age:
             self.awaiting_context = "age"
-            # ❌ УБРАНА КНОПКА ПРОПУСКА
+            logger.info(f"📅 Возвращаем вопрос о возрасте")
             return self.bold("📅 Сколько вам лет? (напишите число)"), None
         
         self.awaiting_context = None
+        logger.info(f"✅ Все вопросы собраны, возвращаем None")
         return None, None
     
     def process_context_answer(self, text: str) -> Tuple[bool, Optional[str], Optional[InlineKeyboardMarkup]]:
         """Обрабатывает ответ на контекстный вопрос (СИНХРОННАЯ)"""
+        logger.info(f"🔄 process_context_answer вызван: awaiting_context={self.awaiting_context}, text='{text}'")
+        
         if not self.awaiting_context:
+            logger.info(f"⚠️ Нет ожидающего контекста")
             return False, None, None
         
         field = self.awaiting_context
+        logger.info(f"📝 Обрабатываем поле: {field}")
         
         if field == "city":
             self.city = text.strip()
+            logger.info(f"🏙️ Город сохранен: {self.city}")
             self.awaiting_context = None
             self.update_weather()  # синхронно
             self.detect_timezone_from_city()  # синхронно
             question, keyboard = self.ask_for_context()
+            logger.info(f"📋 Следующий вопрос после города: {question}")
             return True, question, keyboard
                 
         elif field == "gender":
             gender_lower = text.lower().strip()
             if gender_lower in ['м', 'муж', 'мужчина', 'male']:
                 self.gender = "male"
+                logger.info(f"👨 Распознан мужской пол")
             elif gender_lower in ['ж', 'жен', 'женщина', 'female']:
                 self.gender = "female"
+                logger.info(f"👩 Распознан женский пол")
             else:
                 self.gender = "other"
+                logger.info(f"❓ Пол не распознан, установлен other")
             
             self.awaiting_context = None
             question, keyboard = self.ask_for_context()
+            logger.info(f"📋 Следующий вопрос после пола: {question}")
             return True, question, keyboard
                 
         elif field == "age":
@@ -193,21 +205,27 @@ class UserContext:
                 age = int(text.strip())
                 if 1 <= age <= 120:
                     self.age = age
+                    logger.info(f"📅 Возраст сохранен: {age}")
                     self.awaiting_context = None
                     question, keyboard = self.ask_for_context()
+                    logger.info(f"📋 Следующий вопрос после возраста: {question}")
                     return True, question, keyboard
                 else:
+                    logger.warning(f"⚠️ Возраст вне диапазона: {age}")
                     return False, self.bold("❌ Возраст должен быть от 1 до 120 лет.\n\n📅 Сколько вам лет? (напишите число)"), None
             except ValueError:
+                logger.warning(f"⚠️ Некорректное число: {text}")
                 return False, self.bold("❌ Пожалуйста, введите число.\n\n📅 Сколько вам лет? (напишите число)"), None
         
         return False, None, None
     
     def handle_gender_callback(self, gender: str) -> Tuple[Optional[str], Optional[InlineKeyboardMarkup]]:
         """Обрабатывает выбор пола через callback (СИНХРОННАЯ)"""
+        logger.info(f"🔘 handle_gender_callback: gender={gender}")
         self.gender = gender
         self.awaiting_context = None  # Важно сбросить!
         question, keyboard = self.ask_for_context()
+        logger.info(f"📋 Следующий вопрос после callback: {question}")
         return question, keyboard
     
     def get_day_context(self) -> dict:
@@ -283,15 +301,19 @@ class UserContext:
     
     def update_weather(self):
         """Обновляет погоду через OpenWeatherMap API (СИНХРОННАЯ)"""
+        logger.info(f"🌤️ update_weather вызван для города {self.city}")
         if not self.city or not OPENWEATHER_API_KEY:
+            logger.warning(f"⚠️ Нет города или API ключа")
             return False
         
         if self.weather_cache and self.weather_cache_time:
             if (datetime.now() - self.weather_cache_time).seconds < 3600:
+                logger.info(f"✅ Используем кэш погоды")
                 return True
         
         url = f"http://api.openweathermap.org/data/2.5/weather?q={self.city}&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
         try:
+            logger.info(f"🌐 Запрос погоды для {self.city}")
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 data = response.json()
@@ -323,9 +345,12 @@ class UserContext:
                     "pressure": data['main']['pressure']
                 }
                 self.weather_cache_time = datetime.now()
+                logger.info(f"✅ Погода обновлена: {self.weather_cache['temp']}°C, {self.weather_cache['description']}")
                 return True
+            else:
+                logger.error(f"❌ Ошибка API погоды: {response.status_code}")
         except Exception as e:
-            logger.error(f"Ошибка получения погоды: {e}")
+            logger.error(f"❌ Ошибка получения погоды: {e}")
         return False
     
     def get_age_stage(self) -> str:
@@ -354,6 +379,8 @@ class UserContext:
         """Определяет часовой пояс по названию города (СИНХРОННАЯ)"""
         if not self.city:
             return
+        
+        logger.info(f"🌍 Определяем часовой пояс для города {self.city}")
         
         # Простая карта городов (можно расширить)
         timezone_map = {
