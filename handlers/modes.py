@@ -21,7 +21,7 @@ from message_utils import safe_send_message, safe_edit_message
 from state import (
     get_user_context, 
     get_user_context_dict, 
-    get_user_state_data,
+    get_state_data,  # ← ЗАМЕНИЛИ get_user_state_data на get_state_data
     update_state_data
 )
 import time
@@ -115,7 +115,7 @@ def callback_start_test(call: types.CallbackQuery):
     """Начать тест после выбора режима"""
     from .stages import show_stage_1_intro
     user_id = call.from_user.id
-    state_data = get_user_state_data(user_id)
+    state_data = get_state_data(user_id)  # ← ИСПРАВЛЕНО
     show_stage_1_intro(call.message, user_id, state_data)
 
 
