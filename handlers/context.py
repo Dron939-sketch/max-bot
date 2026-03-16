@@ -162,108 +162,131 @@ def start_context(message: Message):
 # ОБРАБОТЧИКИ CALLBACK'ОВ ДЛЯ КОНТЕКСТА
 # ============================================
 
-def set_gender_male(call: CallbackQuery):
-    """Устанавливает пол: мужской"""
+def handle_context_callback(call: CallbackQuery):
+    """
+    Единый обработчик для всех callback'ов контекста (пол, возраст, пропуск)
+    """
     user_id = call.from_user.id
-    logger.info(f"👨 set_gender_male вызван для user {user_id}")
+    data = call.data
     
+    logger.info(f"🔔 handle_context_callback: {data} для пользователя {user_id}")
+    
+    # Получаем контекст
     context = get_user_context(user_id)
     
     if not context:
         logger.warning(f"❌ Контекст не найден для user {user_id}")
         safe_send_message(call.message, "❌ Ошибка контекста", delete_previous=True)
+        call.answer()
         return
     
-    # Устанавливаем пол
-    logger.info(f"✅ Устанавливаем пол: male")
-    context.gender = "male"
-    context.awaiting_context = None
+    # Обработка выбора пола
+    if data == "set_gender_male":
+        logger.info(f"👨 Устанавливаем пол: мужской")
+        context.gender = "male"
+        context.awaiting_context = None
+        
+        # Получаем следующий вопрос
+        question, keyboard = context.ask_for_context()
+        logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
+        
+        if question:
+            safe_send_message(
+                call.message,
+                f"📝 <b>Давайте познакомимся</b>\n\n{question}",
+                reply_markup=keyboard,
+                parse_mode='HTML',
+                delete_previous=True
+            )
+        else:
+            show_context_complete(call.message, context)
+        
+        call.answer()
+        return
     
-    # Получаем следующий вопрос
-    logger.info(f"❓ Получаем следующий вопрос после выбора пола")
-    question, keyboard = context.ask_for_context()
-    logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
+    elif data == "set_gender_female":
+        logger.info(f"👩 Устанавливаем пол: женский")
+        context.gender = "female"
+        context.awaiting_context = None
+        
+        # Получаем следующий вопрос
+        question, keyboard = context.ask_for_context()
+        logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
+        
+        if question:
+            safe_send_message(
+                call.message,
+                f"📝 <b>Давайте познакомимся</b>\n\n{question}",
+                reply_markup=keyboard,
+                parse_mode='HTML',
+                delete_previous=True
+            )
+        else:
+            show_context_complete(call.message, context)
+        
+        call.answer()
+        return
     
-    if question:
-        logger.info(f"📤 Отправляем вопрос о возрасте...")
+    elif data == "set_gender_other":
+        logger.info(f"🧑 Устанавливаем пол: другое")
+        context.gender = "other"
+        context.awaiting_context = None
+        
+        # Получаем следующий вопрос
+        question, keyboard = context.ask_for_context()
+        logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
+        
+        if question:
+            safe_send_message(
+                call.message,
+                f"📝 <b>Давайте познакомимся</b>\n\n{question}",
+                reply_markup=keyboard,
+                parse_mode='HTML',
+                delete_previous=True
+            )
+        else:
+            show_context_complete(call.message, context)
+        
+        call.answer()
+        return
+    
+    # Обработка пропуска контекста
+    elif data == "skip_context":
+        logger.info(f"⏭️ Пропускаем сбор контекста")
+        context.awaiting_context = None
+        
         safe_send_message(
             call.message,
-            f"📝 <b>Давайте познакомимся</b>\n\n{question}",
-            reply_markup=keyboard,
+            f"⏭ Хорошо, будем общаться без привязки к месту и времени.\n\n"
+            "Но помните: с контекстом советы точнее 😉\n"
+            "Можете в любой момент рассказать о себе — просто напишите /context",
             parse_mode='HTML',
             delete_previous=True
         )
-        logger.info(f"✅ Вопрос о возрасте отправлен")
-    else:
-        logger.info(f"🎉 Вопросов больше нет, показываем завершение")
-        # Если вопросы закончились, показываем завершение
-        show_context_complete(call.message, context)
+        
+        # Показываем главное меню
+        from .modes import show_main_menu
+        show_main_menu(call.message, context)
+        
+        call.answer()
+        return
     
-    call.answer()
+    # Неизвестный callback
+    else:
+        logger.warning(f"⚠️ Неизвестный callback в handle_context_callback: {data}")
+        call.answer()
+
+def set_gender_male(call: CallbackQuery):
+    """Устанавливает пол: мужской (для обратной совместимости)"""
+    handle_context_callback(call)
 
 def set_gender_female(call: CallbackQuery):
-    """Устанавливает пол: женский"""
-    user_id = call.from_user.id
-    logger.info(f"👩 set_gender_female вызван для user {user_id}")
-    
-    context = get_user_context(user_id)
-    
-    if not context:
-        logger.warning(f"❌ Контекст не найден для user {user_id}")
-        safe_send_message(call.message, "❌ Ошибка контекста", delete_previous=True)
-        return
-    
-    # Устанавливаем пол
-    logger.info(f"✅ Устанавливаем пол: female")
-    context.gender = "female"
-    context.awaiting_context = None
-    
-    # Получаем следующий вопрос
-    logger.info(f"❓ Получаем следующий вопрос после выбора пола")
-    question, keyboard = context.ask_for_context()
-    logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
-    
-    if question:
-        logger.info(f"📤 Отправляем вопрос о возрасте...")
-        safe_send_message(
-            call.message,
-            f"📝 <b>Давайте познакомимся</b>\n\n{question}",
-            reply_markup=keyboard,
-            parse_mode='HTML',
-            delete_previous=True
-        )
-        logger.info(f"✅ Вопрос о возрасте отправлен")
-    else:
-        logger.info(f"🎉 Вопросов больше нет, показываем завершение")
-        # Если вопросы закончились, показываем завершение
-        show_context_complete(call.message, context)
-    
-    call.answer()
+    """Устанавливает пол: женский (для обратной совместимости)"""
+    handle_context_callback(call)
 
 def skip_context(call: CallbackQuery):
-    """Пропускает сбор контекста"""
-    user_id = call.from_user.id
-    logger.info(f"⏭️ skip_context вызван для user {user_id}")
-    
-    context = get_user_context(user_id)
-    
-    if context:
-        context.awaiting_context = None
-    
-    safe_send_message(
-        call.message,
-        f"⏭ Хорошо, будем общаться без привязки к месту и времени.\n\n"
-        "Но помните: с контекстом советы точнее 😉\n"
-        "Можете в любой момент рассказать о себе — просто напишите /context",
-        parse_mode='HTML',
-        delete_previous=True
-    )
-    
-    # Показываем главное меню
-    from .modes import show_main_menu
-    show_main_menu(call.message, context)
-    
-    call.answer()
+    """Пропускает сбор контекста (для обратной совместимости)"""
+    handle_context_callback(call)
 
 # ============================================
 # ОБРАБОТКА ТЕКСТОВЫХ ОТВЕТОВ
@@ -717,6 +740,7 @@ def parse_life_context_from_text(text: str) -> dict:
 
 __all__ = [
     'start_context',
+    'handle_context_callback',  # ← ДОБАВЛЕНО!
     'set_gender_male',
     'set_gender_female',
     'skip_context',
