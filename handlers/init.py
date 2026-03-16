@@ -1,21 +1,40 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Пакет с обработчиками для MAX
+Импортирует все обработчики команд и callback'ов
 """
-from .start import *
-from .modes import *
-from .goals import *
-from .reality import *
-from .questions import *
-from .profile import *
-from .routes import *
-from .help import *
-from .admin import *
-from .context import *
-from .stages import *
 
-# Для удобства можно добавить список всех модулей
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Импортируем все обработчики
+from . import start
+from . import modes
+from . import stages
+from . import profile
+from . import goals
+from . import context
+from . import questions
+from . import admin
+from . import help
+from . import reality
+from . import routes
+
+logger.info("✅ Все обработчики загружены")
+
+# Список всех доступных модулей для удобства
 __all__ = [
-    'start', 'modes', 'goals', 'reality', 
-    'questions', 'profile', 'routes', 'help', 
-    'admin', 'context', 'stages'
+    'start',
+    'modes', 
+    'stages',
+    'profile',
+    'goals',
+    'context',
+    'questions',
+    'admin',
+    'help',
+    'reality',
+    'routes'
 ]
