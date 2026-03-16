@@ -6,6 +6,7 @@
 """
 
 import os
+import sys
 import json
 import logging
 import tempfile
@@ -13,11 +14,44 @@ import random
 import re
 import time
 import threading
+import fcntl
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, List, Any, Tuple, Union
 from statistics import mean
 from datetime import datetime, timedelta
 from collections import defaultdict
+
+# ========== ЗАЩИТА ОТ ДВОЙНОГО ЗАПУСКА ==========
+# Создаём файл-блокировку с использованием fcntl
+PID_FILE = '/tmp/max-bot.pid'
+
+def check_single_instance():
+    """Проверяет, не запущен ли уже экземпляр бота"""
+    try:
+        # Пытаемся открыть файл и захватить блокировку
+        fp = open(PID_FILE, 'w')
+        fcntl.flock(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        
+        # Записываем текущий PID
+        fp.write(str(os.getpid()))
+        fp.flush()
+        
+        # Сохраняем файловый дескриптор, чтобы блокировка не снялась
+        check_single_instance.fp = fp
+        return True
+    except (IOError, OSError):
+        # Не удалось захватить блокировку - бот уже запущен
+        try:
+            with open(PID_FILE, 'r') as f:
+                old_pid = f.read().strip()
+            print(f"❌ Бот уже запущен с PID {old_pid}. Завершаем работу.")
+        except:
+            print("❌ Бот уже запущен. Завершаем работу.")
+        return False
+
+# Выполняем проверку при старте
+if not check_single_instance():
+    sys.exit(1)
 
 # Импорты из maxibot
 from maxibot import MaxiBot, types
