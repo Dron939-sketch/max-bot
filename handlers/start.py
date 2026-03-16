@@ -79,22 +79,22 @@ def cmd_start(message: types.Message):
         profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
         
         text = f"""
-🧠 {bold('ФРЕДИ: ВИРТУАЛЬНЫЙ ПСИХОЛОГ')}
+🧠 <b>ФРЕДИ: ВИРТУАЛЬНЫЙ ПСИХОЛОГ</b>
 
 👋 О, {user_name}, я вас помню!
 (У меня, в отличие от людей, с памятью всё отлично — спасибо базе данных)
 
-📊 {bold('ВАШ ПРОФИЛЬ:')} {profile_code}
+📊 <b>ВАШ ПРОФИЛЬ:</b> {profile_code}
 (Лежит у меня в архивах, пылится...)
 
-❓ {bold('ЧТО ДЕЛАЕМ?')}
+❓ <b>ЧТО ДЕЛАЕМ?</b>
 
 Вы можете:
 🔄 Пройти тест заново — вдруг вы изменились?
 📋 Посмотреть свой профиль
 🎯 Выбрать цель
 
-⬇️ {bold('ВЫБИРАЙТЕ:')}
+⬇️ <b>ВЫБИРАЙТЕ:</b>
 """
         
         keyboard = get_restart_keyboard()
@@ -107,7 +107,7 @@ def cmd_start(message: types.Message):
         welcome_text = f"""
 {user_name}, привет! Ну, здравствуйте, дорогой человек! 👋
 
-🧠 {bold('Я — Фреди, виртуальный психолог.')}
+🧠 <b>Я — Фреди, виртуальный психолог.</b>
 Оцифрованная версия Андрея Мейстера, если хотите — его цифровой слепок.
 
 🎭 Короче, я — это он, только батарейка дольше держит и пожрать не прошу.
@@ -117,7 +117,7 @@ def cmd_start(message: types.Message):
 🧐 Чтобы я понимал, с кем имею дело и чем могу быть полезен —
 давайте-ка пройдём небольшой тест.
 
-📊 {bold('Всего 5 этапов:')}
+📊 <b>Всего 5 этапов:</b>
 
 1️⃣ Конфигурация восприятия — как вы фильтруете реальность
 2️⃣ Конфигурация мышления — как ваш мозг перерабатывает информацию
@@ -125,7 +125,7 @@ def cmd_start(message: types.Message):
 4️⃣ Точка роста — куда двигаться, чтобы не топтаться на месте
 5️⃣ Глубинные паттерны — что сформировало вас как личность
 
-⏱ {bold('15 минут')} — и я буду знать о вас больше, чем вы думаете.
+⏱ <b>15 минут</b> — и я буду знать о вас больше, чем вы думаете.
 
 🚀 Ну что, начнём наше знакомство?
 """
@@ -166,7 +166,7 @@ def callback_start_context(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'why_details')
 def callback_why_details(call: types.CallbackQuery):
     """Показать детальную информацию о боте"""
-    show_why_details(call.message)
+    show_why_details(call)  # 👈 ПЕРЕДАЁМ call, НЕ call.message!
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'restart_test')
@@ -187,7 +187,7 @@ def callback_restart_test(call: types.CallbackQuery):
     
     # Показываем приветствие
     text = f"""
-🔄 {bold('ТЕСТ ПЕРЕЗАПУЩЕН')}
+🔄 <b>ТЕСТ ПЕРЕЗАПУЩЕН</b>
 
 Хорошо, начнём с чистого листа.
 Давайте познакомимся заново.
@@ -237,11 +237,11 @@ def callback_back_to_start(call: types.CallbackQuery):
 # ОСНОВНЫЕ ФУНКЦИИ
 # ============================================
 
-def show_why_details(message: types.Message):
+def show_why_details(call: types.CallbackQuery):
     """Показывает детальную информацию о боте"""
     
     text = f"""
-🎭 {bold('Ну, вопрос хороший. Давайте по существу.')}
+🎭 <b>Ну, вопрос хороший. Давайте по существу.</b>
 
 Видите ли, дорогой человек, я — экспериментальная модель.
 Андрей Мейстер однажды подумал: "А что, если я создам свою цифровую копию?
@@ -249,14 +249,14 @@ def show_why_details(message: types.Message):
 
 Так я и появился. 🧠
 
-🧐 {bold('Что я умею:')}
+🧐 <b>Что я умею:</b>
 
 • Вижу паттерны там, где вы видите просто день сурка
 • Нахожу систему в ваших "случайных" решениях
 • Понимаю, почему вы выбираете одних и тех же "не тех" людей
 • Я реально беспристрастен — у меня нет плохого настроения
 
-🎯 {bold('Конкретно по тесту:')}
+🎯 <b>Конкретно по тесту:</b>
 
 1️⃣ Восприятие — поймём, какую линзу вы носите
 2️⃣ Мышление — узнаем, как вы пережёвываете реальность
@@ -264,13 +264,18 @@ def show_why_details(message: types.Message):
 4️⃣ Точка роста — я скажу, куда вам двигаться
 5️⃣ Глубинные паттерны — заглянем в детство и подсознание
 
-⏱ {bold('15 минут')} — и я составлю ваш профиль.
+⏱ <b>15 минут</b> — и я составлю ваш профиль.
 
 👌 Погнали?"""
     
-    keyboard = get_why_details_keyboard()
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.row(
+        types.InlineKeyboardButton("🚀 ПОГНАЛИ!", callback_data="start_context"),
+        types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_start")
+    )
     
-    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
+    # 👈 ВАЖНО: используем call.message, так как safe_send_message ждет message
+    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
 
 def show_main_menu(message: types.Message, context: UserContext):
@@ -295,7 +300,7 @@ def show_main_menu(message: types.Message, context: UserContext):
     else:
         welcome_text += f"🏡 Личное время. Есть что обсудить?\n\n"
     
-    welcome_text += f"👇 {bold('Выберите действие:')}"
+    welcome_text += f"👇 <b>Выберите действие:</b>"
     
     keyboard = get_main_menu_keyboard()
     
