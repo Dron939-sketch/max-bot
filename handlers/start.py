@@ -14,17 +14,38 @@ from keyboards import (
     get_why_details_keyboard,
     get_start_context_keyboard
 )
-from utils import is_test_completed
 from formatters import bold
-from database import get_user_context, save_user_context, get_user_profile
 from message_utils import safe_send_message
 import time
 
+# ИСПРАВЛЕННЫЕ ИМПОРТЫ - используем state.py
+from state import (
+    user_data, user_names, user_contexts, 
+    get_user_context, get_user_context_dict,
+    clear_state, set_state, get_state
+)
+
 logger = logging.getLogger(__name__)
 
-# Хранилища (можно перенести в БД)
-user_names = {}
-user_contexts = {}
+# ============================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ============================================
+
+def is_test_completed(user_data_dict: dict) -> bool:
+    """Проверяет, завершен ли тест"""
+    if user_data_dict.get("profile_data"):
+        return True
+    if user_data_dict.get("ai_generated_profile"):
+        return True
+    required_minimal = ["perception_type", "thinking_level", "behavioral_levels"]
+    if all(field in user_data_dict for field in required_minimal):
+        return True
+    return False
+
+def get_user_profile(user_id: int) -> dict:
+    """Получает профиль пользователя"""
+    data = user_data.get(user_id, {})
+    return data.get("profile_data", {})
 
 # ============================================
 # ВРЕМЕННАЯ СТАТИСТИКА (потом в БД)
@@ -54,27 +75,23 @@ def cmd_start(message: types.Message):
     
     # Сохраняем имя
     user_names[user_id] = user_name
+    clear_state(user_id)
     
     # Получаем или создаем контекст
     if user_id not in user_contexts:
-        # Пробуем загрузить из БД
-        db_context = get_user_context(user_id)
-        if db_context:
-            user_contexts[user_id] = db_context
-        else:
-            user_contexts[user_id] = UserContext(user_id)
+        user_contexts[user_id] = UserContext(user_id)
     
     context = user_contexts[user_id]
     context.name = user_name
-    save_user_context(user_id, context)
     
     # Регистрируем старт
     stats.register_start(user_id)
     
     # Проверяем, есть ли уже профиль
     profile_data = get_user_profile(user_id)
+    user_data_dict = user_data.get(user_id, {})
     
-    if profile_data and is_test_completed(profile_data):
+    if profile_data or is_test_completed(user_data_dict):
         # У пользователя уже есть профиль
         profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
         
@@ -134,7 +151,7 @@ def cmd_start(message: types.Message):
         safe_send_message(message, welcome_text, reply_markup=keyboard)
         return
     
-    # Если контекст уже заполнен, показываем главное меню
+    # Если контекст уже заполнен, показываем меню
     from .modes import show_main_menu_after_mode
     show_main_menu_after_mode(message, context)
 
@@ -166,7 +183,7 @@ def callback_start_context(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'why_details')
 def callback_why_details(call: types.CallbackQuery):
     """Показать детальную информацию о боте"""
-    show_why_details(call)  # 👈 ПЕРЕДАЁМ call, НЕ call.message!
+    show_why_details(call)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'restart_test')
@@ -174,16 +191,16 @@ def callback_restart_test(call: types.CallbackQuery):
     """Перезапустить тест"""
     user_id = call.from_user.id
     
-    # Очищаем профиль в БД
-    from database import clear_user_profile
-    clear_user_profile(user_id)
+    # Очищаем профиль в user_data
+    if user_id in user_data:
+        # Сохраняем только базовую информацию, удаляем данные теста
+        user_data[user_id] = {}
     
     # Обновляем контекст
     if user_id in user_contexts:
         context = user_contexts[user_id]
         context.profile_data = {}
         context.confinement_model = {}
-        save_user_context(user_id, context)
     
     # Показываем приветствие
     text = f"""
@@ -274,7 +291,6 @@ def show_why_details(call: types.CallbackQuery):
         types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_start")
     )
     
-    # 👈 ВАЖНО: используем call.message, так как safe_send_message ждет message
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
 
