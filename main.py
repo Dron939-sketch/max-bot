@@ -3675,9 +3675,36 @@ def generate_smart_questions(scores):
     return questions[:5]
 
 # ============================================
-# ОБРАБОТЧИКИ СООБЩЕНИЙ
+# ОБРАБОТЧИКИ СООБЩЕНИЙ (ПОРЯДОК ВАЖЕН!)
 # ============================================
 
+# 1. Сначала обработчики с состояниями (самые специфичные)
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.collecting_life_context)
+def handle_life_context_wrapper(message: types.Message):
+    """Обработчик сообщений в состоянии сбора жизненного контекста"""
+    from handlers.reality import process_life_context
+    process_life_context(message)
+
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.collecting_goal_context)
+def handle_goal_context_wrapper(message: types.Message):
+    """Обработчик сообщений в состоянии сбора целевого контекста"""
+    from handlers.reality import process_goal_context
+    process_goal_context(message)
+
+# 2. ПОТОМ обработчик контекста (тоже проверяет состояние)
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_context)
+def handle_context_message_wrapper(message: types.Message):
+    """Обработчик сообщений в состоянии сбора контекста"""
+    from handlers.context import handle_context_message
+    handled = handle_context_message(message)
+    if not handled:
+        safe_send_message(
+            message,
+            "Пожалуйста, ответьте на вопрос или используйте кнопки",
+            delete_previous=True
+        )
+
+# 3. В САМОМ КОНЦЕ - обработчик по умолчанию (самый общий)
 @bot.message_handler(func=lambda message: True)
 def handle_unknown_message(message: types.Message):
     """Обработчик неизвестных сообщений"""
@@ -3690,30 +3717,6 @@ def handle_unknown_message(message: types.Message):
         return
     
     # Для всех остальных случаев
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton("🧠 К ПОРТРЕТУ", callback_data="show_results"))
-    keyboard.row(InlineKeyboardButton("🎯 ЧЕМ ПОМОЧЬ", callback_data="show_help"))
-    keyboard.row(InlineKeyboardButton("❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions"))
-    
-    safe_send_message(
-        message,
-        "Используйте кнопки для навигации:",
-        reply_markup=keyboard
-    )
-
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.collecting_life_context)
-def handle_life_context_wrapper(message: types.Message):
-    """Обработчик сообщений в состоянии сбора жизненного контекста"""
-    process_life_context(message)
-
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.collecting_goal_context)
-def handle_goal_context_wrapper(message: types.Message):
-    """Обработчик сообщений в состоянии сбора целевого контекста"""
-    process_goal_context(message)
-
-@bot.message_handler(func=lambda message: True)
-def handle_unknown_message(message: types.Message):
-    """Обработчик неизвестных сообщений"""
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("🧠 К ПОРТРЕТУ", callback_data="show_results"))
     keyboard.row(InlineKeyboardButton("🎯 ЧЕМ ПОМОЧЬ", callback_data="show_help"))
