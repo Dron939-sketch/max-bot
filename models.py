@@ -136,31 +136,33 @@ class UserContext:
         return ""
     
     def ask_for_context(self) -> Tuple[Optional[str], Optional[InlineKeyboardMarkup]]:
-        """Возвращает первый вопрос для сбора контекста (ОБЯЗАТЕЛЬНЫЙ, БЕЗ ПРОПУСКА)"""
-        logger.info(f"🔍 ask_for_context вызван: city={self.city}, gender={self.gender}, age={self.age}")
+    """Возвращает первый вопрос для сбора контекста (ОБЯЗАТЕЛЬНЫЙ, БЕЗ ПРОПУСКА)"""
+    logger.info(f"🔍 ask_for_context вызван: city={self.city}, gender={self.gender}, age={self.age}")
+    
+    if not self.city:
+        self.awaiting_context = "city"
+        logger.info(f"🏙️ Возвращаем вопрос о городе")
+        return self.bold("🌆 В каком городе вы находитесь? (Это нужно для погоды)"), None
+    
+    if not self.gender:
+        self.awaiting_context = "gender"
+        logger.info(f"👤 Возвращаем вопрос о поле с клавиатурой")
         
-        if not self.city:
-            self.awaiting_context = "city"
-            logger.info(f"🏙️ Возвращаем вопрос о городе")
-            return self.bold("🌆 В каком городе вы находитесь? (Это нужно для погоды)"), None
+        # 👇 ИСПРАВЛЕНО: правильный синтаксис для MAX
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton(text="👨 Мужской", callback_data="set_gender_male"))
+        keyboard.add(InlineKeyboardButton(text="👩 Женский", callback_data="set_gender_female"))
         
-        if not self.gender:
-            self.awaiting_context = "gender"
-            logger.info(f"👤 Возвращаем вопрос о поле с клавиатурой")
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="👨 Мужской", callback_data="set_gender_male")],
-                [InlineKeyboardButton(text="👩 Женский", callback_data="set_gender_female")]
-            ])
-            return self.bold("👤 Укажите ваш пол:"), keyboard
-        
-        if not self.age:
-            self.awaiting_context = "age"
-            logger.info(f"📅 Возвращаем вопрос о возрасте")
-            return self.bold("📅 Сколько вам лет? (напишите число)"), None
-        
-        self.awaiting_context = None
-        logger.info(f"✅ Все вопросы собраны, возвращаем None")
-        return None, None
+        return self.bold("👤 Укажите ваш пол:"), keyboard
+    
+    if not self.age:
+        self.awaiting_context = "age"
+        logger.info(f"📅 Возвращаем вопрос о возрасте")
+        return self.bold("📅 Сколько вам лет? (напишите число)"), None
+    
+    self.awaiting_context = None
+    logger.info(f"✅ Все вопросы собраны, возвращаем None")
+    return None, None
     
     def process_context_answer(self, text: str) -> Tuple[bool, Optional[str], Optional[InlineKeyboardMarkup]]:
         """Обрабатывает ответ на контекстный вопрос (СИНХРОННАЯ)"""
