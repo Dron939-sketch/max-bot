@@ -26,7 +26,7 @@ from models import UserContext
 from state import (
     user_data, user_names, user_contexts, user_states, user_state_data,
     get_user_context, get_user_context_dict,
-    get_state, set_state, get_state_data, update_state_data, clear_state
+    get_state, set_state, get_state_data, update_state_data, clear_state, TestStates
 )
 
 logger = logging.getLogger(__name__)
@@ -75,8 +75,10 @@ def start_context(message: Message):
     Начинает сбор контекста (обязательный)
     """
     user_id = message.chat.id
+    logger.info(f"🚀 start_context вызван для user {user_id}")
     
     if user_id not in user_contexts:
+        logger.info(f"📝 Создаем новый контекст для user {user_id}")
         user_contexts[user_id] = UserContext(user_id)
     
     context = user_contexts[user_id]
@@ -88,9 +90,12 @@ def start_context(message: Message):
     context.awaiting_context = None
     
     # Получаем первый вопрос
+    logger.info(f"❓ Получаем первый вопрос от ask_for_context()")
     question, keyboard = context.ask_for_context()
+    logger.info(f"📋 Первый вопрос: '{question}', клавиатура: {keyboard is not None}")
     
     if question:
+        logger.info(f"📤 Отправляем вопрос о городе...")
         safe_send_message(
             message,
             f"📝 <b>Давайте познакомимся</b>\n\n{question}",
@@ -98,9 +103,12 @@ def start_context(message: Message):
             parse_mode='HTML',
             delete_previous=True
         )
+        logger.info(f"✅ Вопрос о городе отправлен, устанавливаем состояние awaiting_context")
         # Устанавливаем состояние
-        user_states[user_id] = "awaiting_context"
+        set_state(user_id, TestStates.awaiting_context)
+        logger.info(f"📊 Состояние пользователя {user_id} установлено на {TestStates.awaiting_context}")
     else:
+        logger.info(f"⚠️ Вопросов нет, показываем завершение")
         # Если вопросы не нужны (уже всё есть), показываем завершение
         show_context_complete(message, context)
 
@@ -111,20 +119,27 @@ def start_context(message: Message):
 def set_gender_male(call: CallbackQuery):
     """Устанавливает пол: мужской"""
     user_id = call.from_user.id
+    logger.info(f"👨 set_gender_male вызван для user {user_id}")
+    
     context = get_user_context(user_id)
     
     if not context:
+        logger.warning(f"❌ Контекст не найден для user {user_id}")
         safe_send_message(call.message, "❌ Ошибка контекста", delete_previous=True)
         return
     
     # Устанавливаем пол
+    logger.info(f"✅ Устанавливаем пол: male")
     context.gender = "male"
     context.awaiting_context = None
     
     # Получаем следующий вопрос
+    logger.info(f"❓ Получаем следующий вопрос после выбора пола")
     question, keyboard = context.ask_for_context()
+    logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
     
     if question:
+        logger.info(f"📤 Отправляем вопрос о возрасте...")
         safe_send_message(
             call.message,
             f"📝 <b>Давайте познакомимся</b>\n\n{question}",
@@ -132,7 +147,9 @@ def set_gender_male(call: CallbackQuery):
             parse_mode='HTML',
             delete_previous=True
         )
+        logger.info(f"✅ Вопрос о возрасте отправлен")
     else:
+        logger.info(f"🎉 Вопросов больше нет, показываем завершение")
         # Если вопросы закончились, показываем завершение
         show_context_complete(call.message, context)
     
@@ -141,20 +158,27 @@ def set_gender_male(call: CallbackQuery):
 def set_gender_female(call: CallbackQuery):
     """Устанавливает пол: женский"""
     user_id = call.from_user.id
+    logger.info(f"👩 set_gender_female вызван для user {user_id}")
+    
     context = get_user_context(user_id)
     
     if not context:
+        logger.warning(f"❌ Контекст не найден для user {user_id}")
         safe_send_message(call.message, "❌ Ошибка контекста", delete_previous=True)
         return
     
     # Устанавливаем пол
+    logger.info(f"✅ Устанавливаем пол: female")
     context.gender = "female"
     context.awaiting_context = None
     
     # Получаем следующий вопрос
+    logger.info(f"❓ Получаем следующий вопрос после выбора пола")
     question, keyboard = context.ask_for_context()
+    logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
     
     if question:
+        logger.info(f"📤 Отправляем вопрос о возрасте...")
         safe_send_message(
             call.message,
             f"📝 <b>Давайте познакомимся</b>\n\n{question}",
@@ -162,7 +186,9 @@ def set_gender_female(call: CallbackQuery):
             parse_mode='HTML',
             delete_previous=True
         )
+        logger.info(f"✅ Вопрос о возрасте отправлен")
     else:
+        logger.info(f"🎉 Вопросов больше нет, показываем завершение")
         # Если вопросы закончились, показываем завершение
         show_context_complete(call.message, context)
     
@@ -171,6 +197,8 @@ def set_gender_female(call: CallbackQuery):
 def skip_context(call: CallbackQuery):
     """Пропускает сбор контекста"""
     user_id = call.from_user.id
+    logger.info(f"⏭️ skip_context вызван для user {user_id}")
+    
     context = get_user_context(user_id)
     
     if context:
@@ -201,26 +229,42 @@ def handle_context_message(message: Message) -> bool:
     Возвращает True, если сообщение было обработано как контекстное
     """
     user_id = message.from_user.id
+    logger.info(f"📥 handle_context_message вызван для user {user_id}, текст: {message.text}")
+    
     context = get_user_context(user_id)
     
-    if not context or not context.awaiting_context:
+    if not context:
+        logger.warning(f"❌ Контекст не найден для user {user_id}")
+        return False
+    
+    logger.info(f"📊 Текущее состояние: awaiting_context = {context.awaiting_context}")
+    
+    if not context.awaiting_context:
+        logger.info(f"⏭️ Не ожидается контекст, выходим")
         return False
     
     text = message.text.strip()
+    logger.info(f"📝 Обрабатываем текст: '{text}' для поля {context.awaiting_context}")
     
     if context.awaiting_context == "city":
         # Обработка города
+        logger.info(f"🏙️ Сохраняем город: {text}")
         context.city = text
         context.awaiting_context = None
         
         # 👇 СИНХРОННЫЕ ВЫЗОВЫ
+        logger.info(f"🌤️ Обновляем погоду...")
         context.update_weather()
+        logger.info(f"🌍 Определяем часовой пояс...")
         context.detect_timezone_from_city()
         
         # Получаем следующий вопрос
+        logger.info(f"❓ Получаем следующий вопрос от ask_for_context()...")
         question, keyboard = context.ask_for_context()
+        logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
         
         if question:
+            logger.info(f"📤 Отправляем вопрос о поле...")
             safe_send_message(
                 message,
                 f"📝 <b>Давайте познакомимся</b>\n\n{question}",
@@ -228,23 +272,30 @@ def handle_context_message(message: Message) -> bool:
                 parse_mode='HTML',
                 delete_previous=True
             )
+            logger.info(f"✅ Вопрос о поле отправлен")
         else:
+            logger.info(f"🎉 Вопросов больше нет, показываем завершение")
             show_context_complete(message, context)
         
         return True
     
     elif context.awaiting_context == "age":
         # Обработка возраста
+        logger.info(f"📅 Обрабатываем возраст: {text}")
         try:
             age = int(text)
             if 1 <= age <= 120:
+                logger.info(f"✅ Возраст корректен: {age}")
                 context.age = age
                 context.awaiting_context = None
                 
                 # Получаем следующий вопрос
+                logger.info(f"❓ Получаем следующий вопрос после возраста...")
                 question, keyboard = context.ask_for_context()
+                logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
                 
                 if question:
+                    logger.info(f"📤 Отправляем следующий вопрос...")
                     safe_send_message(
                         message,
                         f"📝 <b>Давайте познакомимся</b>\n\n{question}",
@@ -252,9 +303,12 @@ def handle_context_message(message: Message) -> bool:
                         parse_mode='HTML',
                         delete_previous=True
                     )
+                    logger.info(f"✅ Вопрос отправлен")
                 else:
+                    logger.info(f"🎉 Вопросов больше нет, показываем завершение")
                     show_context_complete(message, context)
             else:
+                logger.warning(f"⚠️ Возраст вне диапазона: {age}")
                 safe_send_message(
                     message,
                     "<b>❌ Возраст должен быть от 1 до 120 лет.</b>\n\n📅 Сколько вам лет? (напишите число)",
@@ -262,6 +316,7 @@ def handle_context_message(message: Message) -> bool:
                     delete_previous=True
                 )
         except ValueError:
+            logger.warning(f"⚠️ Некорректное число: {text}")
             safe_send_message(
                 message,
                 "<b>❌ Пожалуйста, введите число.</b>\n\n📅 Сколько вам лет? (напишите число)",
@@ -273,20 +328,27 @@ def handle_context_message(message: Message) -> bool:
     
     elif context.awaiting_context == "gender":
         # Обработка пола из текста
+        logger.info(f"👤 Обрабатываем пол из текста: {text}")
         gender_lower = text.lower().strip()
         if gender_lower in ['м', 'муж', 'мужчина', 'male', 'парень']:
             context.gender = "male"
+            logger.info(f"✅ Распознан мужской пол")
         elif gender_lower in ['ж', 'жен', 'женщина', 'female', 'девушка']:
             context.gender = "female"
+            logger.info(f"✅ Распознан женский пол")
         else:
             context.gender = "other"
+            logger.info(f"⚠️ Пол не распознан, установлен other")
         
         context.awaiting_context = None
         
         # Получаем следующий вопрос
+        logger.info(f"❓ Получаем следующий вопрос после пола...")
         question, keyboard = context.ask_for_context()
+        logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
         
         if question:
+            logger.info(f"📤 Отправляем следующий вопрос...")
             safe_send_message(
                 message,
                 f"📝 <b>Давайте познакомимся</b>\n\n{question}",
@@ -294,11 +356,14 @@ def handle_context_message(message: Message) -> bool:
                 parse_mode='HTML',
                 delete_previous=True
             )
+            logger.info(f"✅ Вопрос отправлен")
         else:
+            logger.info(f"🎉 Вопросов больше нет, показываем завершение")
             show_context_complete(message, context)
         
         return True
     
+    logger.warning(f"❓ Неизвестное состояние awaiting_context: {context.awaiting_context}")
     return False
 
 # ============================================
@@ -309,7 +374,11 @@ def show_context_complete(message: Message, context: UserContext):
     """
     Показывает итоговый экран после сбора контекста
     """
+    user_id = message.chat.id
+    logger.info(f"🎉 show_context_complete вызван для user {user_id}")
+    
     # 👇 СИНХРОННЫЙ ВЫЗОВ
+    logger.info(f"🌤️ Обновляем погоду для итогового экрана...")
     context.update_weather()
     
     # Формируем сводку
@@ -337,6 +406,7 @@ def show_context_complete(message: Message, context: UserContext):
     keyboard.row(InlineKeyboardButton("📖 ЧТО ДАЕТ ТЕСТ", callback_data="show_benefits"))
     keyboard.row(InlineKeyboardButton("❓ ЗАДАТЬ ВОПРОС", callback_data="ask_pretest"))
     
+    logger.info(f"📤 Отправляем итоговый экран...")
     safe_send_message(
         message,
         summary,
@@ -344,10 +414,12 @@ def show_context_complete(message: Message, context: UserContext):
         parse_mode='HTML',
         delete_previous=True
     )
+    logger.info(f"✅ Итоговый экран отправлен")
     
     # Очищаем состояние
-    if message.chat.id in user_states:
-        del user_states[message.chat.id]
+    if user_id in user_states:
+        logger.info(f"🧹 Очищаем состояние пользователя {user_id}")
+        del user_states[user_id]
 
 # ============================================
 # ПРИНУДИТЕЛЬНЫЙ СБОР КОНТЕКСТА (КОМАНДА)
@@ -358,6 +430,7 @@ def cmd_context(message: Message):
     Команда /context - принудительный сбор контекста
     """
     user_id = message.chat.id
+    logger.info(f"🔄 cmd_context вызван для user {user_id}")
     
     if user_id not in user_contexts:
         user_contexts[user_id] = UserContext(user_id)
