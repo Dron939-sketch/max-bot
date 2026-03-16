@@ -75,6 +75,13 @@ def start_context(message: Message):
     Начинает сбор контекста (обязательный)
     """
     user_id = message.chat.id
+    
+    # Защита от повторных вызовов
+    if hasattr(message, '_context_started') and message._context_started:
+        logger.info(f"⚠️ start_context уже вызывался для user {user_id}, пропускаем")
+        return
+    message._context_started = True
+    
     logger.info(f"🚀 start_context вызван для user {user_id}")
     
     if user_id not in user_contexts:
@@ -231,16 +238,20 @@ def handle_context_message(message: Message) -> bool:
     user_id = message.from_user.id
     logger.info(f"📥 handle_context_message вызван для user {user_id}, текст: {message.text}")
     
+    # Получаем текущее состояние пользователя
+    current_state = get_state(user_id)
+    logger.info(f"📊 Текущее состояние из get_state: {current_state}")
+    
     context = get_user_context(user_id)
     
     if not context:
         logger.warning(f"❌ Контекст не найден для user {user_id}")
         return False
     
-    logger.info(f"📊 Текущее состояние: awaiting_context = {context.awaiting_context}")
+    logger.info(f"📊 context.awaiting_context = {context.awaiting_context}")
     
     if not context.awaiting_context:
-        logger.info(f"⏭️ Не ожидается контекст, выходим")
+        logger.info(f"⏭️ Не ожидается контекст (context.awaiting_context is None), выходим")
         return False
     
     text = message.text.strip()
