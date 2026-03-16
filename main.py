@@ -3723,7 +3723,7 @@ def main():
     print("="*80 + "\n")
     
     logger.info("🚀 Бот для MAX запущен!")
-    bot.polling(none_stop=True)
+    bot.polling()
 
 if __name__ == "__main__":
     os.makedirs("stats", exist_ok=True)
