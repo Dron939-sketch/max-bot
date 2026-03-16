@@ -1,24 +1,40 @@
 """
 Конфигурация и константы бота для MAX
+Ключи API загружаются из переменных окружения (на Render)
 """
 import os
 from dotenv import load_dotenv
 
+# Загружаем .env только для локальной разработки
 load_dotenv()
 
-# Токены API
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")  # для оригинального бота
-MAX_TOKEN = os.environ.get("MAX_TOKEN", "")            # <--- ДОБАВЛЕНО для MAX
+# ============================================
+# ТОКЕНЫ API (ТОЛЬКО ДЛЯ MAX)
+# ============================================
+
+# Токен бота в MAX (получаем у @MasterBot)
+MAX_TOKEN = os.environ.get("MAX_TOKEN", "")
+
+# Внешние API (работают одинаково для любой платформы)
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "")
 YANDEX_API_KEY = os.environ.get("YANDEX_API_KEY", "")
 OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY", "")
 
-# ID администраторов
+# ID администраторов (можно оставить те же)
 ADMIN_IDS = [532205848]
 
 # ============================================
-# РЕЖИМЫ ОБЩЕНИЯ
+# URL ВНЕШНИХ API
+# ============================================
+
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+DEEPGRAM_API_URL = "https://api.deepgram.com/v1/listen"
+YANDEX_TTS_API_URL = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
+
+
+# ============================================
+# РЕЖИМЫ ОБЩЕНИЯ (ПОЛНОСТЬЮ ТЕ ЖЕ)
 # ============================================
 
 COMMUNICATION_MODES = {
@@ -26,7 +42,7 @@ COMMUNICATION_MODES = {
         "name": "КОУЧ",
         "display_name": "🔮 КОУЧ",
         "emoji": "🔮",
-        "voice": "filipp",  # мужской
+        "voice": "filipp",
         "voice_emotion": "neutral",
         "responsibility": "Помогаю найти ответы внутри вас через открытые вопросы. Не даю готовых решений.",
         "system_prompt": """Ты — КОУЧ. Твоя задача: задавать открытые вопросы, помогать клиенту найти ответы внутри себя.
@@ -52,7 +68,7 @@ COMMUNICATION_MODES = {
         "name": "ПСИХОЛОГ",
         "display_name": "🧠 ПСИХОЛОГ",
         "emoji": "🧠",
-        "voice": "ermil",  # мужской, тёплый
+        "voice": "ermil",
         "voice_emotion": "good",
         "responsibility": "Анализирую глубинные паттерны, работаю с подсознанием, использую гипнотические техники.",
         "system_prompt": """Ты — ПСИХОЛОГ (интегративный подход: психоанализ + гештальт + эриксоновский гипноз).
@@ -80,7 +96,7 @@ COMMUNICATION_MODES = {
         "name": "ТРЕНЕР",
         "display_name": "⚡ ТРЕНЕР",
         "emoji": "⚡",
-        "voice": "filipp",  # мужской, жёсткий
+        "voice": "filipp",
         "voice_emotion": "strict",
         "responsibility": "Даю чёткие инструкции, структуру, план действий. Требую результат.",
         "system_prompt": """Ты — ТРЕНЕР. Твоя задача: давать чёткие инструкции, структуру, план действий. Требовать результат.
@@ -106,14 +122,75 @@ COMMUNICATION_MODES = {
     }
 }
 
-# Для обратной совместимости (со старыми вызовами)
+# Для обратной совместимости (если где-то используются старые названия)
 COMMUNICATION_MODES["hard"] = COMMUNICATION_MODES["trainer"]
 COMMUNICATION_MODES["medium"] = COMMUNICATION_MODES["coach"]
 COMMUNICATION_MODES["soft"] = COMMUNICATION_MODES["psychologist"]
 
 
 # ============================================
-# ТОЧКИ НАЗНАЧЕНИЯ (обновлённые под новые режимы)
+# НАСТРОЙКИ ГОЛОСОВ (для Yandex TTS)
+# ============================================
+
+VOICE_SETTINGS = {
+    "coach": {
+        "voice": "filipp",
+        "emotion": "neutral",
+        "speed": 1.0,
+        "description": "Мужской, спокойный, для коучинга"
+    },
+    "psychologist": {
+        "voice": "ermil",
+        "emotion": "good",
+        "speed": 0.9,
+        "description": "Мужской, тёплый, доверительный, для психотерапии"
+    },
+    "trainer": {
+        "voice": "filipp",
+        "emotion": "strict",
+        "speed": 1.1,
+        "description": "Мужской, жёсткий, для тренировок"
+    }
+}
+
+
+# ============================================
+# НАСТРОЙКИ НАПОМИНАНИЙ
+# ============================================
+
+REMINDER_SETTINGS = {
+    "coach": {
+        "motivation_delay": 5,  # минут
+        "checkin_delay": 24 * 60,  # 24 часа в минутах
+        "messages": [
+            "Как продвигается исследование себя?",
+            "Какие инсайты были сегодня?",
+            "Что нового узнали о себе?"
+        ]
+    },
+    "psychologist": {
+        "motivation_delay": 10,
+        "checkin_delay": 48 * 60,
+        "messages": [
+            "Какие сны снились?",
+            "Что чувствуете сейчас?",
+            "Заметили ли какие-то паттерны?"
+        ]
+    },
+    "trainer": {
+        "motivation_delay": 5,
+        "checkin_delay": 12 * 60,
+        "messages": [
+            "Отчёт по задачам!",
+            "Что сделано?",
+            "Следующий шаг?"
+        ]
+    }
+}
+
+
+# ============================================
+# ТОЧКИ НАЗНАЧЕНИЯ (ПОЛНОСТЬЮ ТЕ ЖЕ)
 # ============================================
 
 DESTINATIONS = {
@@ -233,69 +310,23 @@ DESTINATIONS = {
 
 
 # ============================================
-# НАСТРОЙКИ ГОЛОСОВ (для Yandex TTS)
+# ПРОВЕРКА НАЛИЧИЯ КЛЮЧЕЙ (опционально)
 # ============================================
 
-VOICE_SETTINGS = {
-    "coach": {
-        "voice": "filipp",  # мужской
-        "emotion": "neutral",
-        "speed": 1.0,
-        "description": "Мужской, спокойный, для коучинга"
-    },
-    "psychologist": {
-        "voice": "ermil",  # мужской
-        "emotion": "good",
-        "speed": 0.9,
-        "description": "Мужской, тёплый, доверительный, для психотерапии"
-    },
-    "trainer": {
-        "voice": "filipp",  # мужской
-        "emotion": "strict",
-        "speed": 1.1,
-        "description": "Мужской, жёсткий, для тренировок"
-    }
-}
+def check_config():
+    """Проверяет, что все необходимые ключи загружены"""
+    missing = []
+    
+    if not MAX_TOKEN:
+        missing.append("MAX_TOKEN")
+    if not DEEPSEEK_API_KEY:
+        missing.append("DEEPSEEK_API_KEY")
+    
+    if missing:
+        print(f"⚠️ ВНИМАНИЕ: Отсутствуют ключи: {', '.join(missing)}")
+        print("Убедитесь, что они заданы в переменных окружения Render")
+        return False
+    return True
 
-
-# ============================================
-# НАСТРОЙКИ НАПОМИНАНИЙ
-# ============================================
-
-REMINDER_SETTINGS = {
-    "coach": {
-        "motivation_delay": 5,  # минут
-        "checkin_delay": 24 * 60,  # 24 часа в минутах
-        "messages": [
-            "Как продвигается исследование себя?",
-            "Какие инсайты были сегодня?",
-            "Что нового узнали о себе?"
-        ]
-    },
-    "psychologist": {
-        "motivation_delay": 10,  # минут
-        "checkin_delay": 48 * 60,  # 48 часов
-        "messages": [
-            "Какие сны снились?",
-            "Что чувствуете сейчас?",
-            "Заметили ли какие-то паттерны?"
-        ]
-    },
-    "trainer": {
-        "motivation_delay": 5,  # минут
-        "checkin_delay": 12 * 60,  # 12 часов
-        "messages": [
-            "Отчёт по задачам!",
-            "Что сделано?",
-            "Следующий шаг?"
-        ]
-    }
-}
-
-# ============================================
-# API URL (ДОБАВЛЕНО)
-# ============================================
-
-DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
-DEEPGRAM_API_URL = "https://api.deepgram.com/v1/listen"
-YANDEX_TTS_API_URL = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
+# Автоматическая проверка при импорте
+check_config()
