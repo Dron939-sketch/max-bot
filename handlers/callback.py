@@ -40,7 +40,7 @@ from .modes import show_mode_selection, show_mode_selected
 from .profile import (
     show_profile, show_ai_profile, show_psychologist_thought,
     show_final_profile, profile_confirm, profile_doubt, profile_reject,
-    handle_goodbye, handle_discrepancy, clarify_next, handle_clarifying_answer
+    handle_goodbye
 )
 from .start import show_why_details, cmd_start
 
@@ -262,21 +262,6 @@ def callback_handler(call: CallbackQuery):
         return
     elif data == "goodbye":
         handle_goodbye(call)
-        return
-    
-    # ============================================
-    # ОБРАБОТЧИКИ РАСХОЖДЕНИЙ И УТОЧНЕНИЙ
-    # ============================================
-    
-    elif data.startswith("discrepancy_"):
-        disc = data.replace("discrepancy_", "")
-        handle_discrepancy(call, disc)
-        return
-    elif data == "clarify_next":
-        clarify_next(call)
-        return
-    elif data.startswith("clarify_answer_"):
-        handle_clarifying_answer(call)
         return
     
     # ============================================
