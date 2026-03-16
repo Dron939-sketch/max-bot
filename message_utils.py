@@ -4,8 +4,12 @@
 Утилиты для отправки сообщений в MAX
 """
 import logging
+import time
+import re
+from typing import Optional, Dict, List, Union
+
 from maxibot import types
-from maxibot import MaxiBot  # вместо MAXBotAPI
+from maxibot import MaxiBot
 
 # Импортируем бота (убедись, что bot_instance.py существует)
 from bot_instance import bot
@@ -14,10 +18,25 @@ from formatters import clean_text_for_safe_display
 
 logger = logging.getLogger(__name__)
 
+# Хранилище последних сообщений для каждого пользователя
+# Структура: {chat_id: [message_id1, message_id2, ...]}
+user_messages_history: Dict[int, List[int]] = {}
 
-def safe_send_message(message, text, reply_markup=None, parse_mode='HTML', delete_previous=False):
+# Максимальное количество сообщений для хранения истории на пользователя
+MAX_HISTORY_PER_USER = 10
+
+
+def safe_send_message(
+    message: Union[types.Message, int],
+    text: str,
+    reply_markup=None,
+    parse_mode: str = 'HTML',
+    delete_previous: bool = False,
+    keep_last: int = 1,
+    silent: bool = False
+) -> Optional[types.Message]:
     """
-    Безопасно отправляет сообщение с опцией удаления предыдущего
+    Безопасно отправляет сообщение с опцией удаления предыдущих
     
     Args:
         message: исходное сообщение или chat_id
@@ -25,6 +44,11 @@ def safe_send_message(message, text, reply_markup=None, parse_mode='HTML', delet
         reply_markup: клавиатура (опционально)
         parse_mode: режим форматирования
         delete_previous: удалить ли предыдущее сообщение бота
+        keep_last: сколько последних сообщений оставлять
+        silent: не логировать успешные отправки
+    
+    Returns:
+        отправленное сообщение или None при ошибке
     """
     try:
         # Получаем chat_id
@@ -33,36 +57,69 @@ def safe_send_message(message, text, reply_markup=None, parse_mode='HTML', delet
         else:
             chat_id = message
         
-        # Если нужно удалить предыдущее сообщение
-        if delete_previous:
-            try:
-                # Пытаемся найти и удалить предыдущее сообщение бота
-                # В MAX может не быть прямого доступа к истории, поэтому
-                # просто удаляем текущее сообщение пользователя
-                if hasattr(message, 'delete'):
-                    message.delete()
-            except Exception as e:
-                logger.warning(f"Не удалось удалить сообщение: {e}")
+        # Если нужно удалить предыдущие сообщения
+        if delete_previous and chat_id in user_messages_history:
+            # Получаем список сообщений для удаления (все кроме keep_last последних)
+            history = user_messages_history.get(chat_id, [])
+            if len(history) > keep_last:
+                messages_to_delete = history[:-keep_last] if keep_last > 0 else history
+                
+                for msg_id in messages_to_delete:
+                    try:
+                        bot.delete_message(chat_id, msg_id)
+                        if not silent:
+                            logger.debug(f"🗑️ Удалено сообщение {msg_id} для чата {chat_id}")
+                        time.sleep(0.05)  # Небольшая пауза чтобы не превысить лимиты
+                    except Exception as e:
+                        # Игнорируем ошибки удаления (сообщение могло быть уже удалено)
+                        pass
+                
+                # Оставляем только последние keep_last сообщений
+                user_messages_history[chat_id] = history[-keep_last:] if keep_last > 0 else []
         
         # Отправляем новое сообщение
-        from bot_instance import bot
-        return bot.send_message(
+        sent_msg = bot.send_message(
             chat_id=chat_id,
             text=text,
             reply_markup=reply_markup,
             parse_mode=parse_mode
         )
+        
+        # Сохраняем в историю
+        if chat_id not in user_messages_history:
+            user_messages_history[chat_id] = []
+        
+        user_messages_history[chat_id].append(sent_msg.message_id)
+        
+        # Ограничиваем размер истории
+        if len(user_messages_history[chat_id]) > MAX_HISTORY_PER_USER:
+            user_messages_history[chat_id] = user_messages_history[chat_id][-MAX_HISTORY_PER_USER:]
+        
+        if not silent:
+            logger.debug(f"📤 Отправлено сообщение {sent_msg.message_id} в чат {chat_id}")
+        
+        return sent_msg
+        
     except Exception as e:
-        logger.error(f"Ошибка при отправке сообщения: {e}")
+        logger.error(f"❌ Ошибка при отправке сообщения: {e}")
+        
         # Пробуем отправить без форматирования
         try:
-            from bot_instance import bot
-            return bot.send_message(
+            clean_text = re.sub(r'<[^>]+>', '', text)
+            sent_msg = bot.send_message(
                 chat_id=chat_id,
-                text=re.sub(r'<[^>]+>', '', text),
+                text=clean_text,
                 reply_markup=reply_markup
             )
-        except:
+            
+            # Сохраняем в историю
+            if chat_id not in user_messages_history:
+                user_messages_history[chat_id] = []
+            user_messages_history[chat_id].append(sent_msg.message_id)
+            
+            return sent_msg
+        except Exception as e2:
+            logger.error(f"❌ Критическая ошибка при отправке: {e2}")
             return None
 
 
@@ -71,10 +128,11 @@ def send_with_status_cleanup(
     text: str, 
     status_msg: types.Message = None, 
     reply_markup=None, 
-    parse_mode: str = 'HTML'
-) -> types.Message:
+    parse_mode: str = 'HTML',
+    keep_last: int = 1
+) -> Optional[types.Message]:
     """
-    Отправляет сообщение и удаляет статусное сообщение
+    Отправляет сообщение и удаляет статусное сообщение и предыдущее сообщение пользователя
     
     Аргументы:
         message: сообщение пользователя
@@ -82,6 +140,7 @@ def send_with_status_cleanup(
         status_msg: статусное сообщение для удаления
         reply_markup: клавиатура
         parse_mode: режим форматирования
+        keep_last: сколько последних сообщений оставлять
     
     Возвращает:
         отправленное сообщение
@@ -92,16 +151,32 @@ def send_with_status_cleanup(
     if status_msg:
         try:
             bot.delete_message(chat_id, status_msg.message_id)
-            logger.debug(f"Удалено статусное сообщение {status_msg.message_id}")
+            logger.debug(f"🗑️ Удалено статусное сообщение {status_msg.message_id}")
         except Exception as e:
             logger.debug(f"Не удалось удалить статусное сообщение: {e}")
     
     # Удаляем предыдущее сообщение пользователя/бота
     try:
         bot.delete_message(chat_id, message.message_id)
-        logger.debug(f"Удалено исходное сообщение {message.message_id}")
+        logger.debug(f"🗑️ Удалено исходное сообщение {message.message_id}")
     except Exception as e:
         logger.debug(f"Не удалось удалить исходное сообщение: {e}")
+    
+    # Удаляем предыдущие сообщения из истории
+    if chat_id in user_messages_history:
+        history = user_messages_history.get(chat_id, [])
+        if len(history) > keep_last:
+            messages_to_delete = history[:-keep_last] if keep_last > 0 else history
+            
+            for msg_id in messages_to_delete:
+                try:
+                    bot.delete_message(chat_id, msg_id)
+                    logger.debug(f"🗑️ Удалено сообщение из истории {msg_id}")
+                    time.sleep(0.05)
+                except:
+                    pass
+            
+            user_messages_history[chat_id] = history[-keep_last:] if keep_last > 0 else []
     
     # Отправляем новое сообщение
     try:
@@ -111,15 +186,30 @@ def send_with_status_cleanup(
             reply_markup=reply_markup, 
             parse_mode=parse_mode
         )
-        logger.debug(f"Отправлено новое сообщение {sent_msg.message_id}")
+        logger.debug(f"📤 Отправлено новое сообщение {sent_msg.message_id}")
+        
+        # Сохраняем в историю
+        if chat_id not in user_messages_history:
+            user_messages_history[chat_id] = []
+        user_messages_history[chat_id].append(sent_msg.message_id)
+        
         return sent_msg
     except Exception as e:
         if "can't parse entities" in str(e).lower() or "parse" in str(e).lower():
             clean_text = clean_text_for_safe_display(text)
-            logger.warning(f"Ошибка парсинга HTML, отправляем без форматирования: {e}")
-            return bot.send_message(chat_id, clean_text, reply_markup=reply_markup)
-        logger.error(f"Критическая ошибка при отправке: {e}")
-        raise
+            logger.warning(f"⚠️ Ошибка парсинга HTML, отправляем без форматирования: {e}")
+            
+            sent_msg = bot.send_message(chat_id, clean_text, reply_markup=reply_markup)
+            
+            # Сохраняем в историю
+            if chat_id not in user_messages_history:
+                user_messages_history[chat_id] = []
+            user_messages_history[chat_id].append(sent_msg.message_id)
+            
+            return sent_msg
+        
+        logger.error(f"❌ Критическая ошибка при отправке: {e}")
+        return None
 
 
 def safe_edit_message(
@@ -127,7 +217,7 @@ def safe_edit_message(
     new_text: str, 
     reply_markup=None, 
     parse_mode: str = 'HTML'
-) -> types.Message:
+) -> Optional[types.Message]:
     """
     Безопасно редактирует существующее сообщение
     
@@ -138,7 +228,7 @@ def safe_edit_message(
         parse_mode: режим форматирования
     
     Возвращает:
-        отредактированное сообщение
+        отредактированное сообщение или None при ошибке
     """
     try:
         edited_msg = bot.edit_message_text(
@@ -148,8 +238,9 @@ def safe_edit_message(
             reply_markup=reply_markup,
             parse_mode=parse_mode
         )
-        logger.debug(f"Отредактировано сообщение {message.message_id}")
+        logger.debug(f"✏️ Отредактировано сообщение {message.message_id}")
         return edited_msg
+        
     except Exception as e:
         error_str = str(e).lower()
         
@@ -160,20 +251,25 @@ def safe_edit_message(
             
         elif "can't parse entities" in error_str:
             clean_text = clean_text_for_safe_display(new_text)
-            logger.warning(f"Ошибка парсинга HTML при редактировании: {e}")
-            return bot.edit_message_text(
-                clean_text,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                reply_markup=reply_markup
-            )
+            logger.warning(f"⚠️ Ошибка парсинга HTML при редактировании: {e}")
+            
+            try:
+                return bot.edit_message_text(
+                    clean_text,
+                    chat_id=message.chat.id,
+                    message_id=message.message_id,
+                    reply_markup=reply_markup
+                )
+            except Exception as e2:
+                logger.error(f"❌ Ошибка при повторном редактировании: {e2}")
+                return None
         
-        logger.error(f"Критическая ошибка при редактировании: {e}")
-        raise
+        logger.error(f"❌ Критическая ошибка при редактировании: {e}")
+        return None
 
 
 # ============================================
-# ДОПОЛНИТЕЛЬНЫЕ УТИЛИТЫ ДЛЯ MAX
+# ДОПОЛНИТЕЛЬНЫЕ УТИЛИТЫ
 # ============================================
 
 def safe_send_typing(chat_id: int):
@@ -187,7 +283,7 @@ def safe_send_typing(chat_id: int):
         # Проверяем, есть ли такой метод в MAX API
         if hasattr(bot, 'send_chat_action'):
             bot.send_chat_action(chat_id, 'typing')
-            logger.debug(f"Отправлен статус 'печатает' в чат {chat_id}")
+            logger.debug(f"✏️ Отправлен статус 'печатает' в чат {chat_id}")
     except Exception as e:
         logger.debug(f"Не удалось отправить статус печати: {e}")
 
@@ -205,9 +301,61 @@ def safe_delete_message(chat_id: int, message_id: int) -> bool:
     """
     try:
         bot.delete_message(chat_id, message_id)
-        logger.debug(f"Удалено сообщение {message_id}")
+        logger.debug(f"🗑️ Удалено сообщение {message_id}")
+        
+        # Удаляем из истории
+        if chat_id in user_messages_history:
+            if message_id in user_messages_history[chat_id]:
+                user_messages_history[chat_id].remove(message_id)
+        
         return True
     except Exception as e:
         if "message can't be deleted" not in str(e).lower():
             logger.warning(f"Не удалось удалить сообщение {message_id}: {e}")
         return False
+
+
+def clear_user_history(chat_id: int, keep_last: int = 0):
+    """
+    Очищает всю историю сообщений пользователя
+    
+    Аргументы:
+        chat_id: ID чата
+        keep_last: сколько последних сообщений оставить
+    """
+    if chat_id not in user_messages_history:
+        return
+    
+    history = user_messages_history.get(chat_id, [])
+    
+    if keep_last > 0 and len(history) > keep_last:
+        messages_to_delete = history[:-keep_last]
+        history = history[-keep_last:]
+    else:
+        messages_to_delete = history
+        history = []
+    
+    for msg_id in messages_to_delete:
+        try:
+            bot.delete_message(chat_id, msg_id)
+            logger.debug(f"🗑️ Удалено сообщение {msg_id} при очистке истории")
+            time.sleep(0.05)
+        except:
+            pass
+    
+    user_messages_history[chat_id] = history
+    logger.info(f"🧹 Очищена история для чата {chat_id}, оставлено {len(history)} сообщений")
+
+
+def get_user_history(chat_id: int) -> List[int]:
+    """Возвращает историю сообщений пользователя"""
+    return user_messages_history.get(chat_id, [])
+
+
+def cleanup_all_old_messages(max_age_minutes: int = 60):
+    """
+    Очищает старые сообщения из истории (не из чата, а из памяти)
+    """
+    # Эта функция просто очищает словарь, если нужно
+    # В MAX API нет возможности получить старые сообщения по времени
+    pass
