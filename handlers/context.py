@@ -213,13 +213,9 @@ def handle_context_message(message: Message) -> bool:
         context.city = text
         context.awaiting_context = None
         
-        # Обновляем погоду
-        import asyncio
-        asyncio.create_task(context.update_weather())
-        
-        # Определяем часовой пояс по городу
-        import asyncio
-        asyncio.create_task(context.detect_timezone_from_city())
+        # 👇 ИСПРАВЛЕНО: синхронные вызовы
+        context.update_weather()
+        context.detect_timezone_from_city()
         
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
@@ -313,9 +309,8 @@ def show_context_complete(message: Message, context: UserContext):
     """
     Показывает итоговый экран после сбора контекста
     """
-    # Обновляем погоду
-    import asyncio
-    asyncio.create_task(context.update_weather())
+    # 👇 ИСПРАВЛЕНО: синхронный вызов
+    context.update_weather()
     
     # Формируем сводку
     summary = f"✅ <b>Отлично! Теперь я знаю о вас:</b>\n\n"
