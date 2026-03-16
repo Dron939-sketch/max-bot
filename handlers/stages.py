@@ -8,7 +8,8 @@ import time
 import logging
 import os
 import json
-from typing import Dict, Any, Optional
+import re
+from typing import Dict, Any, Optional, List
 
 from bot_instance import bot
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
@@ -39,6 +40,61 @@ from services import generate_ai_profile
 from state import get_state_data, update_state_data, user_data, user_contexts
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ДОБАВЛЕНА НЕДОСТАЮЩАЯ ФУНКЦИЯ
+# ============================================
+
+def clean_text_for_safe_display(text: str) -> str:
+    """Очищает текст от HTML и Markdown для безопасного отображения"""
+    if not text:
+        return text
+    # Удаляем HTML теги
+    text = re.sub(r'<[^>]+>', '', text)
+    # Удаляем Markdown
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    text = re.sub(r'__(.*?)__', r'\1', text)
+    text = re.sub(r'\*(.*?)\*', r'\1', text)
+    text = re.sub(r'_(.*?)_', r'\1', text)
+    text = re.sub(r'`(.*?)`', r'\1', text)
+    text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
+    # Удаляем множественные пробелы и переносы строк
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'\n\s*\n', '\n\n', text)
+    return text.strip()
+
+# ============================================
+# КЛАСС СОСТОЯНИЙ (ВЫНЕСЕН В ОТДЕЛЬНУЮ ПЕРЕМЕННУЮ)
+# ============================================
+
+class TestStates:
+    """Состояния для FSM"""
+    stage_1 = "stage_1"
+    stage_2 = "stage_2"
+    stage_3 = "stage_3"
+    stage_4 = "stage_4"
+    stage_5 = "stage_5"
+    results = "results"
+    awaiting_question = "awaiting_question"
+    pretest_question = "pretest_question"
+    awaiting_context = "awaiting_context"
+    mode_selection = "mode_selection"
+    profile_confirmation = "profile_confirmation"
+    clarifying_selection = "clarifying_selection"
+    clarifying_test = "clarifying_test"
+    alternative_test = "alternative_test"
+    viewing_confinement = "viewing_confinement"
+    viewing_intervention = "viewing_intervention"
+    profile_generated = "profile_generated"
+    destination_selection = "destination_selection"
+    route_generation = "route_generation"
+    route_active = "route_active"
+    route_step_active = "route_step_active"
+    collecting_life_context = "collecting_life_context"
+    collecting_goal_context = "collecting_goal_context"
+    theoretical_path_shown = "theoretical_path_shown"
+    reality_check_active = "reality_check_active"
+    feasibility_result = "feasibility_result"
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -462,7 +518,10 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     
     result_text = STAGE_1_FEEDBACK.get(perception_type, STAGE_1_FEEDBACK["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"])
     
-    text = f"{result_text}\n\n▶️ <b>Перейти к этапу 2</b>"
+    # Используем clean_text_for_safe_display для очистки текста
+    clean_result = clean_text_for_safe_display(result_text)
+    
+    text = f"{clean_result}\n\n▶️ <b>Перейти к этапу 2</b>"
     
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 2", callback_data="show_stage_2_intro"))
@@ -657,7 +716,9 @@ def finish_stage_2(message, user_id: int, state_data: dict):
     if not result_text:
         result_text = STAGE_2_FEEDBACK[("СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ", "1-3")]
     
-    text = f"{result_text}\n\n▶️ <b>Перейти к этапу 3</b>"
+    clean_result = clean_text_for_safe_display(result_text)
+    
+    text = f"{clean_result}\n\n▶️ <b>Перейти к этапу 3</b>"
     
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 3", callback_data="show_stage_3_intro"))
@@ -844,8 +905,9 @@ def finish_stage_3(message, user_id: int, state_data: dict):
     logger.info(f"✅ User {user_id}: Stage 3 complete, final_level={final_level}")
     
     result_text = STAGE_3_FEEDBACK.get(behavior_level, STAGE_3_FEEDBACK[1])
+    clean_result = clean_text_for_safe_display(result_text)
     
-    text = f"{result_text}\n\n▶️ <b>Перейти к этапу 4</b>"
+    text = f"{clean_result}\n\n▶️ <b>Перейти к этапу 4</b>"
     
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 4", callback_data="show_stage_4_intro"))
@@ -1181,7 +1243,6 @@ def ask_whats_wrong(call, current_levels: dict):
     safe_send_message(call.message, text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     
     from state import set_state
-    from handlers.stages import TestStates
     set_state(user_id, TestStates.clarifying_selection)
     
     update_state_data(user_id, discrepancies=[])
@@ -1453,47 +1514,14 @@ def finish_stage_5(message, user_id: int, state_data: dict):
     try:
         from handlers.profile import show_final_profile
         show_final_profile(message, user_id)
-    except ImportError:
-        logger.error("❌ Не удалось импортировать show_final_profile")
+    except ImportError as e:
+        logger.error(f"❌ Не удалось импортировать show_final_profile: {e}")
         safe_send_message(
             message,
             "✅ Тестирование завершено! Спасибо за участие.",
             delete_previous=True,
             keep_last=1
         )
-
-# ============================================
-# КЛАСС СОСТОЯНИЙ (для совместимости)
-# ============================================
-
-class TestStates:
-    """Состояния для FSM"""
-    stage_1 = "stage_1"
-    stage_2 = "stage_2"
-    stage_3 = "stage_3"
-    stage_4 = "stage_4"
-    stage_5 = "stage_5"
-    results = "results"
-    awaiting_question = "awaiting_question"
-    pretest_question = "pretest_question"
-    awaiting_context = "awaiting_context"
-    mode_selection = "mode_selection"
-    profile_confirmation = "profile_confirmation"
-    clarifying_selection = "clarifying_selection"
-    clarifying_test = "clarifying_test"
-    alternative_test = "alternative_test"
-    viewing_confinement = "viewing_confinement"
-    viewing_intervention = "viewing_intervention"
-    profile_generated = "profile_generated"
-    destination_selection = "destination_selection"
-    route_generation = "route_generation"
-    route_active = "route_active"
-    route_step_active = "route_step_active"
-    collecting_life_context = "collecting_life_context"
-    collecting_goal_context = "collecting_goal_context"
-    theoretical_path_shown = "theoretical_path_shown"
-    reality_check_active = "reality_check_active"
-    feasibility_result = "feasibility_result"
 
 # ============================================
 # ЭКСПОРТ
@@ -1533,5 +1561,5 @@ __all__ = [
     'TestStates',
     
     # Вспомогательные
-    'cleanup_old_state_files'
+    'cleanup_old_state_files', 'clean_text_for_safe_display'
 ]
