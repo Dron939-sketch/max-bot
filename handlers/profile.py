@@ -8,21 +8,52 @@ import time
 from typing import Dict, Any, Optional
 
 from bot_instance import bot
+from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
+
 from message_utils import safe_send_message, safe_edit_message
 from keyboards import (
     get_profile_keyboard, get_ai_profile_keyboard,
     get_psychologist_thought_keyboard, get_back_keyboard
 )
-from database import get_user_profile, save_user_profile, get_user_context
+
+# ИСПРАВЛЕННЫЕ ИМПОРТЫ - используем state.py
+from state import user_data, get_user_context, get_user_context_dict
 from profiles import (
     get_profile_display, get_perception_description,
-    get_dilts_description, get_vectors_description
+    get_dilts_description, get_vectors_description,
+    VECTORS, LEVEL_PROFILES
 )
 from services import generate_ai_profile, generate_psychologist_thought
 from confinement_model import build_confinement_model
 from models import UserContext
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ПРОФИЛЕМ
+# ============================================
+
+def get_user_profile(user_id: int) -> Dict[str, Any]:
+    """Получает профиль пользователя из глобального хранилища"""
+    data = user_data.get(user_id, {})
+    return data.get("profile_data", {})
+
+def save_user_profile(user_id: int, profile_data: Dict[str, Any]):
+    """Сохраняет профиль пользователя в глобальное хранилище"""
+    if user_id not in user_data:
+        user_data[user_id] = {}
+    user_data[user_id]["profile_data"] = profile_data
+
+def is_test_completed(user_data_dict: dict) -> bool:
+    """Проверяет, завершен ли тест"""
+    if user_data_dict.get("profile_data"):
+        return True
+    if user_data_dict.get("ai_generated_profile"):
+        return True
+    required_minimal = ["perception_type", "thinking_level", "behavioral_levels"]
+    if all(field in user_data_dict for field in required_minimal):
+        return True
+    return False
 
 # ============================================
 # ОСНОВНЫЕ ФУНКЦИИ
@@ -35,11 +66,12 @@ def show_profile(message, user_id: int = None):
     if user_id is None:
         user_id = message.chat.id
     
-    # Получаем данные профиля
+    # Получаем данные профиля из user_data
+    user_data_dict = user_data.get(user_id, {})
     profile_data = get_user_profile(user_id)
     context = get_user_context(user_id)
     
-    if not profile_data:
+    if not profile_data and not is_test_completed(user_data_dict):
         # Если профиля нет, предлагаем пройти тест
         text = """
 📋 ПРОФИЛЬ НЕ НАЙДЕН
@@ -47,24 +79,24 @@ def show_profile(message, user_id: int = None):
 У вас ещё нет профиля. Пройдите тест, чтобы узнать себя лучше.
 """
         keyboard = get_back_keyboard("main_menu")
-        keyboard.add(types.InlineKeyboardButton("🚀 ПРОЙТИ ТЕСТ", callback_data="start_context"))
+        keyboard.add(InlineKeyboardButton("🚀 ПРОЙТИ ТЕСТ", callback_data="start_context"))
         
         safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
         return
     
     # Форматируем профиль для отображения
-    profile_text = format_profile_display(profile_data, context)
+    profile_text = format_profile_display(user_data_dict, context)
     
     keyboard = get_profile_keyboard()
     
     safe_send_message(message, profile_text, reply_markup=keyboard, delete_previous=True)
 
 
-def format_profile_display(profile_data: Dict[str, Any], context: Optional[UserContext] = None) -> str:
-    """
-    Форматирует профиль для отображения
-    """
+def format_profile_display(user_data_dict: Dict[str, Any], context: Optional[UserContext] = None) -> str:
+    """Форматирует профиль для отображения"""
     name = context.name if context and context.name else "Пользователь"
+    
+    profile_data = user_data_dict.get("profile_data", {})
     
     # Основной код профиля
     profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
@@ -76,11 +108,11 @@ def format_profile_display(profile_data: Dict[str, Any], context: Optional[UserC
     chv = profile_data.get('chv_level', 4)
     
     # Тип восприятия
-    perception = profile_data.get('perception_type', 'не определен')
+    perception = user_data_dict.get('perception_type', 'не определен')
     perception_desc = get_perception_description(perception)
     
     # Уровень мышления
-    thinking = profile_data.get('thinking_level', 5)
+    thinking = user_data_dict.get('thinking_level', 5)
     
     # Доминирующий уровень Дилтса
     dilts = profile_data.get('dominant_dilts', 'BEHAVIOR')
@@ -131,10 +163,10 @@ def show_ai_profile(message, user_id: int = None):
     )
     
     # Получаем данные
-    profile_data = get_user_profile(user_id)
+    user_data_dict = user_data.get(user_id, {})
     context = get_user_context(user_id)
     
-    if not profile_data:
+    if not is_test_completed(user_data_dict):
         safe_send_message(
             message,
             "❌ Профиль не найден. Сначала пройдите тест.",
@@ -143,7 +175,7 @@ def show_ai_profile(message, user_id: int = None):
         return
     
     # Генерируем AI-профиль
-    ai_text = generate_ai_profile(user_id, profile_data)
+    ai_text = generate_ai_profile(user_id, user_data_dict)
     
     if not ai_text:
         # Если генерация не удалась, показываем заглушку
@@ -184,10 +216,10 @@ def show_psychologist_thought(message, user_id: int = None):
     )
     
     # Получаем данные
-    profile_data = get_user_profile(user_id)
+    user_data_dict = user_data.get(user_id, {})
     context = get_user_context(user_id)
     
-    if not profile_data:
+    if not is_test_completed(user_data_dict):
         safe_send_message(
             message,
             "❌ Профиль не найден. Сначала пройдите тест.",
@@ -196,13 +228,13 @@ def show_psychologist_thought(message, user_id: int = None):
         return
     
     # Строим или получаем конфайнмент-модель
-    if "confinement_model" not in profile_data:
-        confinement = build_confinement_model(profile_data)
-        profile_data["confinement_model"] = confinement.to_dict() if confinement else {}
-        save_user_profile(user_id, profile_data)
+    if "confinement_model" not in user_data_dict:
+        confinement = build_confinement_model(user_data_dict)
+        user_data_dict["confinement_model"] = confinement.to_dict() if confinement else {}
+        user_data[user_id] = user_data_dict
     
     # Генерируем мысли психолога
-    thoughts = generate_psychologist_thought(user_id, profile_data)
+    thoughts = generate_psychologist_thought(user_id, user_data_dict)
     
     if not thoughts:
         # Если генерация не удалась, показываем заглушку
@@ -228,10 +260,10 @@ def show_final_profile(message, user_id: int):
     Показывает финальный профиль после завершения теста
     """
     # Получаем данные
-    profile_data = get_user_profile(user_id)
+    user_data_dict = user_data.get(user_id, {})
     context = get_user_context(user_id)
     
-    if not profile_data:
+    if not is_test_completed(user_data_dict):
         # Если профиля нет, возвращаемся в меню
         from .start import cmd_start
         cmd_start(message)
@@ -270,14 +302,16 @@ def show_detailed_profile(message, user_id: int = None):
     if user_id is None:
         user_id = message.chat.id
     
-    profile_data = get_user_profile(user_id)
+    user_data_dict = user_data.get(user_id, {})
     context = get_user_context(user_id)
     
-    if not profile_data:
+    if not is_test_completed(user_data_dict):
         show_profile(message, user_id)
         return
     
     name = context.name if context and context.name else "Пользователь"
+    
+    profile_data = user_data_dict.get("profile_data", {})
     
     # Все данные в сыром виде
     profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
@@ -285,23 +319,23 @@ def show_detailed_profile(message, user_id: int = None):
     tf = profile_data.get('tf_level', 4)
     ub = profile_data.get('ub_level', 4)
     chv = profile_data.get('chv_level', 4)
-    perception = profile_data.get('perception_type', 'не определен')
-    thinking = profile_data.get('thinking_level', 5)
-    final_level = profile_data.get('final_level', 5)
+    perception = user_data_dict.get('perception_type', 'не определен')
+    thinking = user_data_dict.get('thinking_level', 5)
+    final_level = user_data_dict.get('final_level', 5)
     
     # Поведенческие уровни
-    behavioral = profile_data.get('behavioral_levels', {})
+    behavioral = user_data_dict.get('behavioral_levels', {})
     sb_levels = behavioral.get('СБ', [])
     tf_levels = behavioral.get('ТФ', [])
     ub_levels = behavioral.get('УБ', [])
     chv_levels = behavioral.get('ЧВ', [])
     
     # Дилтс
-    dilts_counts = profile_data.get('dilts_counts', {})
-    dominant_dilts = profile_data.get('dominant_dilts', 'BEHAVIOR')
+    dilts_counts = user_data_dict.get('dilts_counts', {})
+    dominant_dilts = user_data_dict.get('dominant_dilts', 'BEHAVIOR')
     
     # Глубинные паттерны
-    deep_patterns = profile_data.get('deep_patterns', {})
+    deep_patterns = user_data_dict.get('deep_patterns', {})
     
     text = f"""
 📊 ДЕТАЛЬНЫЙ ПРОФИЛЬ {name}
@@ -344,10 +378,10 @@ def export_profile(message, user_id: int = None):
     if user_id is None:
         user_id = message.chat.id
     
-    profile_data = get_user_profile(user_id)
+    user_data_dict = user_data.get(user_id, {})
     context = get_user_context(user_id)
     
-    if not profile_data:
+    if not is_test_completed(user_data_dict):
         safe_send_message(message, "❌ Профиль не найден")
         return
     
@@ -359,12 +393,12 @@ def export_profile(message, user_id: int = None):
 
 {'='*50}
 
-{format_profile_display(profile_data, context)}
+{format_profile_display(user_data_dict, context)}
 
 {'='*50}
 
 ДЕТАЛЬНЫЕ ДАННЫЕ:
-{profile_data}
+{user_data_dict}
 
 {'='*50}
 """
@@ -391,17 +425,20 @@ def compare_profiles(message, user_id1: int, user_id2: int):
     """
     Сравнивает два профиля (для админов/парной работы)
     """
-    profile1 = get_user_profile(user_id1)
-    profile2 = get_user_profile(user_id2)
+    data1 = user_data.get(user_id1, {})
+    data2 = user_data.get(user_id2, {})
     context1 = get_user_context(user_id1)
     context2 = get_user_context(user_id2)
     
-    if not profile1 or not profile2:
+    if not is_test_completed(data1) or not is_test_completed(data2):
         safe_send_message(message, "❌ Один из профилей не найден")
         return
     
     name1 = context1.name if context1 and context1.name else f"User {user_id1}"
     name2 = context2.name if context2 and context2.name else f"User {user_id2}"
+    
+    profile1 = data1.get("profile_data", {})
+    profile2 = data2.get("profile_data", {})
     
     code1 = profile1.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
     code2 = profile2.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
@@ -421,8 +458,8 @@ def compare_profiles(message, user_id1: int, user_id2: int):
 • Вектор ЧВ: {profile1.get('chv_level')} vs {profile2.get('chv_level')}
 
 Доминирующий уровень Дилтса:
-• {name1}: {profile1.get('dominant_dilts')}
-• {name2}: {profile2.get('dominant_dilts')}
+• {name1}: {data1.get('dominant_dilts')}
+• {name2}: {data2.get('dominant_dilts')}
 """
     
     safe_send_message(message, text, reply_markup=get_back_keyboard("admin_panel"))
@@ -432,34 +469,137 @@ def compare_profiles(message, user_id1: int, user_id2: int):
 # CALLBACK-ОБРАБОТЧИКИ
 # ============================================
 
-@bot.callback_query_handler(func=lambda call: call.data == 'show_profile')
-def show_profile_callback(call):
-    """Показать профиль"""
-    show_profile(call.message, call.from_user.id)
+def profile_confirm(call: CallbackQuery):
+    """Пользователь подтвердил профиль"""
+    from .stages import show_stage_5_intro
+    safe_send_message(call.message, "✅ Отлично! Тогда исследуем глубину...", delete_previous=True)
+    show_stage_5_intro(call.message)
 
 
-@bot.callback_query_handler(func=lambda call: call.data == 'show_ai_profile')
-def show_ai_profile_callback(call):
-    """Показать AI-профиль"""
-    show_ai_profile(call.message, call.from_user.id)
+def profile_doubt(call: CallbackQuery):
+    """Пользователь сомневается"""
+    from .stages import ask_whats_wrong
+    user_id = call.from_user.id
+    data = user_data.get(user_id, {})
+    
+    current_levels = {}
+    for vector in VECTORS:
+        levels = data.get("behavioral_levels", {}).get(vector, [])
+        current_levels[vector] = sum(levels) / len(levels) if levels else 3
+    
+    ask_whats_wrong(call, current_levels)
 
 
-@bot.callback_query_handler(func=lambda call: call.data == 'show_psychologist_thought')
-def show_psychologist_thought_callback(call):
-    """Показать мысли психолога"""
-    show_psychologist_thought(call.message, call.from_user.id)
+def profile_reject(call: CallbackQuery):
+    """Пользователь полностью не согласен - показываем анекдот"""
+    from .start import cmd_start
+    
+    # Текст с анекдотом
+    anecdote = """
+🧠 <b>ЧЕСТНОСТЬ - ЛУЧШАЯ ПОЛИТИКА</b>
+
+Две подруги решили сходить на ипподром. Приходят, а там скачки, все ставки делают. Решили и они ставку сделать — вдруг повезёт? Одна другой и говорит: «Слушай, у тебя какой размер груди?». Вторая: «Второй… а у тебя?». Первая: «Третий… ну давай на пятую поставим — чтоб сумма была…».
+
+Поставили на пятую, лошадь приходит первая, они счастливые прибегают домой с деньгами и мужьям рассказывают, как было дело.
+
+На следующий день мужики тоже решили сходить на скачки — а вдруг им повезёт? Когда решали, на какую ставить, один говорит: «Ты сколько раз за ночь свою жену можешь удовлетворить?». Другой говорит: «Ну, три…». Первый: «А я четыре… ну давай на седьмую поставим».
+
+Поставили на седьмую, первой пришла вторая.
+
+Мужики переглянулись: «Не напиздили бы — выиграли…».
+
+<b>Мораль:</b> Если врать в тесте — результат будет как у мужиков на скачках. Хотите попробовать еще раз?
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(InlineKeyboardButton("🔄 ПРОЙТИ ТЕСТ ЕЩЕ РАЗ", callback_data="restart_test"))
+    keyboard.row(InlineKeyboardButton("👋 ДОСВИДУЛИ", callback_data="goodbye"))
+    
+    safe_send_message(
+        call.message,
+        anecdote,
+        reply_markup=keyboard,
+        parse_mode='HTML',
+        delete_previous=True
+    )
 
 
-@bot.callback_query_handler(func=lambda call: call.data == 'show_detailed_profile')
-def show_detailed_profile_callback(call):
-    """Показать детальный профиль"""
-    show_detailed_profile(call.message, call.from_user.id)
+def handle_goodbye(call: CallbackQuery):
+    """Обработчик кнопки Досвидули"""
+    from state import clear_state
+    
+    safe_send_message(
+        call.message,
+        f"👋 {bold('До свидания!')}\n\nБуду рад помочь, если решите вернуться. Просто напишите /start",
+        parse_mode='HTML',
+        delete_previous=True
+    )
+    
+    clear_state(call.from_user.id)
 
 
-@bot.callback_query_handler(func=lambda call: call.data == 'export_profile')
-def export_profile_callback(call):
-    """Экспортировать профиль"""
-    export_profile(call.message, call.from_user.id)
+def show_ai_analysis(call: CallbackQuery):
+    """Показывает мысли психолога"""
+    user_id = call.from_user.id
+    data = user_data.get(user_id, {})
+    context = get_user_context(user_id)
+    user_name = context.name if context and context.name else ""
+    
+    if data.get("psychologist_thought"):
+        show_saved_psychologist_thought(call.message, user_id, data["psychologist_thought"])
+        return
+    
+    # Отправляем статусное сообщение
+    status_msg = safe_send_message(
+        call.message,
+        "🧠 Анализирую через конфайнмент-модель...\n\nЭто займёт около 15-20 секунд",
+        delete_previous=True
+    )
+    
+    # Генерируем мысли
+    thought = generate_psychologist_thought(user_id, data)
+    
+    if thought:
+        user_data[user_id]["psychologist_thought"] = thought
+        safe_delete_message(call.message.chat.id, status_msg.message_id)
+        show_saved_psychologist_thought(call.message, user_id, thought)
+    else:
+        safe_delete_message(call.message.chat.id, status_msg.message_id)
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton("◀️ НАЗАД", callback_data="show_results"))
+        safe_send_message(
+            call.message,
+            "❌ Не удалось сгенерировать анализ",
+            reply_markup=keyboard,
+            delete_previous=True
+        )
+
+
+def show_saved_psychologist_thought(message: types.Message, user_id: int, thought: str):
+    """Показывает сохраненные мысли психолога с красивым форматированием"""
+    from formatters import bold, format_psychologist_text
+    
+    context = get_user_context(user_id)
+    user_name = context.name if context and context.name else ""
+    
+    # Форматируем текст
+    formatted_thought = format_psychologist_text(thought, user_name)
+    
+    # Добавляем заголовок, если его нет
+    if not formatted_thought.startswith("🧠"):
+        formatted_thought = f"🧠 {bold('МЫСЛИ ПСИХОЛОГА')}\n\n{formatted_thought}"
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
+    keyboard.row(InlineKeyboardButton("◀️ К ПОРТРЕТУ", callback_data="show_results"))
+    
+    safe_send_message(
+        message,
+        formatted_thought,
+        reply_markup=keyboard,
+        parse_mode='HTML',
+        delete_previous=True
+    )
 
 
 # ============================================
@@ -474,7 +614,10 @@ __all__ = [
     'show_detailed_profile',
     'export_profile',
     'compare_profiles',
-    'show_profile_callback',
-    'show_ai_profile_callback',
-    'show_psychologist_thought_callback'
+    'profile_confirm',
+    'profile_doubt',
+    'profile_reject',
+    'handle_goodbye',
+    'show_ai_analysis',
+    'show_saved_psychologist_thought'
 ]
