@@ -31,7 +31,9 @@ from profiles import (
     FALLBACK_ANALYSIS
 )
 from services import generate_ai_profile, generate_psychologist_thought
-from confinement_model import build_confinement_model
+
+# !!! ИСПРАВЛЕНО: импортируем класс ConfinementModel9 из confinement_model.py
+from confinement_model import ConfinementModel9, level
 from models import UserContext
 
 logger = logging.getLogger(__name__)
@@ -292,10 +294,23 @@ def show_psychologist_thought(message, user_id: int = None):
         )
         return
     
-    # Строим или получаем конфайнмент-модель
+    # !!! ИСПРАВЛЕНО: создаем ConfinementModel9 через build_from_profile
     if "confinement_model" not in user_data_dict:
-        confinement = build_confinement_model(user_data_dict)
-        user_data_dict["confinement_model"] = confinement.to_dict() if confinement else {}
+        # Получаем scores из данных
+        scores = {}
+        for vector in ["СБ", "ТФ", "УБ", "ЧВ"]:
+            levels = user_data_dict.get("behavioral_levels", {}).get(vector, [])
+            scores[vector] = sum(levels) / len(levels) if levels else 3
+        
+        # Получаем историю из данных
+        history = user_data_dict.get("history", [])
+        
+        # Создаем модель через build_from_profile
+        model = ConfinementModel9(user_id)
+        model.build_from_profile(scores, history)
+        
+        # Сохраняем модель
+        user_data_dict["confinement_model"] = model.to_dict()
         user_data[user_id] = user_data_dict
     
     # Генерируем мысли психолога
