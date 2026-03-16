@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Скрипт для автоматического добавления логирования в bot3.py
-Запуск: python add_logging.py
+Скрипт для добавления логирования в хэндлеры MAX-бота
+Запуск: python add_logging_max.py
 """
 
 import re
@@ -17,184 +17,66 @@ def backup_file(filename):
     print(f"✅ Создана резервная копия: {backup_name}")
     return backup_name
 
-def add_logging_to_safe_send_message(content):
-    """Добавляет логирование в функцию safe_send_message"""
+def add_logging_to_handler(filepath):
+    """Добавляет логирование в файл-хэндлер"""
     
-    # Паттерн для поиска начала функции safe_send_message
-    pattern = r'(async def safe_send_message\(.*?\).*?)(?=\n\s*#|\n\s*def|\n\s*async def|\n\s*$)'
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
     
-    # Код для вставки после докстринга
-    log_code = """
+    # Добавляем импорт logging, если его нет
+    if 'import logging' not in content:
+        content = 'import logging\n' + content
+        logger_name = os.path.basename(filepath).replace('.py', '')
+        content = content.replace('import logging', f'import logging\n\nlogger = logging.getLogger(__name__)')
     
-    # 🔍 ЛОГИРОВАНИЕ КНОПОК
-    if reply_markup:
-        button_texts = []
-        for row in reply_markup.inline_keyboard:
-            for btn in row:
-                button_texts.append(f"{btn.text}[{btn.callback_data}]")
-        logger.info(f"✅ [safe_send_message] Отправляю с кнопками: {' | '.join(button_texts)}")
-    else:
-        logger.warning(f"❌ [safe_send_message] Отправляю БЕЗ кнопок")"""
+    # Добавляем логирование в функции-обработчики
+    pattern = r'(@(?:bot\.message_handler|bot\.callback_query_handler).*?\n)(\s*def .*?\(.*?\):)'
     
-    # Вставляем после докстринга
-    modified = re.sub(
-        r'(async def safe_send_message.*?\):\n\s*""".*?""")',
-        r'\1' + log_code,
-        content,
-        flags=re.DOTALL
-    )
+    def add_logging(match):
+        decorator = match.group(1)
+        func_def = match.group(2)
+        
+        # Извлекаем имя функции и параметры
+        func_name = re.search(r'def (\w+)\(', func_def).group(1)
+        
+        # Добавляем логирование в начало функции
+        log_line = f'\n    # 🔍 ЛОГИРОВАНИЕ\n    logger.info(f"🟢 [{func_name}] Вызван обработчик")\n'
+        
+        return decorator + func_def + log_line
     
-    return modified
-
-def add_logging_to_show_ai_generated_profile(content):
-    """Добавляет логирование в функцию show_ai_generated_profile"""
+    content = re.sub(pattern, add_logging, content, flags=re.MULTILINE)
     
-    log_start = """
-    # 🔍 ЛОГИРОВАНИЕ
-    logger.info(f"🟢 [show_ai_generated_profile] Начинаю показ профиля для пользователя {callback.from_user.id}")
-"""
-    
-    # Добавляем в начало функции
-    pattern = r'(async def show_ai_generated_profile.*?:\n)'
-    modified = re.sub(pattern, r'\1' + log_start, content)
-    
-    # Добавляем логирование удаления статусного сообщения
-    modified = re.sub(
-        r'(if status_msg:\n\s*try:\n\s*await status_msg.delete\(\))',
-        r'\1\n            logger.info(f"✅ [show_ai_generated_profile] Статусное сообщение {status_msg.message_id} удалено")',
-        modified
-    )
-    
-    # Добавляем логирование создания кнопок
-    modified = re.sub(
-        r'(keyboard = InlineKeyboardMarkup\(inline_keyboard=\[.*?\]\))',
-        r'\1\n    \n    logger.info(f"🔘 [show_ai_generated_profile] Созданы кнопки: МЫСЛИ ПСИХОЛОГА, ВЫБРАТЬ ЦЕЛЬ, ВЫБРАТЬ РЕЖИМ")',
-        modified,
-        flags=re.DOTALL
-    )
-    
-    return modified
-
-def add_logging_to_show_saved_psychologist_thought(content):
-    """Добавляет логирование в функцию show_saved_psychologist_thought"""
-    
-    log_start = """
-    # 🔍 ЛОГИРОВАНИЕ
-    logger.info(f"🟢 [show_saved_psychologist_thought] Начинаю показ мыслей психолога")
-"""
-    
-    # Добавляем в начало функции
-    pattern = r'(async def show_saved_psychologist_thought.*?:\n)'
-    modified = re.sub(pattern, r'\1' + log_start, content)
-    
-    # Добавляем логирование создания кнопок
-    modified = re.sub(
-        r'(keyboard = InlineKeyboardMarkup\(inline_keyboard=\[.*?\]\))',
-        r'\1\n    \n    logger.info(f"🔘 [show_saved_psychologist_thought] Созданы кнопки: ВЫБРАТЬ ЦЕЛЬ, ВЫБРАТЬ РЕЖИМ")',
-        modified,
-        flags=re.DOTALL
-    )
-    
-    return modified
-
-def add_logging_to_show_final_profile(content):
-    """Добавляет логирование в функцию show_final_profile"""
-    
-    log_start = """
-    # 🔍 ЛОГИРОВАНИЕ
-    logger.info(f"🟢 [show_final_profile] Начинаю показ финального профиля для пользователя {user_id}")
-"""
-    
-    # Добавляем в начало функции
-    pattern = r'(async def show_final_profile.*?:\n)'
-    modified = re.sub(pattern, r'\1' + log_start, content)
-    
-    # Добавляем логирование отправки статусного сообщения
-    modified = re.sub(
-        r'(status_msg = await callback\.message\.answer\(.*?\))',
-        r'\1\n    logger.info(f"📊 [show_final_profile] Статусное сообщение отправлено, ID: {status_msg.message_id}")',
-        modified
-    )
-    
-    # Добавляем логирование генерации профиля
-    modified = re.sub(
-        r'(ai_profile = await generate_ai_profile\(user_id, data\))',
-        r'\1\n    logger.info(f"✅ [show_final_profile] AI-профиль сгенерирован: {len(ai_profile) if ai_profile else 0} символов")',
-        modified
-    )
-    
-    return modified
-
-def add_logging_to_callback_handler(content):
-    """Добавляет логирование в callback_handler"""
-    
-    # Добавляем логирование в начало
-    pattern = r'(async def callback_handler.*?:\n\s*await callback\.answer\(\))'
-    log_line = '\n    logger.info(f"🔔 [callback_handler] Получен callback: {data} от пользователя {callback.from_user.id}")\n'
-    modified = re.sub(pattern, r'\1' + log_line, content)
-    
-    # Добавляем логирование ошибок
-    modified = re.sub(
-        r'(except TelegramBadRequest as e:\n\s*if "message is not modified" in str\(e\).lower\(\):\n\s*# Игнорируем - сообщение уже такое же\n\s*logger\.debug\("Message not modified, ignoring"\))',
-        r'\1\n        else:\n            logger.error(f"❌ [callback_handler] TelegramBadRequest: {e}")',
-        modified
-    )
-    
-    modified = re.sub(
-        r'(except Exception as e:\n\s*logger\.error\(f"Unexpected error in callback_handler: {e}"\))',
-        r'\1\n        logger.error(f"❌ [callback_handler] Неожиданная ошибка: {e}")',
-        modified
-    )
-    
-    return modified
+    return content
 
 def main():
     """Главная функция"""
     
-    filename = 'bot3.py'
+    handlers_dir = 'handlers'
     
-    if not os.path.exists(filename):
-        print(f"❌ Файл {filename} не найден!")
-        alt = input("Введите имя файла: ").strip()
-        if alt and os.path.exists(alt):
-            filename = alt
-        else:
-            return
+    if not os.path.exists(handlers_dir):
+        print(f"❌ Папка {handlers_dir} не найдена!")
+        return
     
-    # Создаем резервную копию
-    backup_file(filename)
+    # Создаем резервную копию всей папки
+    backup_name = f"{handlers_dir}.backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    shutil.copytree(handlers_dir, backup_name)
+    print(f"✅ Создана резервная копия: {backup_name}")
     
-    # Читаем файл
-    with open(filename, 'r', encoding='utf-8') as f:
-        content = f.read()
+    # Обрабатываем каждый .py файл в папке
+    for filename in os.listdir(handlers_dir):
+        if filename.endswith('.py') and filename != '__init__.py':
+            filepath = os.path.join(handlers_dir, filename)
+            print(f"📝 Обрабатываю: {filename}")
+            
+            original_content = open(filepath, 'r', encoding='utf-8').read()
+            modified_content = add_logging_to_handler(filepath)
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(modified_content)
+            
+            print(f"   ✅ Логирование добавлено")
     
-    original_length = len(content)
-    
-    # Применяем все изменения
-    content = add_logging_to_safe_send_message(content)
-    content = add_logging_to_show_ai_generated_profile(content)
-    content = add_logging_to_show_saved_psychologist_thought(content)
-    content = add_logging_to_show_final_profile(content)
-    content = add_logging_to_callback_handler(content)
-    
-    new_length = len(content)
-    
-    # Сохраняем изменения
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(content)
-    
-    print(f"\n🎉 Логирование успешно добавлено в {filename}!")
-    print(f"📊 Размер файла: {original_length} → {new_length} символов (+{new_length - original_length})")
-    print(f"📦 Резервная копия сохранена")
-    print("\n✅ Что добавлено:")
-    print("   - Логирование в safe_send_message (отслеживание кнопок)")
-    print("   - Логирование в show_ai_generated_profile")
-    print("   - Логирование в show_saved_psychologist_thought")
-    print("   - Логирование в show_final_profile")
-    print("   - Логирование в callback_handler")
-    print("\n🚀 Запустите бота и смотрите логи:")
-    print("   python bot3.py 2>&1 | tee bot.log")
-    print("   tail -f bot.log | grep -E 'safe_send_message|show_ai|show_saved|кнопки|🔘|✅'")
+    print(f"\n🎉 Логирование успешно добавлено во все хэндлеры!")
 
 if __name__ == "__main__":
     main()
