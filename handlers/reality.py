@@ -65,6 +65,49 @@ def get_user_names(user_id: int) -> str:
     return user_names.get(user_id, "друг")
 
 # ============================================
+# ЕДИНЫЙ ОБРАБОТЧИК CALLBACK'ОВ (ДОБАВЛЕН!)
+# ============================================
+
+def handle_reality_callback(call: CallbackQuery):
+    """
+    Единый обработчик для всех callback'ов проверки реальности
+    """
+    user_id = call.from_user.id
+    data = call.data
+    
+    logger.info(f"🔍 handle_reality_callback: {data} для пользователя {user_id}")
+    
+    if data == "check_reality":
+        show_reality_check(call)
+    elif data == "skip_life_context":
+        skip_life_context(call)
+    elif data == "skip_goal_questions":
+        skip_goal_questions(call)
+    elif data == "skip_to_route":
+        skip_to_route(call)
+    elif data == "accept_feasibility_plan":
+        accept_feasibility_plan(call)
+    elif data == "adjust_timeline":
+        adjust_timeline(call)
+    elif data == "reduce_goal":
+        reduce_goal(call)
+    elif data == "apply_extended_timeline":
+        apply_extended_timeline(call)
+    elif data == "select_goal_50":
+        select_goal_50(call)
+    elif data == "select_goal_30":
+        select_goal_30(call)
+    elif data == "select_goal_blocks":
+        select_goal_blocks(call)
+    else:
+        logger.warning(f"⚠️ Неизвестный reality callback: {data}")
+        safe_send_message(
+            call.message,
+            "❓ Неизвестная команда проверки реальности",
+            delete_previous=True
+        )
+
+# ============================================
 # ОСНОВНЫЕ ФУНКЦИИ ПРОВЕРКИ РЕАЛЬНОСТИ
 # ============================================
 
@@ -138,14 +181,14 @@ def ask_goal_specific_questions(call: CallbackQuery, goal: Dict):
     Задаёт вопросы, специфичные для цели
     """
     user_id = call.from_user.id
-    user_data = get_user_data(user_id)
+    user_data_dict = get_user_data(user_id)
     context = get_user_context(user_id)
     user_name = context.name if context and context.name else "друг"
     
     goal_id = goal.get("id", "income_growth")
     goal_name = goal.get("name", "цель")
-    mode = user_data.get("communication_mode", "coach")
-    profile = user_data.get("profile_data", {})
+    mode = user_data_dict.get("communication_mode", "coach")
+    profile = user_data_dict.get("profile_data", {})
     
     questions = generate_goal_context_questions(goal_id, profile, mode, goal_name)
     
@@ -574,6 +617,7 @@ def select_goal_blocks(call: CallbackQuery):
 # ============================================
 
 __all__ = [
+    'handle_reality_callback',  # ← ДОБАВЛЕНО!
     'show_reality_check',
     'start_life_context_collection',
     'ask_goal_specific_questions',
