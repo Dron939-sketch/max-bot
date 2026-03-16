@@ -10,24 +10,102 @@ from typing import Dict, Any, Optional
 from bot_instance import bot
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 
-from message_utils import safe_send_message, safe_edit_message
+from message_utils import safe_send_message, safe_edit_message, safe_delete_message
 from keyboards import (
     get_profile_keyboard, get_ai_profile_keyboard,
     get_psychologist_thought_keyboard, get_back_keyboard
 )
+from formatters import bold
 
-# ИСПРАВЛЕННЫЕ ИМПОРТЫ - используем state.py
+# Импорты из state.py
 from state import user_data, get_user_context, get_user_context_dict
+
+# Импорты из profiles.py (только константы)
 from profiles import (
-    get_profile_display, get_perception_description,
-    get_dilts_description, get_vectors_description,
-    VECTORS, LEVEL_PROFILES
+    VECTORS, LEVEL_PROFILES, DILTS_LEVELS,
+    STAGE_1_FEEDBACK, STAGE_2_FEEDBACK, STAGE_3_FEEDBACK
 )
 from services import generate_ai_profile, generate_psychologist_thought
 from confinement_model import build_confinement_model
 from models import UserContext
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ФУНКЦИИ ДЛЯ ФОРМАТИРОВАНИЯ ПРОФИЛЯ (ДОБАВЛЕНЫ)
+# ============================================
+
+def get_profile_display(profile_data: Dict[str, Any]) -> str:
+    """Возвращает отображаемое название профиля"""
+    return profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
+
+def get_perception_description(perception_type: str) -> str:
+    """Возвращает описание типа восприятия"""
+    descriptions = {
+        "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ": "Вы ориентируетесь на мнение других, чутко считываете настроение и ожидания окружающих.",
+        "СТАТУСНО-ОРИЕНТИРОВАННЫЙ": "Для вас важны статус, положение в обществе, внешние атрибуты успеха.",
+        "СМЫСЛО-ОРИЕНТИРОВАННЫЙ": "Вы ищете глубинные смыслы, важнее понимание, чем внешние проявления.",
+        "ПРАКТИКО-ОРИЕНТИРОВАННЫЙ": "Вы ориентируетесь на практические результаты, конкретные действия и факты."
+    }
+    return descriptions.get(perception_type, "Тип восприятия не определен")
+
+def get_dilts_description(dominant_dilts: str) -> str:
+    """Возвращает описание доминирующего уровня Дилтса"""
+    descriptions = {
+        "ENVIRONMENT": "Вы часто ищете причины проблем в окружении, обстоятельствах, других людях.",
+        "BEHAVIOR": "Вы фокусируетесь на действиях и поведении — своём и других.",
+        "CAPABILITIES": "Для вас важны навыки, способности, компетенции.",
+        "VALUES": "Вы руководствуетесь ценностями и убеждениями, они определяют ваш выбор.",
+        "IDENTITY": "Вы ищете ответы на вопросы «кто я?», «какова моя миссия?»."
+    }
+    return descriptions.get(dominant_dilts, "Уровень не определен")
+
+def get_vectors_description(sb: int, tf: int, ub: int, chv: int) -> str:
+    """Возвращает описание векторов"""
+    lines = []
+    
+    sb_desc = {
+        1: "Под давлением замираете, теряетесь",
+        2: "Избегаете конфликтов, уходите",
+        3: "Внешне соглашаетесь, внутри кипите",
+        4: "Внешне спокойны, внутри держите всё в себе",
+        5: "Пытаетесь сгладить конфликт",
+        6: "Умеете защищать себя и других"
+    }.get(sb, "Реагируете по-разному")
+    
+    tf_desc = {
+        1: "Деньги приходят и уходят хаотично",
+        2: "Ищете возможности, но не системно",
+        3: "Умеете зарабатывать трудом",
+        4: "Можете копить и планировать",
+        5: "Создаёте системы дохода",
+        6: "Управляете капиталом"
+    }.get(tf, "Свои отношения с деньгами")
+    
+    ub_desc = {
+        1: "Не задумываетесь о сложном",
+        2: "Верите в знаки и судьбу",
+        3: "Доверяете экспертам",
+        4: "Ищете скрытые смыслы",
+        5: "Анализируете факты",
+        6: "Строите теории"
+    }.get(ub, "По-своему понимаете мир")
+    
+    chv_desc = {
+        1: "Сильно привязываетесь к людям",
+        2: "Подстраиваетесь под других",
+        3: "Хотите нравиться, показываете себя",
+        4: "Умеете влиять на людей",
+        5: "Строите равные партнёрства",
+        6: "Создаёте сообщества"
+    }.get(chv, "Свои паттерны в отношениях")
+    
+    lines.append(f"• СБ (реакция на давление): {sb_desc}")
+    lines.append(f"• ТФ (деньги): {tf_desc}")
+    lines.append(f"• УБ (понимание мира): {ub_desc}")
+    lines.append(f"• ЧВ (отношения): {chv_desc}")
+    
+    return "\n".join(lines)
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ПРОФИЛЕМ
@@ -99,7 +177,7 @@ def format_profile_display(user_data_dict: Dict[str, Any], context: Optional[Use
     profile_data = user_data_dict.get("profile_data", {})
     
     # Основной код профиля
-    profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
+    profile_code = get_profile_display(profile_data)
     
     # Расшифровка векторов
     sb = profile_data.get('sb_level', 4)
@@ -314,7 +392,7 @@ def show_detailed_profile(message, user_id: int = None):
     profile_data = user_data_dict.get("profile_data", {})
     
     # Все данные в сыром виде
-    profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
+    profile_code = get_profile_display(profile_data)
     sb = profile_data.get('sb_level', 4)
     tf = profile_data.get('tf_level', 4)
     ub = profile_data.get('ub_level', 4)
@@ -440,8 +518,8 @@ def compare_profiles(message, user_id1: int, user_id2: int):
     profile1 = data1.get("profile_data", {})
     profile2 = data2.get("profile_data", {})
     
-    code1 = profile1.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
-    code2 = profile2.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
+    code1 = get_profile_display(profile1)
+    code2 = get_profile_display(profile2)
     
     text = f"""
 🔄 СРАВНЕНИЕ ПРОФИЛЕЙ
@@ -577,7 +655,7 @@ def show_ai_analysis(call: CallbackQuery):
 
 def show_saved_psychologist_thought(message: types.Message, user_id: int, thought: str):
     """Показывает сохраненные мысли психолога с красивым форматированием"""
-    from formatters import bold, format_psychologist_text
+    from formatters import format_psychologist_text
     
     context = get_user_context(user_id)
     user_name = context.name if context and context.name else ""
