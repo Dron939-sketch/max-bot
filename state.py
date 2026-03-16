@@ -22,9 +22,8 @@ user_states: Dict[int, str] = {}
 # Дополнительные данные состояний
 user_state_data: Dict[int, Dict[str, Any]] = {}
 
-# Контексты пользователей (будут импортироваться из models)
-# Чтобы избежать циклических импортов, импортируем внутри функций
-# user_contexts = {}
+# Контексты пользователей
+user_contexts: Dict[int, Any] = {}  # <--- ДОБАВЛЕНО
 
 
 # ============================================
@@ -118,9 +117,8 @@ def clear_state(user_id: int):
 def get_user_context(user_id: int):
     """Получает контекст пользователя"""
     # Импортируем здесь, чтобы избежать циклических импортов
-    from models import UserContext
-    from main import user_contexts
     if user_id not in user_contexts:
+        from models import UserContext
         user_contexts[user_id] = UserContext(user_id)
     return user_contexts[user_id]
 
@@ -150,6 +148,7 @@ __all__ = [
     'user_names',
     'user_states',
     'user_state_data',
+    'user_contexts',  # <--- ДОБАВЛЕНО В ЭКСПОРТ
     
     # Состояния
     'TestStates',
