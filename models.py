@@ -134,8 +134,9 @@ class UserContext:
         elif self.gender == "female":
             return "сестрёнка"
         return ""
+
     
-    def ask_for_context(self) -> Tuple[Optional[str], Optional[InlineKeyboardMarkup]]:
+def ask_for_context(self) -> Tuple[Optional[str], Optional[InlineKeyboardMarkup]]:
     """Возвращает первый вопрос для сбора контекста (ОБЯЗАТЕЛЬНЫЙ, БЕЗ ПРОПУСКА)"""
     logger.info(f"🔍 ask_for_context вызван: city={self.city}, gender={self.gender}, age={self.age}")
     
