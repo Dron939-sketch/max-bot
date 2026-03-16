@@ -61,7 +61,7 @@ from profiles import (
     VECTORS,
     LEVEL_PROFILES
 )
-from profiles import level
+from models import level
 from questions import (
     STAGE_1_QUESTIONS,
     STAGE_2_QUESTIONS,
