@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Обработчики этапов тестирования для MAX
+Обработчики этапов тестирования (1-5) для MAX
+Восстановлено из оригинального bot3.py и адаптировано
 """
+
+import time
 import logging
 from typing import Dict, Any, Optional
 
 from bot_instance import bot
-from message_utils import safe_send_message, safe_edit_message
+from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+# Наши модули
+from config import COMMUNICATION_MODES
+from message_utils import safe_send_message
 from keyboards import (
     get_stage_1_keyboard, get_stage_2_keyboard, get_stage_3_keyboard,
-    get_stage_4_keyboard, get_stage_5_keyboard, get_back_keyboard,
-    get_clarifying_keyboard
+    get_stage_4_keyboard, get_stage_5_keyboard, get_back_keyboard
 )
 from questions import (
     get_stage1_question, get_stage1_total,
@@ -20,545 +26,1035 @@ from questions import (
     get_stage4_question, get_stage4_total,
     get_stage5_question, get_stage5_total,
     get_question_text, get_option_text, get_option_value,
-    get_clarifying_questions
+    map_to_stage3_feedback_level, analyze_stage5_results
 )
-from database import save_user_answer, get_user_test_state, update_user_test_state
-from profiles import calculate_profile, get_perception_type
-from confinement_model import update_confinement_model
-from models import UserContext
+from profiles import (
+    STAGE_1_FEEDBACK, STAGE_2_FEEDBACK, STAGE_3_FEEDBACK,
+    VECTORS, LEVEL_PROFILES
+)
+from models import ConfinementModel9
+from services import generate_ai_profile
 
 logger = logging.getLogger(__name__)
-
-# Хранилище временных данных (можно перенести в БД/Redis)
-user_test_data = {}
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================
 
-def get_user_test_data(user_id: int) -> Dict[str, Any]:
-    """Получает данные теста пользователя"""
-    if user_id not in user_test_data:
-        # Пробуем загрузить из БД
-        saved = get_user_test_state(user_id)
-        if saved:
-            user_test_data[user_id] = saved
-        else:
-            user_test_data[user_id] = {
-                "stage": 1,
-                "question_index": 0,
-                "answers": [],
-                "scores": {
-                    "EXTERNAL": 0, "INTERNAL": 0, "SYMBOLIC": 0, "MATERIAL": 0,
-                    "СБ": [], "ТФ": [], "УБ": [], "ЧВ": [],
-                    "dilts": {"ENVIRONMENT": 0, "BEHAVIOR": 0, "CAPABILITIES": 0, "VALUES": 0, "IDENTITY": 0},
-                    "stage5": []
-                },
-                "perception_type": None,
-                "thinking_level": 0,
-                "deep_patterns": {}
-            }
-    return user_test_data[user_id]
+def calculate_progress(current: int, total: int) -> str:
+    """Возвращает прогресс-бар"""
+    percent = int((current / total) * 10)
+    bar = "█" * percent + "░" * (10 - percent)
+    return f"▸ Вопрос {current}/{total} • {bar}"
 
-
-def save_user_test_data(user_id: int, data: Dict[str, Any]):
-    """Сохраняет данные теста пользователя"""
-    user_test_data[user_id] = data
-    update_user_test_state(user_id, data)
-
-
-def get_stage_info(stage: int, question_index: int, total: int) -> str:
-    """Возвращает информацию о прогрессе теста"""
-    return f"📊 ЭТАП {stage}/5 · Вопрос {question_index + 1}/{total}\n\n"
-
-
-# ============================================
-# ОБЩИЙ ОБРАБОТЧИК ДЛЯ ЭТАПОВ
-# ============================================
-
-def show_stage_intro(message, stage: int):
-    """Показывает введение в этап"""
-    user_id = message.chat.id
-    data = get_user_test_data(user_id)
+def determine_perception_type(scores: dict) -> str:
+    """Определяет тип восприятия из scores этапа 1"""
+    external = scores.get("EXTERNAL", 0)
+    internal = scores.get("INTERNAL", 0)
+    symbolic = scores.get("SYMBOLIC", 0)
+    material = scores.get("MATERIAL", 0)
     
-    intros = {
-        1: {
-            "title": "🧩 ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ",
-            "text": """
-Как ты фильтруешь реальность? На что опираешься, когда принимаешь решения?
+    attention = "EXTERNAL" if external > internal else "INTERNAL"
+    anxiety = "SYMBOLIC" if symbolic > material else "MATERIAL"
+    
+    if attention == "EXTERNAL" and anxiety == "SYMBOLIC":
+        return "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"
+    elif attention == "EXTERNAL" and anxiety == "MATERIAL":
+        return "СТАТУСНО-ОРИЕНТИРОВАННЫЙ"
+    elif attention == "INTERNAL" and anxiety == "SYMBOLIC":
+        return "СМЫСЛО-ОРИЕНТИРОВАННЫЙ"
+    else:
+        return "ПРАКТИКО-ОРИЕНТИРОВАННЫЙ"
 
-8 простых вопросов помогут понять твой базовый способ взаимодействия с миром.
+def calculate_thinking_level_by_scores(level_scores_dict: dict) -> int:
+    """Рассчитывает уровень мышления для этапа 2"""
+    total_score = sum(level_scores_dict.values())
+    
+    if total_score <= 10:
+        return 1
+    elif total_score <= 20:
+        return 2
+    elif total_score <= 30:
+        return 3
+    elif total_score <= 40:
+        return 4
+    elif total_score <= 50:
+        return 5
+    elif total_score <= 60:
+        return 6
+    elif total_score <= 70:
+        return 7
+    elif total_score <= 80:
+        return 8
+    else:
+        return 9
 
-Готов?"""
-        },
-        2: {
-            "title": "🧠 ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ",
-            "text": """
-Как твой мозг перерабатывает информацию? На каком уровне сложности ты мыслишь?
+def get_level_group(level: int) -> str:
+    """Группирует уровни для этапа 2"""
+    if level <= 3:
+        return "1-3"
+    elif level <= 6:
+        return "4-6"
+    else:
+        return "7-9"
 
-Оцени каждый вопрос по шкале от 1 до 9, где:
-1️⃣ — самый простой, поверхностный уровень
-9️⃣ — самый глубокий, системный уровень
+def calculate_final_level(stage2_level: int, stage3_scores: list) -> int:
+    """Рассчитывает финальный уровень для этапа 3"""
+    if not stage3_scores:
+        return stage2_level
+    avg_behavior = sum(stage3_scores) / len(stage3_scores)
+    return round((stage2_level + avg_behavior) / 2)
 
-Готов?"""
-        },
-        3: {
-            "title": "🎭 ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ",
-            "text": """
-Что ты делаешь на автопилоте? Как реагируешь в стрессовых ситуациях?
+def determine_dominant_dilts(dilts_counts: dict) -> str:
+    """Определяет доминирующий уровень Дилтса для этапа 4"""
+    if not dilts_counts:
+        return "BEHAVIOR"
+    dominant = max(dilts_counts.items(), key=lambda x: x[1])
+    return dominant[0]
 
-Выбирай вариант, который ближе всего к твоей реальной реакции.
-
-Готов?"""
-        },
-        4: {
-            "title": "🌱 ЭТАП 4: ТОЧКА РОСТА",
-            "text": """
-На каком уровне ты обычно ищешь причины проблем и пути развития?
-
-Выбирай вариант, который лучше всего отражает твой подход.
-
-Готов?"""
-        },
-        5: {
-            "title": "🌀 ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ",
-            "text": """
-Что сформировало тебя как личность? Какие глубинные убеждения управляют твоей жизнью?
-
-10 вопросов о твоём прошлом и реакциях. Будь честен с собой.
-
-Готов?"""
-        }
+def calculate_profile_final(user_data: dict) -> dict:
+    """Финальный расчет профиля после этапа 4"""
+    perception_type = user_data.get("perception_type", "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ")
+    thinking_level = user_data.get("thinking_level", 5)
+    
+    behavioral_levels = user_data.get("behavioral_levels", {})
+    
+    sb_levels = behavioral_levels.get("СБ", [])
+    tf_levels = behavioral_levels.get("ТФ", [])
+    ub_levels = behavioral_levels.get("УБ", [])
+    chv_levels = behavioral_levels.get("ЧВ", [])
+    
+    sb_avg = sum(sb_levels) / len(sb_levels) if sb_levels else 3
+    tf_avg = sum(tf_levels) / len(tf_levels) if tf_levels else 3
+    ub_avg = sum(ub_levels) / len(ub_levels) if ub_levels else 3
+    chv_avg = sum(chv_levels) / len(chv_levels) if chv_levels else 3
+    
+    dilts_counts = user_data.get("dilts_counts", {})
+    dominant_dilts = determine_dominant_dilts(dilts_counts)
+    
+    profile_code = f"СБ-{round(sb_avg)}_ТФ-{round(tf_avg)}_УБ-{round(ub_avg)}_ЧВ-{round(chv_avg)}"
+    
+    return {
+        "display_name": profile_code,
+        "perception_type": perception_type,
+        "thinking_level": thinking_level,
+        "sb_level": round(sb_avg),
+        "tf_level": round(tf_avg),
+        "ub_level": round(ub_avg),
+        "chv_level": round(chv_avg),
+        "dominant_dilts": dominant_dilts,
+        "dilts_counts": dilts_counts
     }
+
+# ============================================
+# ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ
+# ============================================
+
+def show_stage_1_intro(message, user_id: int, state_data: dict):
+    """Экран перед ЭТАПОМ 1"""
+    intro_text = f"""
+🧠 <b>ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ</b>
+
+Восприятие — это линза, через которую вы смотрите на мир.
+
+🔍 <b>Что мы исследуем:</b>
+• Куда направлено ваше внимание — вовне или внутрь
+• Какая тревога доминирует — страх отвержения или страх потери контроля
+
+📊 <b>Вопросов:</b> 8
+⏱ <b>Время:</b> ~3 минуты
+
+Отвечайте честно — это поможет мне лучше понять вас.
+"""
     
-    intro = intros.get(stage, intros[1])
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_1"))
+    
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True)
+    state_data["stage"] = 1
+    state_data["stage1_current"] = 0
+
+def start_stage_1(message, user_id: int, state_data: dict):
+    """Начало ЭТАПА 1"""
+    state_data.update({
+        "stage1_current": 0,
+        "stage1_last_answered": -1,
+        "stage1_start_time": time.time(),
+        "perception_scores": {"EXTERNAL": 0, "INTERNAL": 0, "SYMBOLIC": 0, "MATERIAL": 0},
+        "stage": 1
+    })
+    
+    ask_stage_1_question(message, user_id, state_data)
+
+def ask_stage_1_question(message, user_id: int, state_data: dict):
+    """Задаёт вопрос ЭТАПА 1"""
+    current = state_data.get("stage1_current", 0)
+    total = get_stage1_total()
+    
+    if current >= total:
+        finish_stage_1(message, user_id, state_data)
+        return
+    
+    question = get_stage1_question(current)
+    progress = calculate_progress(current + 1, total)
+    
+    question_text = f"""
+🧠 <b>ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ</b>
+
+{question['text']}
+
+{progress}
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    for option_id, option in question["options"].items():
+        keyboard.add(InlineKeyboardButton(
+            text=option["text"],
+            callback_data=f"stage1_{current}_{option_id}"
+        ))
+    
+    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+
+def handle_stage_1_answer(call, user_id: int, state_data: dict):
+    """Обработка ответа ЭТАПА 1"""
+    if state_data.get("processing", False):
+        return
+    
+    state_data["processing"] = True
+    
+    try:
+        parts = call.data.split("_")
+        if len(parts) < 3:
+            return
+        
+        if not parts[1].isdigit():
+            return
+        current = int(parts[1])
+        option_id = parts[2]
+        
+        last_answered = state_data.get("stage1_last_answered", -1)
+        if current <= last_answered:
+            return
+        
+        question = get_stage1_question(current)
+        selected_option = question["options"].get(option_id)
+        
+        if not selected_option:
+            return
+        
+        perception_scores = state_data.get("perception_scores", {})
+        for axis, score in selected_option.get("scores", {}).items():
+            if axis in ["EXTERNAL", "INTERNAL", "SYMBOLIC", "MATERIAL"]:
+                perception_scores[axis] = perception_scores.get(axis, 0) + score
+        
+        all_answers = state_data.get("all_answers", [])
+        all_answers.append({
+            'stage': 1,
+            'question_index': current,
+            'question': question['text'],
+            'answer': selected_option['text'],
+            'option': option_id,
+            'scores': selected_option.get('scores', {})
+        })
+        
+        state_data.update({
+            "perception_scores": perception_scores,
+            "stage1_last_answered": current,
+            "stage1_current": current + 1,
+            "all_answers": all_answers
+        })
+        
+        ask_stage_1_question(call.message, user_id, state_data)
+        
+    except Exception as e:
+        logger.error(f"Ошибка в stage1: {e}")
+        ask_stage_1_question(call.message, user_id, state_data)
+    finally:
+        state_data["processing"] = False
+
+def finish_stage_1(message, user_id: int, state_data: dict):
+    """Завершение ЭТАПА 1"""
+    perception_scores = state_data.get("perception_scores", {})
+    perception_type = determine_perception_type(perception_scores)
+    
+    # Сохраняем в глобальные данные пользователя
+    from main import user_data
+    if user_id not in user_data:
+        user_data[user_id] = {}
+    user_data[user_id]["perception_type"] = perception_type
+    
+    logger.info(f"✅ User {user_id}: Stage 1 complete, type={perception_type}")
+    
+    result_text = STAGE_1_FEEDBACK.get(perception_type, STAGE_1_FEEDBACK["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"])
+    
+    text = f"{result_text}\n\n▶️ <b>Перейти к этапу 2</b>"
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 2", callback_data="show_stage_2_intro"))
+    
+    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
+    state_data["stage"] = 2
+
+# ============================================
+# ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ
+# ============================================
+
+def show_stage_2_intro(message, user_id: int, state_data: dict):
+    """Экран перед ЭТАПОМ 2"""
+    from main import user_data
+    
+    perception_type = user_data.get(user_id, {}).get("perception_type", "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ")
+    total_questions = get_stage2_total(perception_type)
+    
+    intro_text = f"""
+🧠 <b>ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ</b>
+
+Восприятие определяет, что вы видите. Мышление — как вы это понимаете.
+
+🎯 <b>Самое важное:</b>
+Конфигурация мышления — это траектория с чётким пунктом назначения: результат, к которому вы придёте. Если ничего не менять — вы попадёте именно туда.
+
+📊 <b>Вопросов:</b> {total_questions}
+⏱ <b>Время:</b> ~3-4 минуты
+
+Продолжим исследование?
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_2"))
+    
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True)
+
+def start_stage_2(message, user_id: int, state_data: dict):
+    """Начало ЭТАПА 2"""
+    state_data.update({
+        "stage2_current": 0,
+        "stage2_last_answered": -1,
+        "stage2_start_time": time.time(),
+        "stage2_level_scores_dict": {"1": 0, "2": 0, "3": 0, "4": 0, "5": 0, "6": 0, "7": 0, "8": 0, "9": 0},
+        "strategy_levels": {"СБ": [], "ТФ": [], "УБ": [], "ЧВ": []},
+        "stage": 2
+    })
+    
+    ask_stage_2_question(message, user_id, state_data)
+
+def ask_stage_2_question(message, user_id: int, state_data: dict):
+    """Задаёт вопрос ЭТАПА 2"""
+    from main import user_data
+    
+    perception_type = user_data.get(user_id, {}).get("perception_type", "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ")
+    current = state_data.get("stage2_current", 0)
+    total_questions = get_stage2_total(perception_type)
+    
+    if current >= total_questions:
+        finish_stage_2(message, user_id, state_data)
+        return
+    
+    question = get_stage2_question(perception_type, current)
+    if not question:
+        finish_stage_2(message, user_id, state_data)
+        return
+    
+    measures = question.get("measures", "thinking")
+    progress = calculate_progress(current + 1, total_questions)
+    
+    question_text = f"""
+🧠 <b>ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ</b>
+
+{question['text']}
+
+{progress}
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    for level_num, answer_text in question["options"].items():
+        keyboard.add(InlineKeyboardButton(
+            text=answer_text,
+            callback_data=f"stage2_{current}_{level_num}_{measures}"
+        ))
+    
+    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+
+def handle_stage_2_answer(call, user_id: int, state_data: dict):
+    """Обработка ответа ЭТАПА 2"""
+    from main import user_data
+    
+    if state_data.get("processing", False):
+        return
+    
+    state_data["processing"] = True
+    
+    try:
+        parts = call.data.split("_")
+        if len(parts) < 4:
+            return
+        
+        if not parts[1].isdigit():
+            return
+        current = int(parts[1])
+        selected_level = parts[2]
+        measures = parts[3]
+        
+        last_answered = state_data.get("stage2_last_answered", -1)
+        if current <= last_answered:
+            return
+        
+        perception_type = user_data.get(user_id, {}).get("perception_type", "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ")
+        question = get_stage2_question(perception_type, current)
+        if not question:
+            return
+        
+        answer_text = question["options"].get(selected_level, "неизвестно")
+        
+        stage2_level_scores_dict = state_data.get("stage2_level_scores_dict", {})
+        
+        if measures == "thinking":
+            points = get_stage2_score(perception_type, current, selected_level)
+            stage2_level_scores_dict[selected_level] = stage2_level_scores_dict.get(selected_level, 0) + points
+        
+        strategy_levels = state_data.get("strategy_levels", {"СБ": [], "ТФ": [], "УБ": [], "ЧВ": []})
+        if measures in ["СБ", "ТФ", "УБ", "ЧВ"]:
+            try:
+                value = int(selected_level)
+                strategy_levels[measures].append(value)
+            except ValueError:
+                pass
+        
+        all_answers = state_data.get("all_answers", [])
+        all_answers.append({
+            'stage': 2,
+            'question_index': current,
+            'question': question['text'],
+            'answer': answer_text,
+            'option': selected_level,
+            'measures': measures,
+            'perception_type': perception_type
+        })
+        
+        state_data.update({
+            "stage2_level_scores_dict": stage2_level_scores_dict,
+            "strategy_levels": strategy_levels,
+            "stage2_last_answered": current,
+            "stage2_current": current + 1,
+            "all_answers": all_answers
+        })
+        
+        ask_stage_2_question(call.message, user_id, state_data)
+        
+    except Exception as e:
+        logger.error(f"Ошибка в stage2: {e}")
+        ask_stage_2_question(call.message, user_id, state_data)
+    finally:
+        state_data["processing"] = False
+
+def finish_stage_2(message, user_id: int, state_data: dict):
+    """Завершение ЭТАПА 2"""
+    from main import user_data
+    
+    level_scores_dict = state_data.get("stage2_level_scores_dict", {})
+    thinking_level = calculate_thinking_level_by_scores(level_scores_dict)
+    
+    if user_id not in user_data:
+        user_data[user_id] = {}
+    user_data[user_id]["thinking_level"] = thinking_level
+    
+    # Сохраняем стратегии
+    strategy_levels = state_data.get("strategy_levels", {})
+    user_data[user_id]["behavioral_levels"] = strategy_levels
+    
+    perception_type = user_data.get(user_id, {}).get("perception_type", "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ")
+    level_group = get_level_group(thinking_level)
+    
+    logger.info(f"✅ User {user_id}: Stage 2 complete, level={thinking_level}")
+    
+    result_text = STAGE_2_FEEDBACK.get((perception_type, level_group))
+    if not result_text:
+        result_text = STAGE_2_FEEDBACK[("СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ", "1-3")]
+    
+    text = f"{result_text}\n\n▶️ <b>Перейти к этапу 3</b>"
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 3", callback_data="show_stage_3_intro"))
+    
+    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
+    state_data["stage"] = 3
+
+# ============================================
+# ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ
+# ============================================
+
+def show_stage_3_intro(message, user_id: int, state_data: dict):
+    """Экран перед ЭТАПОМ 3"""
+    intro_text = f"""
+🧠 <b>ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ</b>
+
+Восприятие определяет, что вы видите.
+Мышление — как вы это понимаете.
+
+Конфигурация поведения — это то, как вы на это реагируете.
+
+🔍 <b>Здесь мы исследуем:</b>
+• Ваши автоматические реакции
+• Как вы действуете в разных ситуациях
+• Какие стратегии поведения закреплены
+
+📊 <b>Вопросов:</b> 8
+⏱ <b>Время:</b> ~3 минуты
+
+Продолжим?
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_3"))
+    
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True)
+
+def start_stage_3(message, user_id: int, state_data: dict):
+    """Начало ЭТАПА 3"""
+    state_data.update({
+        "stage3_current": 0,
+        "stage3_last_answered": -1,
+        "stage3_start_time": time.time(),
+        "stage3_level_scores": [],
+        "behavioral_levels": {"СБ": [], "ТФ": [], "УБ": [], "ЧВ": []},
+        "stage": 3
+    })
+    
+    ask_stage_3_question(message, user_id, state_data)
+
+def ask_stage_3_question(message, user_id: int, state_data: dict):
+    """Задаёт вопрос ЭТАПА 3"""
+    current = state_data.get("stage3_current", 0)
+    total = get_stage3_total()
+    
+    if current >= total:
+        finish_stage_3(message, user_id, state_data)
+        return
+    
+    question = get_stage3_question(current)
+    strategy = question.get("strategy", "УБ")
+    progress = calculate_progress(current + 1, total)
+    
+    question_text = f"""
+🧠 <b>ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ</b>
+
+{question['text']}
+
+{progress}
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    for option_id, option_text in question["options"].items():
+        keyboard.add(InlineKeyboardButton(
+            text=option_text,
+            callback_data=f"stage3_{current}_{option_id}_{strategy}"
+        ))
+    
+    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+
+def handle_stage_3_answer(call, user_id: int, state_data: dict):
+    """Обработка ответа ЭТАПА 3"""
+    if state_data.get("processing", False):
+        return
+    
+    state_data["processing"] = True
+    
+    try:
+        parts = call.data.split("_")
+        if len(parts) < 4:
+            return
+        
+        if not parts[1].isdigit():
+            return
+        current = int(parts[1])
+        option_id = parts[2]
+        strategy = parts[3]
+        
+        stage3_current = state_data.get("stage3_current", 0)
+        
+        if current < stage3_current:
+            ask_stage_3_question(call.message, user_id, state_data)
+            return
+        
+        question = get_stage3_question(current)
+        option_text = question["options"].get(option_id)
+        
+        if not option_text:
+            return
+        
+        try:
+            level_val = int(option_id)
+        except ValueError:
+            level_val = 1
+        
+        stage3_level_scores = state_data.get("stage3_level_scores", [])
+        stage3_level_scores.append(level_val)
+        
+        behavioral_levels = state_data.get("behavioral_levels", {"СБ": [], "ТФ": [], "УБ": [], "ЧВ": []})
+        if strategy in ["СБ", "ТФ", "УБ", "ЧВ"]:
+            behavioral_levels[strategy].append(level_val)
+        
+        all_answers = state_data.get("all_answers", [])
+        all_answers.append({
+            'stage': 3,
+            'question_index': current,
+            'question': question['text'],
+            'answer': option_text,
+            'answer_value': level_val,
+            'strategy': strategy
+        })
+        
+        state_data.update({
+            "stage3_level_scores": stage3_level_scores,
+            "behavioral_levels": behavioral_levels,
+            "stage3_last_answered": current,
+            "stage3_current": current + 1,
+            "all_answers": all_answers
+        })
+        
+        ask_stage_3_question(call.message, user_id, state_data)
+        
+    except Exception as e:
+        logger.error(f"Ошибка в stage3: {e}")
+        ask_stage_3_question(call.message, user_id, state_data)
+    finally:
+        state_data["processing"] = False
+
+def finish_stage_3(message, user_id: int, state_data: dict):
+    """Завершение ЭТАПА 3"""
+    from main import user_data
+    
+    stage2_level = user_data.get(user_id, {}).get("thinking_level", 1)
+    stage3_scores = state_data.get("stage3_level_scores", [])
+    
+    final_level = calculate_final_level(stage2_level, stage3_scores)
+    
+    if user_id not in user_data:
+        user_data[user_id] = {}
+    user_data[user_id]["final_level"] = final_level
+    
+    # Сохраняем поведенческие уровни
+    behavioral_levels = state_data.get("behavioral_levels", {})
+    if "behavioral_levels" not in user_data[user_id]:
+        user_data[user_id]["behavioral_levels"] = {}
+    
+    for key, values in behavioral_levels.items():
+        if key in user_data[user_id]["behavioral_levels"]:
+            user_data[user_id]["behavioral_levels"][key].extend(values)
+        else:
+            user_data[user_id]["behavioral_levels"][key] = values
+    
+    behavior_level = map_to_stage3_feedback_level(final_level)
+    
+    logger.info(f"✅ User {user_id}: Stage 3 complete, final_level={final_level}")
+    
+    result_text = STAGE_3_FEEDBACK.get(behavior_level, STAGE_3_FEEDBACK[1])
+    
+    text = f"{result_text}\n\n▶️ <b>Перейти к этапу 4</b>"
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 4", callback_data="show_stage_4_intro"))
+    
+    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
+    state_data["stage"] = 4
+
+# ============================================
+# ЭТАП 4: ТОЧКА РОСТА
+# ============================================
+
+def show_stage_4_intro(message, user_id: int, state_data: dict):
+    """Экран перед ЭТАПОМ 4"""
+    intro_text = f"""
+🧠 <b>ЭТАП 4: ТОЧКА РОСТА</b>
+
+Восприятие — что вы видите.
+Мышление — как понимаете.
+Поведение — как реагируете.
+
+🌍 Но она живёт внутри внешней системы — общества, которое постоянно меняется.
+
+⚡ Когда одна система меняется, а другая — нет, возникает напряжение.
+
+🔍 <b>Здесь мы найдём:</b> где именно находится рычаг — место, где минимальное усилие даёт максимальные изменения.
+
+📊 <b>Вопросов:</b> 8
+⏱ <b>Время:</b> ~3 минуты
+
+Готовы найти свою точку роста?
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_4"))
+    
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True)
+
+def start_stage_4(message, user_id: int, state_data: dict):
+    """Начало ЭТАПА 4"""
+    state_data.update({
+        "stage4_current": 0,
+        "stage4_last_answered": -1,
+        "stage4_start_time": time.time(),
+        "dilts_counts": {"ENVIRONMENT": 0, "BEHAVIOR": 0, "CAPABILITIES": 0, "VALUES": 0, "IDENTITY": 0},
+        "stage": 4
+    })
+    
+    ask_stage_4_question(message, user_id, state_data)
+
+def ask_stage_4_question(message, user_id: int, state_data: dict):
+    """Задаёт вопрос ЭТАПА 4"""
+    current = state_data.get("stage4_current", 0)
+    total = get_stage4_total()
+    
+    if current >= total:
+        finish_stage_4(message, user_id, state_data)
+        return
+    
+    question = get_stage4_question(current)
+    progress = calculate_progress(current + 1, total)
+    
+    question_text = f"""
+🧠 <b>ЭТАП 4: ТОЧКА РОСТА</b>
+
+{question['text']}
+
+{progress}
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    for option_id, option in question["options"].items():
+        keyboard.add(InlineKeyboardButton(
+            text=option["text"],
+            callback_data=f"stage4_{current}_{option_id}"
+        ))
+    
+    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+
+def handle_stage_4_answer(call, user_id: int, state_data: dict):
+    """Обработка ответа ЭТАПА 4"""
+    if state_data.get("processing", False):
+        return
+    
+    state_data["processing"] = True
+    
+    try:
+        parts = call.data.split("_")
+        if len(parts) < 3:
+            return
+        
+        if not parts[1].isdigit():
+            return
+        current = int(parts[1])
+        option_id = parts[2]
+        
+        last_answered = state_data.get("stage4_last_answered", -1)
+        if current <= last_answered:
+            return
+        
+        question = get_stage4_question(current)
+        selected_option = question["options"].get(option_id)
+        
+        if not selected_option:
+            return
+        
+        dilts = selected_option.get("dilts", "BEHAVIOR")
+        dilts_counts = state_data.get("dilts_counts", {})
+        dilts_counts[dilts] = dilts_counts.get(dilts, 0) + 1
+        
+        all_answers = state_data.get("all_answers", [])
+        all_answers.append({
+            'stage': 4,
+            'question_index': current,
+            'question': question['text'],
+            'answer': selected_option['text'],
+            'option': option_id,
+            'dilts': dilts
+        })
+        
+        state_data.update({
+            "dilts_counts": dilts_counts,
+            "stage4_last_answered": current,
+            "stage4_current": current + 1,
+            "all_answers": all_answers
+        })
+        
+        ask_stage_4_question(call.message, user_id, state_data)
+        
+    except Exception as e:
+        logger.error(f"Ошибка в stage4: {e}")
+        ask_stage_4_question(call.message, user_id, state_data)
+    finally:
+        state_data["processing"] = False
+
+def finish_stage_4(message, user_id: int, state_data: dict):
+    """Завершение ЭТАПА 4"""
+    from main import user_data
+    
+    dilts_counts = state_data.get("dilts_counts", {})
+    dominant_dilts = determine_dominant_dilts(dilts_counts)
+    
+    if user_id not in user_data:
+        user_data[user_id] = {}
+    user_data[user_id]["dilts_counts"] = dilts_counts
+    user_data[user_id]["dominant_dilts"] = dominant_dilts
+    
+    # Рассчитываем финальный профиль
+    profile_data = calculate_profile_final(user_data[user_id])
+    user_data[user_id]["profile_data"] = profile_data
+    
+    # Строим конфайнмент-модель
+    scores = {}
+    for vector in ["СБ", "ТФ", "УБ", "ЧВ"]:
+        levels = user_data[user_id].get("behavioral_levels", {}).get(vector, [])
+        scores[vector] = sum(levels) / len(levels) if levels else 3
+    
+    model = ConfinementModel9(user_id)
+    model.build_from_profile(scores, user_data[user_id].get('history', []))
+    user_data[user_id]["confinement_model"] = model.to_dict()
+    
+    logger.info(f"✅ User {user_id}: Stage 4 complete, profile={profile_data.get('display_name', 'unknown')}")
+    
+    # Показываем предварительный профиль
+    show_preliminary_profile(message, user_id, state_data)
+
+def show_preliminary_profile(message, user_id: int, state_data: dict):
+    """Показывает предварительный портрет после 4 этапа"""
+    from main import user_data, user_contexts
+    from profiles import convert_to_simple_language
+    
+    data = user_data.get(user_id, {})
+    context = user_contexts.get(user_id)
+    
+    scores = {}
+    for k in VECTORS:
+        levels = data.get("behavioral_levels", {}).get(k, [])
+        scores[k] = sum(levels) / len(levels) if levels else 3.0
+    
+    perception_type = data.get("perception_type", "unknown")
+    thinking_level = data.get("thinking_level", 5)
+    
+    simple_profile = convert_to_simple_language(
+        scores, perception_type, thinking_level
+    )
+    
+    confidence = calculate_profile_confidence(data)
+    confidence_bar = "█" * int(confidence * 10) + "░" * (10 - int(confidence * 10))
     
     text = f"""
-{intro['title']}
+🧠 <b>ПРЕДВАРИТЕЛЬНЫЙ ПОРТРЕТ</b>
 
-{intro['text']}
+{simple_profile['attention_desc']}
+
+{simple_profile['thinking_desc']}
+
+📊 <b>ТВОИ ВЕКТОРЫ:</b>
+• <b>Реакция на давление:</b> {simple_profile['sb_desc']}
+• <b>Отношение к деньгам:</b> {simple_profile['tf_desc']}
+• <b>Понимание мира:</b> {simple_profile['ub_desc']}
+• <b>Отношения с людьми:</b> {simple_profile['chv_desc']}
+
+🎯 <b>Точка роста:</b> {simple_profile['growth_point']}
+
+📊 <b>Уверенность:</b> {confidence_bar} {int(confidence*100)}%
+
+👇 <b>ЭТО ПОХОЖЕ НА ВАС?</b>
 """
     
-    keyboard = get_back_keyboard("main_menu" if stage == 1 else f"stage_{stage-1}_results")
-    keyboard.add(types.InlineKeyboardButton("🚀 НАЧАТЬ", callback_data=f"stage_{stage}_start"))
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(
+        InlineKeyboardButton("✅ ДА", callback_data="profile_confirm"),
+        InlineKeyboardButton("❓ ЕСТЬ СОМНЕНИЯ", callback_data="profile_doubt")
+    )
+    keyboard.row(InlineKeyboardButton("🔄 НЕТ", callback_data="profile_reject"))
     
-    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    state_data["stage"] = "profile_confirmation"
 
+def calculate_profile_confidence(profile: dict) -> float:
+    """Рассчитывает уверенность в профиле"""
+    confidence = 0.5
+    
+    stages_done = 0
+    if profile.get("perception_type"):
+        stages_done += 1
+    if profile.get("thinking_level"):
+        stages_done += 1
+    if profile.get("behavioral_levels"):
+        stages_done += 1
+    if profile.get("dilts_counts"):
+        stages_done += 1
+    if profile.get("deep_patterns"):
+        stages_done += 1
+    
+    confidence += stages_done * 0.1
+    
+    clarification_count = profile.get("clarification_iteration", 0)
+    confidence += clarification_count * 0.05
+    
+    return min(1.0, confidence)
 
-def show_stage_question(message, stage: int, question_index: int):
-    """Показывает вопрос этапа"""
-    user_id = message.chat.id
-    data = get_user_test_data(user_id)
-    
-    # Получаем вопрос
-    if stage == 1:
-        question = get_stage1_question(question_index)
-        total = get_stage1_total()
-        keyboard = get_stage_1_keyboard()
-    elif stage == 2:
-        perception = data.get("perception_type", "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ")
-        question = get_stage2_question(perception, question_index)
-        total = get_stage2_total(perception)
-        keyboard = get_stage_2_keyboard()
-    elif stage == 3:
-        question = get_stage3_question(question_index)
-        total = get_stage3_total()
-        keyboard = get_stage_3_keyboard()
-    elif stage == 4:
-        question = get_stage4_question(question_index)
-        total = get_stage4_total()
-        keyboard = get_stage_4_keyboard()
-    elif stage == 5:
-        question = get_stage5_question(question_index)
-        total = get_stage5_total()
-        keyboard = get_stage_5_keyboard()
-    else:
-        return
-    
-    if not question:
-        # Если вопрос не найден, завершаем этап
-        finish_stage(message, stage)
-        return
-    
-    question_text = get_question_text(question)
-    progress = get_stage_info(stage, question_index, total)
-    
-    # Формируем текст с вариантами
-    options_text = "\n"
-    options = question.get("options", {})
-    for key, option in options.items():
-        if isinstance(option, dict):
-            opt_text = option.get("text", "")
-        else:
-            opt_text = str(option)
-        
-        if stage in [2, 3]:
-            # Для цифровых этапов
-            emoji = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"][int(key)-1] if key.isdigit() else key
-            options_text += f"{emoji} — {opt_text}\n\n"
-        else:
-            # Для буквенных этапов
-            options_text += f"{key.upper()}) {opt_text}\n\n"
-    
-    full_text = f"""
-{progress}{question_text}
+# ============================================
+# ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ
+# ============================================
 
-{options_text}
-👇 Выбери вариант:"""
-    
-    safe_send_message(message, full_text, reply_markup=keyboard, delete_previous=True)
+def show_stage_5_intro(message, user_id: int, state_data: dict):
+    """Экран перед 5-м этапом"""
+    intro_text = f"""
+🧠 <b>ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ</b>
 
+Мы узнали, как вы воспринимаете мир, мыслите и действуете.
+Теперь пришло время заглянуть глубже — в то, что сформировало вас.
 
-def process_stage_answer(call, stage: int, answer_key: str):
-    """Обрабатывает ответ на вопрос этапа"""
-    user_id = call.from_user.id
-    data = get_user_test_data(user_id)
-    question_index = data.get("question_index", 0)
+🔍 <b>Здесь мы исследуем:</b>
+• Какой у вас тип привязанности (из детства)
+• Какие защитные механизмы вы используете
+• Какие глубинные убеждения управляют вами
+• Чего вы боитесь на самом деле
+
+📊 <b>Вопросов:</b> 10
+⏱ <b>Время:</b> ~5 минут
+
+👇 <b>Готовы заглянуть вглубь себя?</b>
+"""
     
-    # Получаем вопрос
-    if stage == 1:
-        question = get_stage1_question(question_index)
-        value = get_option_value(question, answer_key)
-        
-        # Сохраняем баллы для восприятия
-        scores = value.get("scores", {})
-        for key, val in scores.items():
-            data["scores"][key] = data["scores"].get(key, 0) + val
-        
-    elif stage == 2:
-        perception = data.get("perception_type", "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ")
-        question = get_stage2_question(perception, question_index)
-        
-        # Получаем баллы (для этапа 2 answer_key это цифра 1-9)
-        score_value = get_stage2_score(perception, question_index, answer_key)
-        
-        # Определяем, какой вектор измеряет вопрос
-        measures = question.get("measures", "УБ")
-        if measures in ["СБ", "ТФ", "УБ", "ЧВ"]:
-            data["scores"][measures].append(score_value)
-        
-    elif stage == 3:
-        question = get_stage3_question(question_index)
-        strategy = question.get("strategy", "УБ")
-        
-        # Для этапа 3 answer_key это цифра 1-6
-        level = int(answer_key)
-        
-        # Сохраняем в соответствующий вектор
-        if strategy in ["СБ", "ТФ", "УБ", "ЧВ"]:
-            data["scores"][strategy].append(level)
-        
-    elif stage == 4:
-        question = get_stage4_question(question_index)
-        value = get_option_value(question, answer_key)
-        dilts_level = value.get("dilts")
-        
-        if dilts_level:
-            data["scores"]["dilts"][dilts_level] = data["scores"]["dilts"].get(dilts_level, 0) + 1
-        
-    elif stage == 5:
-        question = get_stage5_question(question_index)
-        value = get_option_value(question, answer_key)
-        
-        # Сохраняем паттерн
-        answer_data = {
-            "question_id": question.get("id", question_index),
-            "target": question.get("target"),
-            "pattern": value.get("pattern") if isinstance(value, dict) else answer_key
-        }
-        data["scores"]["stage5"].append(answer_data)
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_5"))
     
-    # Сохраняем ответ
-    data["answers"].append({
-        "stage": stage,
-        "question_index": question_index,
-        "answer": answer_key,
-        "timestamp": time.time()
+    safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True)
+    state_data["stage"] = 5
+
+def start_stage_5(message, user_id: int, state_data: dict):
+    """Начало 5-го этапа"""
+    state_data.update({
+        "stage5_current": 0,
+        "stage5_last_answered": -1,
+        "stage5_answers": []
     })
     
-    # Переходим к следующему вопросу
-    next_index = question_index + 1
+    ask_stage_5_question(message, user_id, state_data)
+
+def ask_stage_5_question(message, user_id: int, state_data: dict):
+    """Задаёт вопрос 5-го этапа"""
+    current = state_data.get("stage5_current", 0)
+    total = get_stage5_total()
     
-    # Проверяем, закончился ли этап
-    total = 0
-    if stage == 1:
-        total = get_stage1_total()
-    elif stage == 2:
-        perception = data.get("perception_type", "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ")
-        total = get_stage2_total(perception)
-    elif stage == 3:
-        total = get_stage3_total()
-    elif stage == 4:
-        total = get_stage4_total()
-    elif stage == 5:
-        total = get_stage5_total()
-    
-    if next_index >= total:
-        # Этап завершен
-        data["question_index"] = 0
-        finish_stage(call.message, stage)
-    else:
-        # Следующий вопрос
-        data["question_index"] = next_index
-        save_user_test_data(user_id, data)
-        show_stage_question(call.message, stage, next_index)
-
-
-def finish_stage(message, stage: int):
-    """Завершает этап и показывает результаты/переход"""
-    user_id = message.chat.id
-    data = get_user_test_data(user_id)
-    
-    if stage == 1:
-        # Определяем тип восприятия
-        scores = data["scores"]
-        perception_type = get_perception_type(
-            scores.get("EXTERNAL", 0),
-            scores.get("INTERNAL", 0),
-            scores.get("SYMBOLIC", 0),
-            scores.get("MATERIAL", 0)
-        )
-        data["perception_type"] = perception_type
-        data["stage"] = 2
-        
-        text = f"""
-✅ ЭТАП 1 ЗАВЕРШЁН!
-
-Твой тип восприятия: {perception_type}
-
-Переходим к этапу 2 — конфигурация мышления.
-"""
-        keyboard = types.InlineKeyboardMarkup()
-        keyboard.add(types.InlineKeyboardButton("🚀 К ЭТАПУ 2", callback_data="stage_2_start"))
-        
-    elif stage == 2:
-        # Вычисляем средние по векторам
-        for vector in ["СБ", "ТФ", "УБ", "ЧВ"]:
-            values = data["scores"].get(vector, [])
-            if values:
-                avg = sum(values) / len(values)
-                data["thinking_level"] = avg  # для совместимости
-        
-        data["stage"] = 3
-        
-        text = """
-✅ ЭТАП 2 ЗАВЕРШЁН!
-
-Твой уровень мышления определён.
-Переходим к этапу 3 — конфигурация поведения.
-"""
-        keyboard = types.InlineKeyboardMarkup()
-        keyboard.add(types.InlineKeyboardButton("🚀 К ЭТАПУ 3", callback_data="stage_3_start"))
-        
-    elif stage == 3:
-        data["stage"] = 4
-        
-        text = """
-✅ ЭТАП 3 ЗАВЕРШЁН!
-
-Твои поведенческие паттерны проанализированы.
-Переходим к этапу 4 — точка роста.
-"""
-        keyboard = types.InlineKeyboardMarkup()
-        keyboard.add(types.InlineKeyboardButton("🚀 К ЭТАПУ 4", callback_data="stage_4_start"))
-        
-    elif stage == 4:
-        data["stage"] = 5
-        
-        text = """
-✅ ЭТАП 4 ЗАВЕРШЁН!
-
-Определена твоя основная точка роста.
-Переходим к финальному этапу — глубинные паттерны.
-"""
-        keyboard = types.InlineKeyboardMarkup()
-        keyboard.add(types.InlineKeyboardButton("🚀 К ЭТАПУ 5", callback_data="stage_5_start"))
-        
-    elif stage == 5:
-        # Тест полностью завершен
-        from .profile import show_final_profile
-        show_final_profile(message, user_id)
+    if current >= total:
+        finish_stage_5(message, user_id, state_data)
         return
     
-    save_user_test_data(user_id, data)
-    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
-
-
-# ============================================
-# CALLBACK-ОБРАБОТЧИКИ
-# ============================================
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('stage_') and call.data.endswith('_start'))
-def stage_start_callback(call):
-    """Начало этапа"""
-    stage = int(call.data.split('_')[1])
-    user_id = call.from_user.id
-    data = get_user_test_data(user_id)
+    question = get_stage5_question(current)
+    progress = calculate_progress(current + 1, total)
     
-    data["stage"] = stage
-    data["question_index"] = 0
-    save_user_test_data(user_id, data)
-    
-    show_stage_question(call.message, stage, 0)
+    question_text = f"""
+🧠 <b>ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ</b>
 
+{question['text']}
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('stage1_'))
-def stage1_callback(call):
-    """Обработка ответов этапа 1"""
-    answer = call.data.replace('stage1_', '')
-    process_stage_answer(call, 1, answer)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('stage2_'))
-def stage2_callback(call):
-    """Обработка ответов этапа 2"""
-    answer = call.data.replace('stage2_', '')
-    process_stage_answer(call, 2, answer)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('stage3_'))
-def stage3_callback(call):
-    """Обработка ответов этапа 3"""
-    answer = call.data.replace('stage3_', '')
-    process_stage_answer(call, 3, answer)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('stage4_'))
-def stage4_callback(call):
-    """Обработка ответов этапа 4"""
-    answer = call.data.replace('stage4_', '')
-    process_stage_answer(call, 4, answer)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('stage5_'))
-def stage5_callback(call):
-    """Обработка ответов этапа 5"""
-    answer = call.data.replace('stage5_', '')
-    process_stage_answer(call, 5, answer)
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'restart_test')
-def restart_test_callback(call):
-    """Перезапуск теста"""
-    user_id = call.from_user.id
-    
-    # Очищаем данные теста
-    if user_id in user_test_data:
-        del user_test_data[user_id]
-    
-    # Очищаем в БД
-    from database import clear_user_test_state
-    clear_user_test_state(user_id)
-    
-    text = """
-🔄 ТЕСТ ПЕРЕЗАПУЩЕН
-
-Начинаем с чистого листа.
+{progress}
 """
-    keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(types.InlineKeyboardButton("🚀 К ЭТАПУ 1", callback_data="stage_1_start"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, delete_previous=True)
+    keyboard = InlineKeyboardMarkup()
+    for option_id, option in question["options"].items():
+        keyboard.add(InlineKeyboardButton(
+            text=option["text"],
+            callback_data=f"stage5_{current}_{option_id}"
+        ))
+    
+    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
 
-
-# ============================================
-# УТОЧНЯЮЩИЕ ВОПРОСЫ
-# ============================================
-
-def show_clarifying_questions(message, user_id: int):
-    """Показывает уточняющие вопросы, если есть расхождения"""
-    data = get_user_test_data(user_id)
-    
-    # Получаем расхождения (нужно реализовать логику)
-    discrepancies = []  # Здесь должна быть логика определения расхождений
-    current_levels = {
-        "СБ": data["scores"].get("СБ", [3])[-1] if data["scores"].get("СБ") else 3,
-        "ТФ": data["scores"].get("ТФ", [3])[-1] if data["scores"].get("ТФ") else 3,
-        "УБ": data["scores"].get("УБ", [3])[-1] if data["scores"].get("УБ") else 3,
-        "ЧВ": data["scores"].get("ЧВ", [3])[-1] if data["scores"].get("ЧВ") else 3
-    }
-    
-    questions = get_clarifying_questions(discrepancies, current_levels)
-    
-    if not questions:
-        # Если нет уточняющих вопросов, показываем финальный профиль
-        from .profile import show_final_profile
-        show_final_profile(message, user_id)
+def handle_stage_5_answer(call, user_id: int, state_data: dict):
+    """Обработка ответа 5-го этапа"""
+    if state_data.get("processing", False):
         return
     
-    # Показываем первый уточняющий вопрос
-    data["clarifying_index"] = 0
-    data["clarifying_questions"] = questions
-    save_user_test_data(user_id, data)
+    state_data["processing"] = True
     
-    show_clarifying_question(message, user_id, 0)
+    try:
+        parts = call.data.split("_")
+        if len(parts) < 3:
+            return
+        
+        if not parts[1].isdigit():
+            return
+        current = int(parts[1])
+        option_id = parts[2]
+        
+        last_answered = state_data.get("stage5_last_answered", -1)
+        if current <= last_answered:
+            return
+        
+        question = get_stage5_question(current)
+        selected_option = question["options"].get(option_id)
+        
+        if not selected_option:
+            return
+        
+        stage5_answers = state_data.get("stage5_answers", [])
+        stage5_answers.append({
+            'question_id': current,
+            'question': question['text'],
+            'answer': selected_option['text'],
+            'option': option_id,
+            'pattern': selected_option.get('pattern'),
+            'target': question.get('target')
+        })
+        
+        state_data.update({
+            "stage5_answers": stage5_answers,
+            "stage5_last_answered": current,
+            "stage5_current": current + 1
+        })
+        
+        ask_stage_5_question(call.message, user_id, state_data)
+        
+    except Exception as e:
+        logger.error(f"Ошибка в stage5: {e}")
+        ask_stage_5_question(call.message, user_id, state_data)
+    finally:
+        state_data["processing"] = False
 
-
-def show_clarifying_question(message, user_id: int, index: int):
-    """Показывает уточняющий вопрос"""
-    data = get_user_test_data(user_id)
-    questions = data.get("clarifying_questions", [])
+def finish_stage_5(message, user_id: int, state_data: dict):
+    """Завершение 5-го этапа"""
+    from main import user_data
     
-    if index >= len(questions):
-        # Все вопросы заданы
-        from .profile import show_final_profile
-        show_final_profile(message, user_id)
-        return
+    stage5_answers = state_data.get("stage5_answers", [])
     
-    q = questions[index]
-    text = q.get("text", "")
-    options = q.get("options", {})
+    deep_patterns = analyze_stage5_results(stage5_answers)
     
-    # Преобразуем опции в словарь для клавиатуры
-    opt_dict = {}
-    for key, opt_text in options.items():
-        opt_dict[key] = opt_text
+    if user_id not in user_data:
+        user_data[user_id] = {}
+    user_data[user_id]["deep_patterns"] = deep_patterns
     
-    keyboard = get_clarifying_keyboard(opt_dict)
+    logger.info(f"✅ User {user_id}: Stage 5 complete")
     
-    safe_send_message(message, f"📌 УТОЧНЯЮЩИЙ ВОПРОС\n\n{text}", reply_markup=keyboard)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('clarify_'))
-def clarifying_callback(call):
-    """Обработка ответов на уточняющие вопросы"""
-    user_id = call.from_user.id
-    data = get_user_test_data(user_id)
-    
-    answer = call.data.replace('clarify_', '')
-    index = data.get("clarifying_index", 0)
-    
-    # Сохраняем ответ
-    if "clarifying_answers" not in data:
-        data["clarifying_answers"] = []
-    
-    data["clarifying_answers"].append({
-        "question_index": index,
-        "answer": answer
-    })
-    
-    # Переходим к следующему
-    next_index = index + 1
-    data["clarifying_index"] = next_index
-    save_user_test_data(user_id, data)
-    
-    show_clarifying_question(call.message, user_id, next_index)
-
+    # Переходим к финальному профилю
+    from .profile import show_final_profile
+    show_final_profile(message, user_id)
 
 # ============================================
 # ЭКСПОРТ
 # ============================================
 
 __all__ = [
-    'show_stage_intro',
-    'show_stage_question',
-    'show_clarifying_questions',
-    'stage_start_callback',
-    'stage1_callback',
-    'stage2_callback',
-    'stage3_callback',
-    'stage4_callback',
-    'stage5_callback',
-    'restart_test_callback',
-    'clarifying_callback'
+    # Этап 1
+    'show_stage_1_intro', 'start_stage_1', 'ask_stage_1_question',
+    'handle_stage_1_answer', 'finish_stage_1',
+    
+    # Этап 2
+    'show_stage_2_intro', 'start_stage_2', 'ask_stage_2_question',
+    'handle_stage_2_answer', 'finish_stage_2',
+    
+    # Этап 3
+    'show_stage_3_intro', 'start_stage_3', 'ask_stage_3_question',
+    'handle_stage_3_answer', 'finish_stage_3',
+    
+    # Этап 4
+    'show_stage_4_intro', 'start_stage_4', 'ask_stage_4_question',
+    'handle_stage_4_answer', 'finish_stage_4',
+    
+    # Этап 5
+    'show_stage_5_intro', 'start_stage_5', 'ask_stage_5_question',
+    'handle_stage_5_answer', 'finish_stage_5',
+    
+    # Вспомогательные
+    'show_preliminary_profile'
 ]
