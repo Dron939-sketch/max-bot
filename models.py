@@ -1,21 +1,22 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Классы-менеджеры и модели данных
 Версия 9.6: Добавлены методы для работы с жизненным контекстом и определения часового пояса
+СИНХРОННАЯ ВЕРСИЯ ДЛЯ MAX
 """
 import os
 import json
 import logging
-import aiohttp
-import asyncio
+import requests  # вместо aiohttp
 import time
 import re
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any, Tuple
 from collections import defaultdict
 
-# ✅ ЗАМЕНИЛИ aiogram НА maxibot
+# Импорты из maxibot
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton
-# BufferedInputFile не нужен в MAX (для голосовых используется другой подход)
 
 from config import OPENWEATHER_API_KEY, COMMUNICATION_MODES, DESTINATIONS
 
@@ -43,7 +44,7 @@ def level(score: float) -> int:
 
 
 # ============================================
-# КЛАСС UserContext (ИСПРАВЛЕННЫЙ)
+# КЛАСС UserContext (СИНХРОННЫЙ)
 # ============================================
 
 class UserContext:
@@ -159,8 +160,8 @@ class UserContext:
         self.awaiting_context = None
         return None, None
     
-    async def process_context_answer(self, text: str) -> Tuple[bool, Optional[str], Optional[InlineKeyboardMarkup]]:
-        """Обрабатывает ответ на контекстный вопрос"""
+    def process_context_answer(self, text: str) -> Tuple[bool, Optional[str], Optional[InlineKeyboardMarkup]]:
+        """Обрабатывает ответ на контекстный вопрос (СИНХРОННАЯ)"""
         if not self.awaiting_context:
             return False, None, None
         
@@ -169,10 +170,9 @@ class UserContext:
         if field == "city":
             self.city = text.strip()
             self.awaiting_context = None
-            await self.update_weather()
-            # 🔥 ОПРЕДЕЛЯЕМ ЧАСОВОЙ ПОЯС ПО ГОРОДУ
-            await self.detect_timezone_from_city()
-            question, keyboard = await self.ask_for_context()
+            self.update_weather()  # синхронно
+            self.detect_timezone_from_city()  # синхронно
+            question, keyboard = self.ask_for_context()
             return True, question, keyboard
                 
         elif field == "gender":
@@ -185,7 +185,7 @@ class UserContext:
                 self.gender = "other"
             
             self.awaiting_context = None
-            question, keyboard = await self.ask_for_context()
+            question, keyboard = self.ask_for_context()
             return True, question, keyboard
                 
         elif field == "age":
@@ -194,7 +194,7 @@ class UserContext:
                 if 1 <= age <= 120:
                     self.age = age
                     self.awaiting_context = None
-                    question, keyboard = await self.ask_for_context()
+                    question, keyboard = self.ask_for_context()
                     return True, question, keyboard
                 else:
                     return False, self.bold("❌ Возраст должен быть от 1 до 120 лет.\n\n📅 Сколько вам лет? (напишите число)"), None
@@ -203,11 +203,11 @@ class UserContext:
         
         return False, None, None
     
-    async def handle_gender_callback(self, gender: str) -> Tuple[Optional[str], Optional[InlineKeyboardMarkup]]:
-        """Обрабатывает выбор пола через callback"""
+    def handle_gender_callback(self, gender: str) -> Tuple[Optional[str], Optional[InlineKeyboardMarkup]]:
+        """Обрабатывает выбор пола через callback (СИНХРОННАЯ)"""
         self.gender = gender
         self.awaiting_context = None  # Важно сбросить!
-        question, keyboard = await self.ask_for_context()
+        question, keyboard = self.ask_for_context()
         return question, keyboard
     
     def get_day_context(self) -> dict:
@@ -281,8 +281,8 @@ class UserContext:
         
         return "\n".join(lines)
     
-    async def update_weather(self):
-        """Обновляет погоду через OpenWeatherMap API"""
+    def update_weather(self):
+        """Обновляет погоду через OpenWeatherMap API (СИНХРОННАЯ)"""
         if not self.city or not OPENWEATHER_API_KEY:
             return False
         
@@ -292,39 +292,38 @@ class UserContext:
         
         url = f"http://api.openweathermap.org/data/2.5/weather?q={self.city}&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=10) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        weather_icons = {
-                            "clear": "☀️",
-                            "clouds": "☁️",
-                            "rain": "🌧",
-                            "snow": "❄️",
-                            "thunderstorm": "⚡️",
-                            "mist": "🌫",
-                            "fog": "🌫"
-                        }
-                        
-                        icon = "☁️"
-                        main = data['weather'][0]['main'].lower()
-                        for key, emoji in weather_icons.items():
-                            if key in main:
-                                icon = emoji
-                                break
-                        
-                        self.weather_cache = {
-                            "temp": round(data['main']['temp']),
-                            "feels_like": round(data['main']['feels_like']),
-                            "description": data['weather'][0]['description'],
-                            "humidity": data['main']['humidity'],
-                            "wind": round(data['wind']['speed']),
-                            "icon": icon,
-                            "pressure": data['main']['pressure']
-                        }
-                        self.weather_cache_time = datetime.now()
-                        return True
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                
+                weather_icons = {
+                    "clear": "☀️",
+                    "clouds": "☁️",
+                    "rain": "🌧",
+                    "snow": "❄️",
+                    "thunderstorm": "⚡️",
+                    "mist": "🌫",
+                    "fog": "🌫"
+                }
+                
+                icon = "☁️"
+                main = data['weather'][0]['main'].lower()
+                for key, emoji in weather_icons.items():
+                    if key in main:
+                        icon = emoji
+                        break
+                
+                self.weather_cache = {
+                    "temp": round(data['main']['temp']),
+                    "feels_like": round(data['main']['feels_like']),
+                    "description": data['weather'][0]['description'],
+                    "humidity": data['main']['humidity'],
+                    "wind": round(data['wind']['speed']),
+                    "icon": icon,
+                    "pressure": data['main']['pressure']
+                }
+                self.weather_cache_time = datetime.now()
+                return True
         except Exception as e:
             logger.error(f"Ошибка получения погоды: {e}")
         return False
@@ -351,8 +350,8 @@ class UserContext:
     
     # ========== НОВЫЙ МЕТОД: ОПРЕДЕЛЕНИЕ ЧАСОВОГО ПОЯСА ==========
     
-    async def detect_timezone_from_city(self):
-        """Определяет часовой пояс по названию города"""
+    def detect_timezone_from_city(self):
+        """Определяет часовой пояс по названию города (СИНХРОННАЯ)"""
         if not self.city:
             return
         
@@ -1009,7 +1008,7 @@ class DelayedTaskManager:
                         audio_data = await text_to_speech(message_text, mode)
                         if audio_data:
                             # В MAX нет send_voice, используем другой подход
-                            logger.info(f"Голосовое сообщение для {user_id} не отправлено (не поддерживается в MAX)")
+                            logger.info(f"🎙 Голос для пользователя {user_id} сгенерирован ({len(audio_data)} байт)")
                 except Exception as e:
                     logger.error(f"Ошибка при отправке мотивационного сообщения пользователю {user_id}: {e}")
         
