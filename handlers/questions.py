@@ -21,7 +21,10 @@ from keyboards import get_back_keyboard, get_main_menu_after_mode_keyboard
 from formatters import bold, italic, calculate_progress, clean_text_for_safe_display
 
 # Импорты из state.py
-from state import user_data, get_state, set_state, get_state_data, update_state_data, TestStates
+from state import (
+    user_data, user_names, user_contexts,
+    get_state, set_state, get_state_data, update_state_data, TestStates
+)
 
 # Импорты из profiles.py
 from profiles import VECTORS, STAGE_1_FEEDBACK, STAGE_2_FEEDBACK, STAGE_3_FEEDBACK
@@ -57,15 +60,16 @@ def get_user_data_dict(user_id: int) -> Dict[str, Any]:
         user_data[user_id] = {}
     return user_data[user_id]
 
+
 def get_user_context_obj(user_id: int):
     """Получает контекст пользователя"""
-    from state import get_user_context
-    return get_user_context(user_id)
+    return user_contexts.get(user_id)
+
 
 def get_user_name(user_id: int) -> str:
     """Получает имя пользователя"""
-    from state import user_names
     return user_names.get(user_id, "друг")
+
 
 def is_test_completed_check(user_data_dict: dict) -> bool:
     """Проверяет, завершен ли тест"""
@@ -77,6 +81,7 @@ def is_test_completed_check(user_data_dict: dict) -> bool:
     if all(field in user_data_dict for field in required_minimal):
         return True
     return False
+
 
 # ============================================
 # ЧАСТЬ 2: ФУНКЦИИ ДЛЯ ЭТАПОВ ТЕСТИРОВАНИЯ
@@ -101,6 +106,7 @@ def determine_perception_type(scores: dict) -> str:
     else:
         return "ПРАКТИКО-ОРИЕНТИРОВАННЫЙ"
 
+
 def calculate_thinking_level_by_scores(level_scores_dict: dict) -> int:
     """Рассчитывает уровень мышления"""
     total_score = sum(level_scores_dict.values())
@@ -124,6 +130,7 @@ def calculate_thinking_level_by_scores(level_scores_dict: dict) -> int:
     else:
         return 9
 
+
 def get_level_group(level_num: int) -> str:
     """Группирует уровни"""
     if level_num <= 3:
@@ -133,6 +140,7 @@ def get_level_group(level_num: int) -> str:
     else:
         return "7-9"
 
+
 def calculate_final_level(stage2_level: int, stage3_scores: list) -> int:
     """Рассчитывает финальный уровень"""
     if not stage3_scores:
@@ -140,12 +148,14 @@ def calculate_final_level(stage2_level: int, stage3_scores: list) -> int:
     avg_behavior = sum(stage3_scores) / len(stage3_scores)
     return round((stage2_level + avg_behavior) / 2)
 
+
 def determine_dominant_dilts(dilts_counts: dict) -> str:
     """Определяет доминирующий уровень Дилтса"""
     if not dilts_counts:
         return "BEHAVIOR"
     dominant = max(dilts_counts.items(), key=lambda x: x[1])
     return dominant[0]
+
 
 def calculate_profile_final(user_data_dict: dict) -> dict:
     """Финальный расчет профиля"""
@@ -180,6 +190,7 @@ def calculate_profile_final(user_data_dict: dict) -> dict:
         "dominant_dilts": dominant_dilts,
         "dilts_counts": dilts_counts
     }
+
 
 # ============================================
 # ЭТАП 1: ВОСПРИЯТИЕ
