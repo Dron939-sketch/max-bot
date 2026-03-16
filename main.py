@@ -2387,7 +2387,7 @@ def start_context(message: types.Message):
     context.gender = None
     context.age = None
     
-    question, keyboard = context.ask_for_context()
+    question, keyboard = await context.ask_for_context()
     
     if question:
         safe_send_message(
