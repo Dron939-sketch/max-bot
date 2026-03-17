@@ -11,6 +11,7 @@ import logging
 import aiohttp
 import asyncio
 import re
+import traceback
 from typing import Optional, Dict, List, Any, Tuple
 from datetime import datetime
 
@@ -76,6 +77,10 @@ async def call_deepseek(prompt: str, system_prompt: str = None, max_tokens: int 
     """
     Универсальная функция вызова DeepSeek API с повторными попытками
     """
+    logger.info(f"📞 Вызов DeepSeek API")
+    logger.info(f"📏 Длина промпта: {len(prompt)} символов")
+    logger.info(f"🎯 max_tokens: {max_tokens}, temperature: {temperature}")
+    
     if not DEEPSEEK_API_KEY:
         logger.error("❌ DEEPSEEK_API_KEY не настроен")
         return None
@@ -88,6 +93,7 @@ async def call_deepseek(prompt: str, system_prompt: str = None, max_tokens: int 
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
+        logger.info(f"📝 Системный промпт: {len(system_prompt)} символов")
     messages.append({"role": "user", "content": prompt})
     
     payload = {
@@ -100,8 +106,13 @@ async def call_deepseek(prompt: str, system_prompt: str = None, max_tokens: int 
         "presence_penalty": 0.3
     }
     
+    logger.info(f"📦 Payload размер: {len(str(payload))} символов")
+    
     for attempt in range(retry_count + 1):
         try:
+            logger.info(f"🔄 Попытка {attempt + 1}/{retry_count + 1}")
+            start_time = datetime.now()
+            
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     DEEPSEEK_API_URL, 
@@ -109,12 +120,18 @@ async def call_deepseek(prompt: str, system_prompt: str = None, max_tokens: int 
                     json=payload, 
                     timeout=60
                 ) as response:
+                    elapsed = (datetime.now() - start_time).total_seconds()
+                    logger.info(f"⏱️ Время ответа: {elapsed:.2f} сек, статус: {response.status}")
+                    
                     if response.status == 200:
                         data = await response.json()
-                        return data['choices'][0]['message']['content'].strip()
+                        content = data['choices'][0]['message']['content'].strip()
+                        logger.info(f"✅ DeepSeek ответил, длина ответа: {len(content)} символов")
+                        logger.info(f"📝 Первые 200 символов ответа: {content[:200]}")
+                        return content
                     else:
                         error_text = await response.text()
-                        logger.error(f"❌ DeepSeek API error {response.status}: {error_text[:200]}")
+                        logger.error(f"❌ DeepSeek API error {response.status}: {error_text[:500]}")
                         
                         if attempt < retry_count:
                             wait_time = 2 ** attempt  # 1, 2, 4 секунды
@@ -134,6 +151,7 @@ async def call_deepseek(prompt: str, system_prompt: str = None, max_tokens: int 
             
         except Exception as e:
             logger.error(f"❌ DeepSeek API exception (попытка {attempt + 1}): {e}")
+            logger.error(traceback.format_exc())
             if attempt < retry_count:
                 wait_time = 2 ** attempt
                 logger.info(f"🔄 Повтор через {wait_time}с...")
@@ -153,38 +171,58 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
     Генерирует психологический портрет на основе данных теста
     """
     logger.info(f"🧠 Генерация AI-профиля для пользователя {user_id}")
+    logger.info(f"📊 Размер входных данных: {len(str(data))} символов")
     
-    # 🔍 ОТЛАДКА - проверяем все потенциально проблемные места
-    logger.info("=== ОТЛАДКА generate_ai_profile ===")
+    # 🔍 ДЕТАЛЬНАЯ ОТЛАДКА - проверяем все поля
+    logger.info("=== ДЕТАЛЬНАЯ ОТЛАДКА generate_ai_profile ===")
     
-    # Проверяем confinement_model
+    # 1. Проверяем наличие всех ключевых полей
+    required_fields = ["perception_type", "thinking_level", "behavioral_levels", "dilts_counts", "deep_patterns"]
+    for field in required_fields:
+        if field in data:
+            value = data[field]
+            logger.info(f"✅ {field}: присутствует, тип {type(value)}")
+            if isinstance(value, dict):
+                logger.info(f"   - количество ключей: {len(value)}")
+                if value:
+                    logger.info(f"   - пример: {str(value)[:100]}")
+        else:
+            logger.warning(f"⚠️ {field}: отсутствует в данных")
+    
+    # 2. Проверяем confinement_model отдельно
     if data.get("confinement_model"):
         confinement = data["confinement_model"]
-        logger.info(f"🔍 Тип confinement_model: {type(confinement)}")
+        logger.info(f"🔍 confinement_model: тип {type(confinement)}")
         
         if isinstance(confinement, dict):
-            logger.info(f"🔍 confinement_model - словарь, ключи: {list(confinement.keys())}")
+            logger.info(f"   - ключи: {list(confinement.keys())}")
             # Проверяем элементы внутри
             if "elements" in confinement:
                 elements = confinement["elements"]
-                logger.info(f"🔍 Тип elements: {type(elements)}")
+                logger.info(f"   - elements: тип {type(elements)}")
                 if isinstance(elements, dict):
-                    for k, v in elements.items():
-                        if v and not isinstance(v, dict):
-                            logger.warning(f"⚠️ Элемент {k} не словарь: {type(v)}")
+                    logger.info(f"   - elements ключи: {list(elements.keys())}")
         else:
-            logger.error(f"❌ confinement_model НЕ словарь: {type(confinement)}")
-            # Пробуем преобразовать, если есть метод to_dict
-            if hasattr(confinement, 'to_dict'):
+            logger.warning(f"⚠️ confinement_model не словарь: {type(confinement)}")
+            # Пробуем преобразовать
+            try:
                 data["confinement_model"] = make_json_serializable(confinement)
-                logger.info("✅ Преобразовали в словарь через make_json_serializable()")
+                logger.info("✅ Преобразовали через make_json_serializable()")
+            except Exception as e:
+                logger.error(f"❌ Ошибка преобразования: {e}")
     else:
-        logger.info("ℹ️ confinement_model отсутствует")
+        logger.warning("⚠️ confinement_model отсутствует")
     
-    # Проверяем другие поля
-    for field in ["perception_type", "thinking_level", "behavioral_levels", "dilts_counts", "deep_patterns"]:
-        value = data.get(field)
-        logger.info(f"🔍 {field}: тип {type(value)}")
+    # 3. Проверяем deep_patterns детально
+    if data.get("deep_patterns"):
+        deep = data["deep_patterns"]
+        logger.info(f"🔍 deep_patterns: тип {type(deep)}")
+        if isinstance(deep, dict):
+            logger.info(f"   - ключи: {list(deep.keys())}")
+            for k, v in deep.items():
+                logger.info(f"   - {k}: {type(v)} = {v}")
+    else:
+        logger.warning("⚠️ deep_patterns отсутствует")
     
     system_prompt = """Ты — Фреди, виртуальный психолог, цифровая копия Андрея Мейстера. 
 Твоя задача — создавать глубокие, точные психологические портреты на основе теста «Матрица поведений 4×6».
@@ -214,7 +252,14 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
     
     # Добавляем конфайнмент-модель, если есть (преобразуем в JSON-сериализуемый формат)
     if data.get("confinement_model"):
-        profile_data["confinement_model"] = make_json_serializable(data["confinement_model"])
+        try:
+            profile_data["confinement_model"] = make_json_serializable(data["confinement_model"])
+            logger.info("✅ confinement_model добавлен в profile_data")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при сериализации confinement_model: {e}")
+    
+    logger.info(f"📊 profile_data подготовлен, размер: {len(str(profile_data))} символов")
+    logger.info(f"📊 profile_data keys: {list(profile_data.keys())}")
     
     # Полный промт для генерации профиля
     prompt = f"""На основе данных теста создай глубокий, точный психологический портрет человека.
@@ -260,6 +305,13 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
 ⚠️ ГЛАВНАЯ ЛОВУШКА
 """
     
+    logger.info(f"📝 Промпт создан, длина: {len(prompt)} символов")
+    logger.info(f"📝 Первые 500 символов промпта: {prompt[:500]}")
+    
+    # Проверяем длину промпта
+    if len(prompt) > 15000:
+        logger.warning(f"⚠️ Промпт очень длинный: {len(prompt)} символов. Может быть проблема с API.")
+    
     response = await call_deepseek(
         prompt=prompt,
         system_prompt=system_prompt,
@@ -269,10 +321,18 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
     
     if response:
         logger.info(f"✅ AI-профиль сгенерирован ({len(response)} символов)")
+        logger.info(f"📝 Первые 300 символов ответа: {response[:300]}")
+        
+        # Проверяем структуру ответа
+        if "🔑" in response and "💪" in response and "🎯" in response:
+            logger.info("✅ Ответ содержит все необходимые эмодзи")
+        else:
+            logger.warning("⚠️ В ответе отсутствуют некоторые обязательные эмодзи")
+        
+        return response
     else:
-        logger.error("❌ Не удалось сгенерировать AI-профиль")
-    
-    return response
+        logger.error("❌ Не удалось сгенерировать AI-профиль (пустой ответ)")
+        return None
 
 
 # ============================================
@@ -284,19 +344,34 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
     Генерирует мысли психолога на основе конфайнмент-модели
     """
     logger.info(f"🧠 Генерация мыслей психолога для пользователя {user_id}")
+    logger.info(f"📊 Размер входных данных: {len(str(data))} символов")
     
     # 🔍 ОТЛАДКА
-    logger.info("=== ОТЛАДКА generate_psychologist_thought ===")
+    logger.info("=== ДЕТАЛЬНАЯ ОТЛАДКА generate_psychologist_thought ===")
+    
     confinement_data = data.get("confinement_model", {})
     logger.info(f"🔍 Тип confinement_data: {type(confinement_data)}")
     
     if isinstance(confinement_data, dict):
-        logger.info(f"🔍 confinement_data - словарь, ключи: {list(confinement_data.keys())}")
+        logger.info(f"🔍 confinement_data ключи: {list(confinement_data.keys())}")
+        
+        # Проверяем наличие ключевых элементов
+        if "key_confinement" in confinement_data:
+            logger.info(f"✅ key_confinement: {confinement_data['key_confinement']}")
+        if "elements" in confinement_data:
+            elements = confinement_data["elements"]
+            logger.info(f"✅ elements: {len(elements) if isinstance(elements, dict) else 'не словарь'}")
+        if "loops" in confinement_data:
+            loops = confinement_data["loops"]
+            logger.info(f"✅ loops: {len(loops) if isinstance(loops, list) else 'не список'}")
     else:
-        logger.error(f"❌ confinement_data НЕ словарь: {type(confinement_data)}")
+        logger.warning(f"⚠️ confinement_data не словарь: {type(confinement_data)}")
         # Пробуем преобразовать
-        confinement_data = make_json_serializable(confinement_data)
-        logger.info("✅ Преобразовали через make_json_serializable()")
+        try:
+            confinement_data = make_json_serializable(confinement_data)
+            logger.info("✅ Преобразовали через make_json_serializable()")
+        except Exception as e:
+            logger.error(f"❌ Ошибка преобразования: {e}")
     
     system_prompt = """Ты — Фреди, виртуальный психолог. Твоя задача — давать глубинный анализ через конфайнмент-модель.
 
@@ -313,6 +388,8 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
         "behavioral_levels": data.get("behavioral_levels", {}),
         "profile_code": data.get("profile_data", {}).get("display_name", "СБ-4_ТФ-4_УБ-4_ЧВ-4")
     }
+    
+    logger.info(f"📊 profile_data подготовлен: {list(profile_data.keys())}")
     
     # Полный промт для мыслей психолога
     prompt = f"""Проанализируй пользователя через конфайнмент-модель и дай 3 глубинные мысли.
@@ -355,6 +432,8 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
 - Пиши на русском, живым языком
 """
     
+    logger.info(f"📝 Промпт создан, длина: {len(prompt)} символов")
+    
     response = await call_deepseek(
         prompt=prompt,
         system_prompt=system_prompt,
@@ -364,10 +443,11 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
     
     if response:
         logger.info(f"✅ Мысли психолога сгенерированы ({len(response)} символов)")
+        logger.info(f"📝 Первые 200 символов ответа: {response[:200]}")
+        return response
     else:
         logger.error("❌ Не удалось сгенерировать мысли психолога")
-    
-    return response
+        return None
 
 
 # ============================================
@@ -415,6 +495,8 @@ async def generate_route_ai(user_id: int, data: dict, goal: dict) -> Optional[Di
     tf_level = profile_data.get("tf_level", 4)
     ub_level = profile_data.get("ub_level", 4)
     chv_level = profile_data.get("chv_level", 4)
+    
+    logger.info(f"📊 Профиль: {profile_code}, СБ={sb_level}, ТФ={tf_level}, УБ={ub_level}, ЧВ={chv_level}")
     
     # Полный промт для генерации маршрута
     prompt = f"""Ты — {mode_info['emoji']} {mode_info['name']}, виртуальный помощник. Твоя задача — создать пошаговый маршрут для пользователя к его цели.
@@ -485,6 +567,8 @@ async def generate_route_ai(user_id: int, data: dict, goal: dict) -> Optional[Di
 
 Напиши маршрут, соблюдая все инструкции."""
     
+    logger.info(f"📝 Промпт для маршрута создан, длина: {len(prompt)} символов")
+    
     response = await call_deepseek(
         prompt=prompt,
         system_prompt=f"Ты — {mode_info['emoji']} {mode_info['name']}, создающий эффективные маршруты развития.",
@@ -494,6 +578,7 @@ async def generate_route_ai(user_id: int, data: dict, goal: dict) -> Optional[Di
     
     if response:
         logger.info(f"✅ Маршрут сгенерирован ({len(response)} символов)")
+        logger.info(f"📝 Первые 200 символов ответа: {response[:200]}")
         return {
             "full_text": response,
             "steps": response.split("\n\n")  # Простое разбиение, можно улучшить
@@ -519,12 +604,13 @@ async def generate_response_with_full_context(
     Генерирует ответ с учетом полного контекста пользователя
     """
     logger.info(f"🧠 Генерация ответа для пользователя {user_id}, режим: {mode}")
+    logger.info(f"📝 Сообщение пользователя: {user_message[:100]}...")
     
     # Описания режимов
     mode_prompts = {
-    "coach": {
-        "role": "коуч",
-        "style": """Ты — коуч. Твоя задача — помогать человеку находить ответы внутри себя через открытые вопросы и размышления.
+        "coach": {
+            "role": "коуч",
+            "style": """Ты — коуч. Твоя задача — помогать человеку находить ответы внутри себя через открытые вопросы и размышления.
 
 ПРАВИЛА КОУЧА:
 1. НЕ давай готовых ответов и советов
@@ -538,10 +624,10 @@ async def generate_response_with_full_context(
 - "Что для тебя самое важное в этом?"
 - "Как бы ты хотел, чтобы это выглядело в идеале?"
 - "Какие маленькие шаги ты можешь сделать уже сегодня?" """
-    },
-    "psychologist": {
-        "role": "психолог",
-        "style": """Ты — психолог. Твоя задача — исследовать глубинные паттерны, прошлый опыт, защитные механизмы.
+        },
+        "psychologist": {
+            "role": "психолог",
+            "style": """Ты — психолог. Твоя задача — исследовать глубинные паттерны, прошлый опыт, защитные механизмы.
 
 ПРАВИЛА ПСИХОЛОГА:
 1. Исследуй чувства и эмоции: "Что ты чувствуешь, когда думаешь об этом?"
@@ -555,10 +641,10 @@ async def generate_response_with_full_context(
 - "Что для тебя самое страшное в этой ситуации?"
 - "Если бы твоя тревога могла говорить, что бы она сказала?"
 - "Как эта ситуация связана с твоим детством?" """
-    },
-    "trainer": {
-        "role": "тренер",
-        "style": """Ты — тренер. Твоя задача — давать четкие инструменты, навыки, упражнения для достижения результата.
+        },
+        "trainer": {
+            "role": "тренер",
+            "style": """Ты — тренер. Твоя задача — давать четкие инструменты, навыки, упражнения для достижения результата.
 
 ПРАВИЛА ТРЕНЕРА:
 1. Давай конкретные, выполнимые задания
@@ -572,8 +658,8 @@ async def generate_response_with_full_context(
 - "Сделай это до следующей встречи и напиши результат"
 - "Давай разберем это по шагам..."
 - "Твоя задача на сегодня — сделать первый шаг" """
+        }
     }
-}
     
     mode_info = mode_prompts.get(mode, mode_prompts["coach"])
     
@@ -594,6 +680,8 @@ async def generate_response_with_full_context(
             f"{'🤖' if i%2==0 else '👤'}: {msg[:100]}..." 
             for i, msg in enumerate(last_messages)
         ])
+    
+    logger.info(f"📊 Контекст: профиль {profile_code}, история {len(history) if history else 0} сообщений")
     
     # Полный промт для ответа на вопрос
     prompt = f"""Ты — {mode_info['role']}, виртуальный помощник. Ответь на вопрос пользователя с учетом его профиля и контекста.
@@ -626,6 +714,8 @@ async def generate_response_with_full_context(
 ТВОЙ ОТВЕТ (без Markdown, с эмодзи где уместно):
 """
     
+    logger.info(f"📝 Промпт для ответа создан, длина: {len(prompt)} символов")
+    
     response = await call_deepseek(
         prompt=prompt,
         system_prompt=f"Ты — {mode_info['role']}, помогающий людям.",
@@ -636,10 +726,13 @@ async def generate_response_with_full_context(
     # Генерируем предложения для дальнейшего диалога
     suggestions = await generate_suggestions(user_message, response, profile_code, mode)
     
-    return {
+    result = {
         "response": response or "Извините, не удалось сгенерировать ответ. Попробуйте переформулировать вопрос.",
         "suggestions": suggestions or []
     }
+    
+    logger.info(f"✅ Ответ сгенерирован, длина: {len(result['response'])} символов")
+    return result
 
 
 async def generate_suggestions(question: str, answer: str, profile_code: str, mode: str) -> list:
@@ -669,8 +762,10 @@ async def generate_suggestions(question: str, answer: str, profile_code: str, mo
     
     if response:
         suggestions = [s.strip() for s in response.split('\n') if s.strip()]
+        logger.info(f"✅ Сгенерировано {len(suggestions)} предложений")
         return suggestions[:3]
     
+    logger.warning("⚠️ Не удалось сгенерировать предложения, используем стандартные")
     return [
         "Расскажи подробнее",
         "Что ты чувствуешь?",
@@ -690,6 +785,8 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
         logger.error("❌ DEEPGRAM_API_KEY не настроен")
         return None
     
+    logger.info(f"🎤 Распознавание речи из файла: {audio_file_path}")
+    
     headers = {
         "Authorization": f"Token {DEEPGRAM_API_KEY}",
         "Content-Type": "audio/ogg"
@@ -698,6 +795,8 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
     try:
         with open(audio_file_path, 'rb') as audio_file:
             audio_data = audio_file.read()
+        
+        logger.info(f"📊 Размер аудиофайла: {len(audio_data)} байт")
         
         params = {
             "model": "nova-2",
@@ -719,6 +818,7 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
                     data = await response.json()
                     transcript = data['results']['channels'][0]['alternatives'][0]['transcript']
                     logger.info(f"✅ Речь распознана: {len(transcript)} символов")
+                    logger.info(f"📝 Текст: {transcript[:200]}")
                     return transcript
                 else:
                     error_text = await response.text()
@@ -726,6 +826,7 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
                     return None
     except Exception as e:
         logger.error(f"❌ Ошибка распознавания речи: {e}")
+        logger.error(traceback.format_exc())
         return None
 
 
@@ -741,6 +842,8 @@ async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
         logger.error("❌ YANDEX_API_KEY не настроен")
         return None
     
+    logger.info(f"🎤 Синтез речи для текста: {len(text)} символов, режим: {mode}")
+    
     # Выбираем голос в зависимости от режима
     voices = {
         "coach": "filipp",      # Филипп — коуч
@@ -748,6 +851,7 @@ async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
         "trainer": "filipp"      # Филипп — тренер (можно другой голос)
     }
     voice = voices.get(mode, "filipp")
+    logger.info(f"🗣️ Выбран голос: {voice}")
     
     headers = {
         "Authorization": f"Api-Key {YANDEX_API_KEY}",
@@ -755,8 +859,10 @@ async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
     }
     
     # Ограничиваем длину текста (Yandex ограничение)
+    original_length = len(text)
     if len(text) > 5000:
         text = text[:5000] + "..."
+        logger.warning(f"⚠️ Текст обрезан с {original_length} до 5000 символов")
     
     data = {
         "text": text,
@@ -785,4 +891,5 @@ async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
                     return None
     except Exception as e:
         logger.error(f"❌ Ошибка синтеза речи: {e}")
+        logger.error(traceback.format_exc())
         return None
