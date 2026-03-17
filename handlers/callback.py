@@ -5,6 +5,7 @@
 """
 
 import logging
+import asyncio
 from typing import Optional
 
 from maxibot.types import CallbackQuery
@@ -48,8 +49,16 @@ from handlers.questions import (
 # Импорты обработчиков помощи
 from handlers.help import show_help, show_benefits, show_tale
 
-# Импорты обработчиков профиля
-from handlers.profile import show_profile, show_ai_profile, show_psychologist_thought
+# Импорты обработчиков профиля (теперь импортируем все функции)
+from handlers.profile import (
+    show_profile, 
+    show_ai_profile, 
+    show_psychologist_thought,
+    # Добавляем асинхронные версии, если они нужны для прямого вызова
+    show_ai_profile_async,
+    show_psychologist_thought_async,
+    show_final_profile_async
+)
 
 # Импорты обработчиков старта
 from handlers.start import cmd_start
@@ -90,7 +99,6 @@ def restart_test(call: CallbackQuery):
     # Очищаем все данные пользователя
     if user_id in user_data:
         # Сохраняем только базовую информацию
-        old_data = user_data[user_id]
         user_data[user_id] = {
             "perception_type": None,
             "thinking_level": None,
@@ -118,273 +126,305 @@ def restart_test(call: CallbackQuery):
     show_stage_1_intro(call.message, user_id, state_data)
 
 # ============================================
-# ОСНОВНОЙ ОБРАБОТЧИК
+# АСИНХРОННЫЙ ОСНОВНОЙ ОБРАБОТЧИК
 # ============================================
 
-def callback_handler(call: CallbackQuery):
+async def async_callback_handler(call: CallbackQuery):
     """
-    Единый обработчик всех callback'ов
+    Асинхронный обработчик всех callback'ов
     """
     user_id = call.from_user.id
     data = call.data
     
-    logger.info(f"🔔 Обратный вызов: {data} от пользователя {user_id}")
-    
-    # ВРЕМЕННО: Заглушка для MAX API - просто логируем
-    if data.startswith('stage'):
-        logger.info(f"📝 Обработка ответа на этап: {data}")
+    logger.info(f"🔔 Асинхронный обратный вызов: {data} от пользователя {user_id}")
     
     try:
         # ============================================
-        # ПЕРЕЗАПУСК ТЕСТА (ДОБАВЛЕНО!)
+        # ПРОФИЛЬ (асинхронные функции)
         # ============================================
-        if data == "restart_test":
-            restart_test(call)
-        
-        # ============================================
-        # КОНТЕКСТ
-        # ============================================
-        elif data == "start_context":
-            logger.info(f"📝 start_context для пользователя {user_id}")
-            start_context(call.message)
-        
-        # ============================================
-        # ЭТАП 1
-        # ============================================
-        elif data == "show_stage_1_intro":
-            logger.info(f"📢 show_stage_1_intro для пользователя {user_id}")
-            state_data = get_state_data(user_id)
-            show_stage_1_intro(call.message, user_id, state_data)
-        
-        elif data == "start_stage_1":
-            logger.info(f"🎬 start_stage_1 для пользователя {user_id}")
-            state_data = get_state_data(user_id)
-            start_stage_1(call.message, user_id, state_data)
-        
-        elif data.startswith("stage1_"):
-            logger.info(f"📥 stage1 ответ: {data}")
-            state_data = get_state_data(user_id)
-            handle_stage_1_answer(call, user_id, state_data)
-        
-        # ============================================
-        # ЭТАП 2
-        # ============================================
-        elif data == "show_stage_2_intro":
-            logger.info(f"📢 show_stage_2_intro для пользователя {user_id}")
-            state_data = get_state_data(user_id)
-            show_stage_2_intro(call.message, user_id, state_data)
-        
-        elif data == "start_stage_2":
-            logger.info(f"🎬 start_stage_2 для пользователя {user_id}")
-            state_data = get_state_data(user_id)
-            start_stage_2(call.message, user_id, state_data)
-        
-        elif data.startswith("stage2_"):
-            logger.info(f"📥 stage2 ответ: {data}")
-            state_data = get_state_data(user_id)
-            handle_stage_2_answer(call, user_id, state_data)
-        
-        # ============================================
-        # ЭТАП 3
-        # ============================================
-        elif data == "show_stage_3_intro":
-            logger.info(f"📢 show_stage_3_intro для пользователя {user_id}")
-            state_data = get_state_data(user_id)
-            show_stage_3_intro(call.message, user_id, state_data)
-        
-        elif data == "start_stage_3":
-            logger.info(f"🎬 start_stage_3 для пользователя {user_id}")
-            state_data = get_state_data(user_id)
-            start_stage_3(call.message, user_id, state_data)
-        
-        elif data.startswith("stage3_"):
-            logger.info(f"📥 stage3 ответ: {data}")
-            state_data = get_state_data(user_id)
-            handle_stage_3_answer(call, user_id, state_data)
-        
-        # ============================================
-        # ЭТАП 4
-        # ============================================
-        elif data == "show_stage_4_intro":
-            logger.info(f"📢 show_stage_4_intro для пользователя {user_id}")
-            state_data = get_state_data(user_id)
-            show_stage_4_intro(call.message, user_id, state_data)
-        
-        elif data == "start_stage_4":
-            logger.info(f"🎬 start_stage_4 для пользователя {user_id}")
-            state_data = get_state_data(user_id)
-            start_stage_4(call.message, user_id, state_data)
-        
-        elif data.startswith("stage4_"):
-            logger.info(f"📥 stage4 ответ: {data}")
-            state_data = get_state_data(user_id)
-            handle_stage_4_answer(call, user_id, state_data)
-        
-        # ============================================
-        # ЭТАП 5
-        # ============================================
-        elif data == "show_stage_5_intro":
-            logger.info(f"📢 show_stage_5_intro для пользователя {user_id}")
-            state_data = get_state_data(user_id)
-            show_stage_5_intro(call.message, user_id, state_data)
-        
-        elif data == "start_stage_5":
-            logger.info(f"🎬 start_stage_5 для пользователя {user_id}")
-            state_data = get_state_data(user_id)
-            start_stage_5(call.message, user_id, state_data)
-        
-        elif data.startswith("stage5_"):
-            logger.info(f"📥 stage5 ответ: {data}")
-            state_data = get_state_data(user_id)
-            handle_stage_5_answer(call, user_id, state_data)
-        
-        # ============================================
-        # ПОДТВЕРЖДЕНИЕ ПРОФИЛЯ
-        # ============================================
-        elif data == "profile_confirm":
-            logger.info(f"✅ profile_confirm для пользователя {user_id}")
-            profile_confirm(call)
-        
-        elif data == "profile_doubt":
-            logger.info(f"❓ profile_doubt для пользователя {user_id}")
-            profile_doubt(call)
-        
-        elif data == "profile_reject":
-            logger.info(f"🔄 profile_reject для пользователя {user_id}")
-            profile_reject(call)
-        
-        elif data == "goodbye":
-            logger.info(f"👋 goodbye для пользователя {user_id}")
-            handle_goodbye(call)
-        
-        # ============================================
-        # УТОЧНЯЮЩИЕ ВОПРОСЫ
-        # ============================================
-        elif data.startswith("discrepancy_"):
-            logger.info(f"🔍 discrepancy: {data} для пользователя {user_id}")
-            discrepancy = data.replace("discrepancy_", "")
-            handle_discrepancy(call, discrepancy)
-        
-        elif data == "clarify_next":
-            logger.info(f"➡️ clarify_next для пользователя {user_id}")
-            clarify_next(call)
-        
-        elif data.startswith("clarify_answer_"):
-            logger.info(f"❓ clarify answer: {data} для пользователя {user_id}")
-            handle_clarifying_answer(call)
-        
-        # ============================================
-        # РЕЖИМЫ ОБЩЕНИЯ
-        # ============================================
-        elif data == "show_mode_selection":
-            logger.info(f"🎭 show_mode_selection для пользователя {user_id}")
-            show_mode_selection(call.message)
-        
-        elif data.startswith("mode_"):
-            mode = data.replace("mode_", "")
-            logger.info(f"🎭 Выбран режим: {mode} для пользователя {user_id}")
-            show_mode_selected(call.message, mode)
-        
-        elif data == "back_to_mode_selected":
-            logger.info(f"◀️ back_to_mode_selected для пользователя {user_id}")
-            context = user_contexts.get(user_id)
-            if context:
-                show_main_menu_after_mode(call.message, context)
-        
-        # ============================================
-        # КОНТЕКСТ (пол, возраст и т.д.)
-        # ============================================
-        elif data in ["set_gender_male", "set_gender_female", "set_gender_other"]:
-            logger.info(f"👤 Выбор пола: {data} для пользователя {user_id}")
-            handle_context_callback(call)
-        
-        # ============================================
-        # REALITY CHECK
-        # ============================================
-        elif data in [
-            "check_reality", "skip_life_context", "skip_goal_questions",
-            "skip_to_route", "accept_feasibility_plan", "adjust_timeline", "reduce_goal"
-        ]:
-            logger.info(f"🔍 reality check: {data} для пользователя {user_id}")
-            handle_reality_callback(call)
-        
-        # ============================================
-        # ЦЕЛИ И МАРШРУТЫ
-        # ============================================
-        elif data == "show_dynamic_destinations":
-            logger.info(f"🎯 show_dynamic_destinations для пользователя {user_id}")
-            show_dynamic_destinations(call)
-        
-        elif data.startswith("dynamic_dest_"):
-            logger.info(f"🎯 Выбор цели: {data} для пользователя {user_id}")
-            handle_dynamic_destination(call)
-        
-        elif data == "custom_destination":
-            logger.info(f"✏️ custom_destination для пользователя {user_id}")
-            custom_destination(call)
-        
-        elif data == "route_step_done":
-            logger.info(f"✅ route_step_done для пользователя {user_id}")
-            route_step_done(call)
-        
-        # ============================================
-        # ВОПРОСЫ И ПОМОЩЬ
-        # ============================================
-        elif data == "show_help":
-            logger.info(f"❓ show_help для пользователя {user_id}")
-            show_help(call.message)
-        
-        elif data == "show_benefits":
-            logger.info(f"📖 show_benefits для пользователя {user_id}")
-            show_benefits(call.message)
-        
-        elif data == "show_tale":
-            logger.info(f"📚 show_tale для пользователя {user_id}")
-            show_tale(call.message)
-        
-        elif data == "smart_questions":
-            logger.info(f"🤔 smart_questions для пользователя {user_id}")
-            show_smart_questions(call)
-        
-        elif data.startswith("smart_q_"):
-            logger.info(f"❓ smart question ответ: {data} для пользователя {user_id}")
-            handle_smart_question(call)
-        
-        elif data == "ask_pretest":
-            logger.info(f"❓ ask_pretest для пользователя {user_id}")
-            show_question_input(call.message, "pretest")
-        
-        elif data == "ask_question":
-            logger.info(f"❓ ask_question для пользователя {user_id}")
-            show_question_input(call.message, "general")
-        
-        # ============================================
-        # ПРОФИЛЬ
-        # ============================================
-        elif data == "show_profile":
-            logger.info(f"🧠 show_profile для пользователя {user_id}")
-            show_profile(call.message, user_id)
-        
-        elif data == "show_ai_profile":
+        if data == "show_ai_profile":
             logger.info(f"🤖 show_ai_profile для пользователя {user_id}")
-            show_ai_profile(call.message, user_id)
+            await show_ai_profile_async(call.message, user_id)
         
         elif data == "psychologist_thought":
             logger.info(f"🧠 psychologist_thought для пользователя {user_id}")
-            show_psychologist_thought(call.message, user_id)
+            await show_psychologist_thought_async(call.message, user_id)
         
         # ============================================
-        # НЕИЗВЕСТНЫЙ CALLBACK
+        # ОСТАЛЬНЫЕ СИНХРОННЫЕ ОБРАБОТЧИКИ
         # ============================================
         else:
-            logger.warning(f"⚠️ Неизвестный callback: {data} от пользователя {user_id}")
-            handle_unknown_callback(call)
+            # Для всех остальных callback'ов используем синхронные функции
+            await handle_sync_callback(call)
             
     except Exception as e:
-        logger.error(f"❌ Ошибка в callback_handler для {data}: {e}")
+        logger.error(f"❌ Ошибка в async_callback_handler для {data}: {e}")
         import traceback
         traceback.print_exc()
         handle_error_callback(call, e)
+
+
+async def handle_sync_callback(call: CallbackQuery):
+    """Обработчик синхронных callback'ов"""
+    user_id = call.from_user.id
+    data = call.data
+    
+    # ============================================
+    # ПЕРЕЗАПУСК ТЕСТА
+    # ============================================
+    if data == "restart_test":
+        restart_test(call)
+    
+    # ============================================
+    # КОНТЕКСТ
+    # ============================================
+    elif data == "start_context":
+        logger.info(f"📝 start_context для пользователя {user_id}")
+        start_context(call.message)
+    
+    # ============================================
+    # ЭТАП 1
+    # ============================================
+    elif data == "show_stage_1_intro":
+        logger.info(f"📢 show_stage_1_intro для пользователя {user_id}")
+        state_data = get_state_data(user_id)
+        show_stage_1_intro(call.message, user_id, state_data)
+    
+    elif data == "start_stage_1":
+        logger.info(f"🎬 start_stage_1 для пользователя {user_id}")
+        state_data = get_state_data(user_id)
+        start_stage_1(call.message, user_id, state_data)
+    
+    elif data.startswith("stage1_"):
+        logger.info(f"📥 stage1 ответ: {data}")
+        state_data = get_state_data(user_id)
+        handle_stage_1_answer(call, user_id, state_data)
+    
+    # ============================================
+    # ЭТАП 2
+    # ============================================
+    elif data == "show_stage_2_intro":
+        logger.info(f"📢 show_stage_2_intro для пользователя {user_id}")
+        state_data = get_state_data(user_id)
+        show_stage_2_intro(call.message, user_id, state_data)
+    
+    elif data == "start_stage_2":
+        logger.info(f"🎬 start_stage_2 для пользователя {user_id}")
+        state_data = get_state_data(user_id)
+        start_stage_2(call.message, user_id, state_data)
+    
+    elif data.startswith("stage2_"):
+        logger.info(f"📥 stage2 ответ: {data}")
+        state_data = get_state_data(user_id)
+        handle_stage_2_answer(call, user_id, state_data)
+    
+    # ============================================
+    # ЭТАП 3
+    # ============================================
+    elif data == "show_stage_3_intro":
+        logger.info(f"📢 show_stage_3_intro для пользователя {user_id}")
+        state_data = get_state_data(user_id)
+        show_stage_3_intro(call.message, user_id, state_data)
+    
+    elif data == "start_stage_3":
+        logger.info(f"🎬 start_stage_3 для пользователя {user_id}")
+        state_data = get_state_data(user_id)
+        start_stage_3(call.message, user_id, state_data)
+    
+    elif data.startswith("stage3_"):
+        logger.info(f"📥 stage3 ответ: {data}")
+        state_data = get_state_data(user_id)
+        handle_stage_3_answer(call, user_id, state_data)
+    
+    # ============================================
+    # ЭТАП 4
+    # ============================================
+    elif data == "show_stage_4_intro":
+        logger.info(f"📢 show_stage_4_intro для пользователя {user_id}")
+        state_data = get_state_data(user_id)
+        show_stage_4_intro(call.message, user_id, state_data)
+    
+    elif data == "start_stage_4":
+        logger.info(f"🎬 start_stage_4 для пользователя {user_id}")
+        state_data = get_state_data(user_id)
+        start_stage_4(call.message, user_id, state_data)
+    
+    elif data.startswith("stage4_"):
+        logger.info(f"📥 stage4 ответ: {data}")
+        state_data = get_state_data(user_id)
+        handle_stage_4_answer(call, user_id, state_data)
+    
+    # ============================================
+    # ЭТАП 5
+    # ============================================
+    elif data == "show_stage_5_intro":
+        logger.info(f"📢 show_stage_5_intro для пользователя {user_id}")
+        state_data = get_state_data(user_id)
+        show_stage_5_intro(call.message, user_id, state_data)
+    
+    elif data == "start_stage_5":
+        logger.info(f"🎬 start_stage_5 для пользователя {user_id}")
+        state_data = get_state_data(user_id)
+        start_stage_5(call.message, user_id, state_data)
+    
+    elif data.startswith("stage5_"):
+        logger.info(f"📥 stage5 ответ: {data}")
+        state_data = get_state_data(user_id)
+        handle_stage_5_answer(call, user_id, state_data)
+    
+    # ============================================
+    # ПОДТВЕРЖДЕНИЕ ПРОФИЛЯ
+    # ============================================
+    elif data == "profile_confirm":
+        logger.info(f"✅ profile_confirm для пользователя {user_id}")
+        profile_confirm(call)
+    
+    elif data == "profile_doubt":
+        logger.info(f"❓ profile_doubt для пользователя {user_id}")
+        profile_doubt(call)
+    
+    elif data == "profile_reject":
+        logger.info(f"🔄 profile_reject для пользователя {user_id}")
+        profile_reject(call)
+    
+    elif data == "goodbye":
+        logger.info(f"👋 goodbye для пользователя {user_id}")
+        handle_goodbye(call)
+    
+    # ============================================
+    # УТОЧНЯЮЩИЕ ВОПРОСЫ
+    # ============================================
+    elif data.startswith("discrepancy_"):
+        logger.info(f"🔍 discrepancy: {data} для пользователя {user_id}")
+        discrepancy = data.replace("discrepancy_", "")
+        handle_discrepancy(call, discrepancy)
+    
+    elif data == "clarify_next":
+        logger.info(f"➡️ clarify_next для пользователя {user_id}")
+        clarify_next(call)
+    
+    elif data.startswith("clarify_answer_"):
+        logger.info(f"❓ clarify answer: {data} для пользователя {user_id}")
+        handle_clarifying_answer(call)
+    
+    # ============================================
+    # РЕЖИМЫ ОБЩЕНИЯ
+    # ============================================
+    elif data == "show_mode_selection":
+        logger.info(f"🎭 show_mode_selection для пользователя {user_id}")
+        show_mode_selection(call.message)
+    
+    elif data.startswith("mode_"):
+        mode = data.replace("mode_", "")
+        logger.info(f"🎭 Выбран режим: {mode} для пользователя {user_id}")
+        show_mode_selected(call.message, mode)
+    
+    elif data == "back_to_mode_selected":
+        logger.info(f"◀️ back_to_mode_selected для пользователя {user_id}")
+        context = user_contexts.get(user_id)
+        if context:
+            show_main_menu_after_mode(call.message, context)
+    
+    # ============================================
+    # КОНТЕКСТ (пол, возраст и т.д.)
+    # ============================================
+    elif data in ["set_gender_male", "set_gender_female", "set_gender_other"]:
+        logger.info(f"👤 Выбор пола: {data} для пользователя {user_id}")
+        handle_context_callback(call)
+    
+    # ============================================
+    # REALITY CHECK
+    # ============================================
+    elif data in [
+        "check_reality", "skip_life_context", "skip_goal_questions",
+        "skip_to_route", "accept_feasibility_plan", "adjust_timeline", "reduce_goal"
+    ]:
+        logger.info(f"🔍 reality check: {data} для пользователя {user_id}")
+        handle_reality_callback(call)
+    
+    # ============================================
+    # ЦЕЛИ И МАРШРУТЫ
+    # ============================================
+    elif data == "show_dynamic_destinations":
+        logger.info(f"🎯 show_dynamic_destinations для пользователя {user_id}")
+        show_dynamic_destinations(call)
+    
+    elif data.startswith("dynamic_dest_"):
+        logger.info(f"🎯 Выбор цели: {data} для пользователя {user_id}")
+        handle_dynamic_destination(call)
+    
+    elif data == "custom_destination":
+        logger.info(f"✏️ custom_destination для пользователя {user_id}")
+        custom_destination(call)
+    
+    elif data == "route_step_done":
+        logger.info(f"✅ route_step_done для пользователя {user_id}")
+        route_step_done(call)
+    
+    # ============================================
+    # ВОПРОСЫ И ПОМОЩЬ
+    # ============================================
+    elif data == "show_help":
+        logger.info(f"❓ show_help для пользователя {user_id}")
+        show_help(call.message)
+    
+    elif data == "show_benefits":
+        logger.info(f"📖 show_benefits для пользователя {user_id}")
+        show_benefits(call.message)
+    
+    elif data == "show_tale":
+        logger.info(f"📚 show_tale для пользователя {user_id}")
+        show_tale(call.message)
+    
+    elif data == "smart_questions":
+        logger.info(f"🤔 smart_questions для пользователя {user_id}")
+        show_smart_questions(call)
+    
+    elif data.startswith("smart_q_"):
+        logger.info(f"❓ smart question ответ: {data} для пользователя {user_id}")
+        handle_smart_question(call)
+    
+    elif data == "ask_pretest":
+        logger.info(f"❓ ask_pretest для пользователя {user_id}")
+        show_question_input(call.message, "pretest")
+    
+    elif data == "ask_question":
+        logger.info(f"❓ ask_question для пользователя {user_id}")
+        show_question_input(call.message, "general")
+    
+    # ============================================
+    # ПРОФИЛЬ (синхронные версии для обратной совместимости)
+    # ============================================
+    elif data == "show_profile":
+        logger.info(f"🧠 show_profile для пользователя {user_id}")
+        show_profile(call.message, user_id)
+    
+    # ============================================
+    # НЕИЗВЕСТНЫЙ CALLBACK
+    # ============================================
+    else:
+        logger.warning(f"⚠️ Неизвестный callback: {data} от пользователя {user_id}")
+        handle_unknown_callback(call)
+
+
+# ============================================
+# СИНХРОННАЯ ОБЕРТКА ДЛЯ ОБРАТНОЙ СОВМЕСТИМОСТИ
+# ============================================
+
+def callback_handler(call: CallbackQuery):
+    """
+    Синхронная обертка для асинхронного обработчика callback'ов
+    """
+    try:
+        # Пытаемся получить текущий цикл событий
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # Нет запущенного цикла - создаем новый и запускаем
+        asyncio.run(async_callback_handler(call))
+    else:
+        # Есть запущенный цикл - создаем задачу
+        # Важно: не ждем результат, чтобы не блокировать
+        asyncio.create_task(async_callback_handler(call))
 
 
 # ============================================
