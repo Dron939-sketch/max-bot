@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики профиля пользователя для MAX
-Версия 2.0 - ПОЛНАЯ с preliminary profile
+Версия 2.1 - ИСПРАВЛЕННОЕ ФОРМАТИРОВАНИЕ
 """
 
 import logging
@@ -19,8 +19,8 @@ from state import user_data, user_contexts, get_state, set_state, TestStates
 from services import generate_ai_profile, generate_psychologist_thought
 from profiles import VECTORS, DILTS_LEVELS, LEVEL_PROFILES
 from formatters import (
-    bold, format_profile_text, format_psychologist_text,
-    clean_text_for_safe_display, italic
+    bold, italic, format_profile_text, format_psychologist_text,
+    clean_text_for_safe_display
 )
 
 logger = logging.getLogger(__name__)
@@ -339,7 +339,7 @@ def show_preliminary_profile(message: Message, user_id: int):
         message,
         text,
         reply_markup=keyboard,
-        parse_mode='HTML',
+        parse_mode=None,  # 👈 УБРАЛИ HTML
         delete_previous=True
     )
     
@@ -356,7 +356,6 @@ async def show_ai_profile_async(message: Message, user_id: int):
     context = user_contexts.get(user_id)
     user_name = context.name if context and context.name else ""
     
-    # ✅ УБРАН await перед safe_send_message
     status_msg = safe_send_message(
         message,
         "🧠 Анализирую данные и генерирую ваш психологический портрет...\n\nЭто займёт несколько секунд.",
@@ -380,7 +379,6 @@ async def show_ai_profile_async(message: Message, user_id: int):
         
         if status_msg:
             try:
-                # ✅ УБРАН await перед safe_delete_message
                 safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
@@ -433,23 +431,22 @@ async def show_ai_profile_async(message: Message, user_id: int):
 
 👇 {bold('Что дальше?')}
 """
-                        # ✅ УБРАН await перед safe_send_message
                         safe_send_message(
-                            message,
+                            message if i == 0 else None,
                             text,
-                            reply_markup=keyboard,
-                            parse_mode='HTML',
-                            delete_previous=(i == 0)  # удаляем предыдущие только для первой части
+                            reply_markup=keyboard if i == len(formatted_parts) - 1 else None,
+                            parse_mode=None,  # 👈 УБРАЛИ HTML
+                            delete_previous=(i == 0),
+                            chat_id=chat_id if i > 0 else None
                         )
                         logger.info(f"✅ Отправлена последняя часть {i+1} с кнопками")
                     else:
-                        part_text = f"{part}\n\n<code>✉️ Часть {i+1}/{len(formatted_parts)}</code>"
+                        part_text = part
                         
-                        # ✅ УБРАН await перед safe_send_message
                         safe_send_message(
                             None,
                             part_text,
-                            parse_mode='HTML',
+                            parse_mode=None,  # 👈 УБРАЛИ HTML
                             delete_previous=False,
                             chat_id=chat_id
                         )
@@ -483,7 +480,7 @@ async def show_ai_profile_async(message: Message, user_id: int):
             )
             
             text = f"""
-⚠️ <b>Не удалось сгенерировать расширенный профиль.</b> Показываю стандартный:
+⚠️ Не удалось сгенерировать расширенный профиль. Показываю стандартный:
 
 {profile_text}
 
@@ -496,13 +493,12 @@ async def show_ai_profile_async(message: Message, user_id: int):
         
         if status_msg:
             try:
-                # ✅ УБРАН await перед safe_delete_message
                 safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
         text = f"""
-⚠️ <b>Ошибка генерации профиля</b>
+⚠️ Ошибка генерации профиля
 
 Не удалось создать расширенный психологический портрет.
 Пожалуйста, попробуйте позже или используйте стандартный профиль.
@@ -518,12 +514,11 @@ async def show_ai_profile_async(message: Message, user_id: int):
     )
     keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
     
-    # ✅ УБРАН await перед safe_send_message
     safe_send_message(
         message,
         text,
         reply_markup=keyboard,
-        parse_mode='HTML',
+        parse_mode=None,  # 👈 УБРАЛИ HTML
         delete_previous=True
     )
 
@@ -534,7 +529,6 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
     context = user_contexts.get(user_id)
     user_name = context.name if context and context.name else ""
     
-    # ✅ УБРАН await перед safe_send_message
     status_msg = safe_send_message(
         message,
         "🧠 Анализирую ваш профиль и формирую мысли психолога...\n\nЭто займёт несколько секунд.",
@@ -554,7 +548,6 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
         
         if status_msg:
             try:
-                # ✅ УБРАН await перед safe_delete_message
                 safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
@@ -596,28 +589,25 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
 
 👇 {bold('Что дальше?')}
 """
-                        # ✅ УБРАН await перед safe_send_message
                         safe_send_message(
-                            message,
+                            message if i == 0 else None,
                             text,
                             reply_markup=keyboard,
-                            parse_mode='HTML',
-                            delete_previous=(i == 0)
+                            parse_mode=None,  # 👈 УБРАЛИ HTML
+                            delete_previous=(i == 0),
+                            chat_id=chat_id if i > 0 else None
                         )
                         logger.info(f"✅ Отправлена последняя часть мысли {i+1} с кнопками")
                     else:
                         part_text = f"""
-🧠 {bold('МЫСЛИ ПСИХОЛОГА')} <code>(часть {i+1}/{len(formatted_parts)})</code>
+🧠 {bold('МЫСЛИ ПСИХОЛОГА')} (часть {i+1}/{len(formatted_parts)})
 
 {part}
-
-<code>✉️ Продолжение следует...</code>
 """
-                        # ✅ УБРАН await перед safe_send_message
                         safe_send_message(
                             None,
                             part_text,
-                            parse_mode='HTML',
+                            parse_mode=None,  # 👈 УБРАЛИ HTML
                             delete_previous=False,
                             chat_id=chat_id
                         )
@@ -638,13 +628,13 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
 
 Анализируя ваш профиль, я вижу интересную динамику...
 
-<b>Ключевой паттерн:</b> Вы склонны анализировать ситуации глубоко, но иногда это мешает быстрым решениям.
+**Ключевой паттерн:** Вы склонны анализировать ситуации глубоко, но иногда это мешает быстрым решениям.
 
-<b>Петля:</b> Анализ → Сомнения → Ещё больший анализ.
+**Петля:** Анализ → Сомнения → Ещё больший анализ.
 
-<b>Точка входа:</b> Попробуйте в следующий раз, когда будете анализировать, задать себе вопрос: "Что я чувствую прямо сейчас?"
+**Точка входа:** Попробуйте в следующий раз, когда будете анализировать, задать себе вопрос: "Что я чувствую прямо сейчас?"
 
-<b>Прогноз:</b> Если продолжите в том же духе, рискуете упустить несколько хороших возможностей.
+**Прогноз:** Если продолжите в том же духе, рискуете упустить несколько хороших возможностей.
 
 👇 {bold('Что дальше?')}
 """
@@ -654,13 +644,12 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
         
         if status_msg:
             try:
-                # ✅ УБРАН await перед safe_delete_message
                 safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
         text = f"""
-⚠️ <b>Ошибка генерации</b>
+⚠️ Ошибка генерации
 
 Не удалось сформировать мысли психолога.
 Пожалуйста, попробуйте позже.
@@ -673,12 +662,11 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
     keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
     
-    # ✅ УБРАН await перед safe_send_message
     safe_send_message(
         message,
         text,
         reply_markup=keyboard,
-        parse_mode='HTML',
+        parse_mode=None,  # 👈 УБРАЛИ HTML
         delete_previous=True
     )
 
@@ -689,7 +677,6 @@ async def show_final_profile_async(message: Message, user_id: int):
     
     if user_id in _profile_generation_in_progress and _profile_generation_in_progress[user_id]:
         logger.info(f"⏳ Генерация профиля уже выполняется для пользователя {user_id}")
-        # ✅ УБРАН await перед safe_send_message
         safe_send_message(
             message,
             "⏳ Ваш профиль уже генерируется, пожалуйста, подождите...",
@@ -704,7 +691,6 @@ async def show_final_profile_async(message: Message, user_id: int):
         await show_ai_profile_async(message, user_id)
         return
     
-    # ✅ УБРАН await перед safe_send_message
     status_msg = safe_send_message(
         message,
         "🧠 Анализирую данные...\n\n"
@@ -741,7 +727,6 @@ async def show_final_profile_async(message: Message, user_id: int):
         
         if status_msg:
             try:
-                # ✅ УБРАН await перед safe_delete_message
                 safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
@@ -812,7 +797,7 @@ def show_profile(message: Message, user_id: int):
         message,
         text,
         reply_markup=keyboard,
-        parse_mode='HTML',
+        parse_mode=None,  # 👈 УБРАЛИ HTML
         delete_previous=True
     )
 
@@ -881,7 +866,7 @@ def show_old_final_profile(message: Message, user_id: int, status_msg: Optional[
         message,
         text,
         reply_markup=keyboard,
-        parse_mode='HTML',
+        parse_mode=None,  # 👈 УБРАЛИ HTML
         delete_previous=True
     )
 
@@ -896,5 +881,5 @@ __all__ = [
     'show_psychologist_thought',
     'show_final_profile',
     'show_old_final_profile',
-    'show_preliminary_profile'  # ✅ ДОБАВЛЕНО
+    'show_preliminary_profile'
 ]
