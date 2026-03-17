@@ -18,44 +18,46 @@ from message_utils import safe_send_message, safe_edit_message
 from keyboards import get_back_keyboard
 from hypno_module import TherapeuticTales
 
+# ✅ ИСПРАВЛЕНО: импортируем из state, а не из main
+from state import (
+    user_data, user_state_data, user_contexts, user_names, user_states,
+    get_state, set_state, get_state_data, update_state_data, clear_state
+)
+
 logger = logging.getLogger(__name__)
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================
 
-def get_user_data(user_id: int) -> Dict[str, Any]:
+def get_user_data_dict(user_id: int) -> Dict[str, Any]:
     """Получает данные пользователя"""
-    from main import user_data
     if user_id not in user_data:
         user_data[user_id] = {}
     return user_data[user_id]
 
-def get_user_state_data(user_id: int) -> Dict[str, Any]:
+def get_user_state_data_dict(user_id: int) -> Dict[str, Any]:
     """Получает данные состояния пользователя"""
-    from main import user_state_data
     if user_id not in user_state_data:
         user_state_data[user_id] = {}
     return user_state_data[user_id]
 
-def get_user_context(user_id: int):
+def get_user_context_obj(user_id: int):
     """Получает контекст пользователя"""
-    from main import user_contexts
     return user_contexts.get(user_id)
 
-def get_user_names(user_id: int) -> str:
+def get_user_name(user_id: int) -> str:
     """Получает имя пользователя"""
-    from main import user_names
     return user_names.get(user_id, "друг")
 
-def is_test_completed(user_data: dict) -> bool:
+def is_test_completed_check(user_data_dict: dict) -> bool:
     """Проверяет, завершен ли тест"""
-    if user_data.get("profile_data"):
+    if user_data_dict.get("profile_data"):
         return True
-    if user_data.get("ai_generated_profile"):
+    if user_data_dict.get("ai_generated_profile"):
         return True
     required_minimal = ["perception_type", "thinking_level", "behavioral_levels"]
-    if all(field in user_data for field in required_minimal):
+    if all(field in user_data_dict for field in required_minimal):
         return True
     return False
 
@@ -107,7 +109,7 @@ def show_help(call: CallbackQuery):
     Показывает меню помощи с категориями
     """
     user_id = call.from_user.id
-    context = get_user_context(user_id)
+    context = get_user_context_obj(user_id)
     
     # Проверяем, есть ли контекст для персонализации
     greeting = ""
@@ -149,7 +151,7 @@ def handle_help_category(call: CallbackQuery, category: str):
     Обрабатывает выбор категории помощи
     """
     user_id = call.from_user.id
-    context = get_user_context(user_id)
+    context = get_user_context_obj(user_id)
     
     # Тексты для разных категорий
     category_texts = {
@@ -257,10 +259,9 @@ def handle_help_category(call: CallbackQuery, category: str):
         delete_previous=True
     )
     
-    # Устанавливаем состояние ожидания вопроса с контекстом категории
-    from main import user_states
+    # ✅ ИСПРАВЛЕНО: используем state вместо main
     user_states[user_id] = "awaiting_question"
-    from main import user_state_data
+    
     if user_id not in user_state_data:
         user_state_data[user_id] = {}
     user_state_data[user_id]["question_context"] = category
@@ -274,13 +275,13 @@ def show_tale(call: CallbackQuery):
     Показывает случайную терапевтическую сказку
     """
     user_id = call.from_user.id
-    context = get_user_context(user_id)
-    user_data = get_user_data(user_id)
+    context = get_user_context_obj(user_id)
+    user_data_dict = get_user_data_dict(user_id)
     
     # Определяем текущую проблему на основе профиля
     scores = {}
     for k in ["СБ", "ТФ", "УБ", "ЧВ"]:
-        levels = user_data.get("behavioral_levels", {}).get(k, [])
+        levels = user_data_dict.get("behavioral_levels", {}).get(k, [])
         scores[k] = sum(levels) / len(levels) if levels else 3.0
     
     # Находим самый слабый вектор
@@ -300,7 +301,10 @@ def show_tale(call: CallbackQuery):
         issue = "рост"
     
     # Получаем сказку
-    tale = tales.get_tale_for_issue(issue)
+    try:
+        tale = tales.get_tale_for_issue(issue)
+    except:
+        tale = None
     
     if not tale:
         # Если сказка не найдена, используем заглушку
@@ -385,10 +389,10 @@ def process_help_question(message, user_id: int, text: str, category: str):
     """
     Обрабатывает вопрос, заданный через категорию помощи
     """
-    user_data = get_user_data(user_id)
+    user_data_dict = get_user_data_dict(user_id)
     
     # Проверяем, завершен ли тест
-    if not is_test_completed(user_data):
+    if not is_test_completed_check(user_data_dict):
         # Если тест не пройден, предлагаем пройти
         response = f"""
 Спасибо за вопрос в категории "{category}".
@@ -422,7 +426,7 @@ def process_help_question(message, user_id: int, text: str, category: str):
         return
     
     # Если тест пройден, используем режим для ответа
-    from .questions import process_text_question
+    from handlers.questions import process_text_question
     process_text_question(message, user_id, text)
 
 
