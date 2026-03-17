@@ -325,12 +325,14 @@ def show_stage_1_intro(message, user_id: int, state_data: dict):
     
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_1"))
+    # ✅ МЕНЯЕМ ЭТУ СТРОКУ:
+    keyboard.add(InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_context"))
     
     safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     state_data["stage"] = 1
     state_data["stage1_current"] = 0
     logger.info(f"✅ stage1 инициализирован, stage1_current=0")
-
+    
 def start_stage_1(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 1"""
     logger.info(f"🎬 start_stage_1 для user {user_id}")
