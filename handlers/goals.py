@@ -993,7 +993,8 @@ async def build_route(call: CallbackQuery, state_data: Dict, goal_id: str):
         return
     
     # Отправляем статусное сообщение
-    status_msg = await safe_send_message(
+    # ✅ ИСПРАВЛЕНО: убран await
+    status_msg = safe_send_message(
         call.message,
         f"🧠 Строю маршрут к цели: {bold(goal_info.get('name'))}...\n\nЭто займёт несколько секунд.",
         delete_previous=True
