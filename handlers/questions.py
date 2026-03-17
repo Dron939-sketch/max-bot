@@ -3,7 +3,7 @@
 """
 ОБЪЕДИНЕННЫЙ ФАЙЛ: Обработчики вопросов тестирования И умных вопросов
 Версия для MAX - ПОЛНАЯ с голосовой поддержкой
-ИСПРАВЛЕНО: убраны HTML-теги, используется Markdown
+ИСПРАВЛЕНО: убраны HTML-теги, используется Markdown, исправлено дублирование сообщений, добавлена блокировка
 """
 
 import logging
@@ -56,6 +56,21 @@ from question_analyzer import create_analyzer_from_user_data
 from handlers.voice import send_voice_to_max
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# БЛОКИРОВКА ДЛЯ ПРЕДОТВРАЩЕНИЯ ДВОЙНОЙ ОБРАБОТКИ
+# ============================================
+
+# Словарь для блокировки одновременной обработки запросов одного пользователя
+_processing_lock = {}
+
+def is_processing(user_id: int) -> bool:
+    """Проверяет, обрабатывается ли уже запрос пользователя"""
+    return _processing_lock.get(user_id, False)
+
+def set_processing(user_id: int, value: bool):
+    """Устанавливает флаг обработки"""
+    _processing_lock[user_id] = value
 
 # ============================================
 # ЧАСТЬ 1: ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -1422,33 +1437,58 @@ def show_question_input(call: CallbackQuery):
     set_state(user_id, TestStates.awaiting_question)
 
 
-async def process_text_question_async(message: Message, user_id: int, text: str):
+async def process_text_question_async(
+    message: Message, 
+    user_id: int, 
+    text: str, 
+    show_question_text: bool = True
+):
     """
     Асинхронная обработка текстового вопроса пользователя
-    """
-    user_data_dict = get_user_data_dict(user_id)
     
-    # Проверяем, завершен ли тест
-    if not is_test_completed_check(user_data_dict):
+    Args:
+        message: сообщение
+        user_id: ID пользователя
+        text: текст вопроса
+        show_question_text: показывать ли текст вопроса (False для голосовых, где уже показали)
+    """
+    # ✅ Проверяем, не обрабатывается ли уже запрос
+    if is_processing(user_id):
+        logger.warning(f"⚠️ Запрос от пользователя {user_id} уже обрабатывается, пропускаем")
         await safe_send_message(
             message,
-            "❓ Сначала нужно пройти тест. Используйте /start",
+            "⏳ Ваш предыдущий вопрос еще обрабатывается. Пожалуйста, подождите...",
             delete_previous=True
         )
         return
     
-    # Отправляем статусное сообщение
-    status_msg = await safe_send_message(
-        message,
-        "🎙 Думаю над ответом...",
-        delete_previous=True
-    )
+    # ✅ Устанавливаем блокировку
+    set_processing(user_id, True)
     
-    context_obj = get_user_context_obj(user_id)
-    mode_name = context_obj.communication_mode if context_obj else "coach"
-    
-    # Формируем промпт для ИИ
-    prompt = f"""
+    try:
+        user_data_dict = get_user_data_dict(user_id)
+        
+        # Проверяем, завершен ли тест
+        if not is_test_completed_check(user_data_dict):
+            await safe_send_message(
+                message,
+                "❓ Сначала нужно пройти тест. Используйте /start",
+                delete_previous=True
+            )
+            return
+        
+        # Отправляем статусное сообщение
+        status_msg = await safe_send_message(
+            message,
+            "🎙 Думаю над ответом...",
+            delete_previous=True
+        )
+        
+        context_obj = get_user_context_obj(user_id)
+        mode_name = context_obj.communication_mode if context_obj else "coach"
+        
+        # Формируем промпт для ИИ
+        prompt = f"""
 Ты - {COMMUNICATION_MODES[mode_name]['name']} Фреди. Ты общаешься с пользователем.
 
 ❗️ВАЖНЕЙШИЕ ПРАВИЛА ДЛЯ ТВОИХ ОТВЕТОВ:
@@ -1474,63 +1514,75 @@ async def process_text_question_async(message: Message, user_id: int, text: str)
 
 Напиши свой ответ ТОЛЬКО ТЕКСТОМ, готовым для озвучивания.
 """
-    
-    # Получаем ответ от ИИ
-    response = await call_deepseek(prompt, max_tokens=1000)
-    
-    if not response:
-        response = "Извините, я немного задумался. Можете повторить вопрос?"
-    
-    # Сохраняем в историю
-    history = user_data_dict.get('history', [])
-    history.append({"role": "user", "content": text})
-    history.append({"role": "assistant", "content": response})
-    user_data_dict["history"] = history
-    
-    # Очищаем ответ от форматирования для отображения
-    clean_response = clean_text_for_safe_display(response)
-    
-    # Клавиатура
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(
-        InlineKeyboardButton("🎤 ЗАДАТЬ ЕЩЁ", callback_data="ask_question"),
-        InlineKeyboardButton("🎯 К ЦЕЛИ", callback_data="show_dynamic_destinations")
-    )
-    keyboard.row(InlineKeyboardButton("🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"))
-    keyboard.row(InlineKeyboardButton("◀️ К ПОРТРЕТУ", callback_data="show_results"))
-    
-    # Удаляем статусное сообщение
-    if status_msg:
+        
+        # Получаем ответ от ИИ
+        response = await call_deepseek(prompt, max_tokens=1000)
+        
+        if not response:
+            response = "Извините, я немного задумался. Можете повторить вопрос?"
+        
+        # Сохраняем в историю
+        history = user_data_dict.get('history', [])
+        history.append({"role": "user", "content": text})
+        history.append({"role": "assistant", "content": response})
+        user_data_dict["history"] = history
+        
+        # Очищаем ответ от форматирования для отображения
+        clean_response = clean_text_for_safe_display(response)
+        
+        # Клавиатура
+        keyboard = InlineKeyboardMarkup()
+        keyboard.row(
+            InlineKeyboardButton("🎤 ЗАДАТЬ ЕЩЁ", callback_data="ask_question"),
+            InlineKeyboardButton("🎯 К ЦЕЛИ", callback_data="show_dynamic_destinations")
+        )
+        keyboard.row(InlineKeyboardButton("🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"))
+        keyboard.row(InlineKeyboardButton("◀️ К ПОРТРЕТУ", callback_data="show_results"))
+        
+        # Удаляем статусное сообщение
+        if status_msg:
+            try:
+                await safe_delete_message(message.chat.id, status_msg.message_id)
+            except:
+                pass
+        
+        # ПОКАЗЫВАЕМ ТЕКСТ ВОПРОСА ТОЛЬКО ЕСЛИ НУЖНО
+        if show_question_text:
+            await safe_send_message(
+                message,
+                f"📝 **Вы сказали:**\n{text}",
+                delete_previous=False  # не удаляем ничего, просто отправляем
+            )
+        
+        # ОТПРАВЛЯЕМ ТЕКСТОВЫЙ ОТВЕТ
+        await safe_send_message(
+            message,
+            f"💭 **Ответ**\n\n{clean_response}",
+            reply_markup=keyboard,
+            parse_mode=None,
+            delete_previous=not show_question_text  # удаляем предыдущие только если не показывали вопрос
+        )
+        
+        # Генерируем и отправляем голосовой ответ
         try:
-            await safe_delete_message(message.chat.id, status_msg.message_id)
-        except:
-            pass
-    
-    # ✅ ОТПРАВЛЯЕМ ТЕКСТОВЫЙ ОТВЕТ
-    await safe_send_message(
-        message,
-        f"💭 **Ответ**\n\n{clean_response}",
-        reply_markup=keyboard,
-        parse_mode=None,
-        delete_previous=True
-    )
-    
-    # ✅ Генерируем и отправляем голосовой ответ
-    try:
-        audio_data = await text_to_speech(response, mode_name)
-        if audio_data:
-            success = await send_voice_to_max(message.chat.id, audio_data)
-            if success:
-                logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
+            audio_data = await text_to_speech(response, mode_name)
+            if audio_data:
+                success = await send_voice_to_max(message.chat.id, audio_data)
+                if success:
+                    logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
+                else:
+                    logger.warning(f"⚠️ Не удалось отправить голос пользователю {user_id}")
             else:
-                logger.warning(f"⚠️ Не удалось отправить голос пользователю {user_id}")
-        else:
-            logger.warning(f"⚠️ Не удалось сгенерировать голос для пользователя {user_id}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка при отправке голоса: {e}", exc_info=True)
-    
-    # Сбрасываем состояние
-    set_state(user_id, TestStates.results)
+                logger.warning(f"⚠️ Не удалось сгенерировать голос для пользователя {user_id}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при отправке голоса: {e}", exc_info=True)
+        
+        # Сбрасываем состояние
+        set_state(user_id, TestStates.results)
+        
+    finally:
+        # ✅ ВАЖНО: Снимаем блокировку в любом случае
+        set_processing(user_id, False)
 
 
 async def process_voice_message_async(message: Message, user_id: int, file_path: str):
@@ -1580,15 +1632,8 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
             except:
                 pass
         
-        # ✅ Отправляем текст, что распознали
-        await safe_send_message(
-            message,
-            f"📝 **Вы сказали:**\n{recognized_text}",
-            delete_previous=True
-        )
-        
-        # ✅ Обрабатываем как обычный вопрос
-        await process_text_question_async(message, user_id, recognized_text)
+        # Обрабатываем как обычный вопрос, но НЕ показываем текст вопроса повторно
+        await process_text_question_async(message, user_id, recognized_text, show_question_text=False)
         
     except Exception as e:
         logger.error(f"Ошибка при обработке голосового сообщения: {e}")
