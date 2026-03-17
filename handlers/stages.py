@@ -1350,12 +1350,15 @@ def update_profile_with_clarifications(message, user_id: int):
 
 
 # ============================================
-# ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ
+# ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ (ИСПРАВЛЕНО)
 # ============================================
 
 def show_stage_5_intro(message, user_id: int, state_data: dict):
     """Экран перед 5-м этапом"""
     logger.info(f"📢 show_stage_5_intro для user {user_id}")
+    
+    # ✅ ВАЖНО: устанавливаем состояние
+    set_state(user_id, TestStates.stage_5)
     
     intro_text = f"""
 🧠 <b>ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ</b>
