@@ -356,7 +356,8 @@ async def show_ai_profile_async(message: Message, user_id: int):
     context = user_contexts.get(user_id)
     user_name = context.name if context and context.name else ""
     
-    status_msg = await safe_send_message(
+    # ✅ УБРАН await перед safe_send_message
+    status_msg = safe_send_message(
         message,
         "🧠 Анализирую данные и генерирую ваш психологический портрет...\n\nЭто займёт несколько секунд.",
         delete_previous=True
@@ -379,7 +380,8 @@ async def show_ai_profile_async(message: Message, user_id: int):
         
         if status_msg:
             try:
-                await safe_delete_message(message.chat.id, status_msg.message_id)
+                # ✅ УБРАН await перед safe_delete_message
+                safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
@@ -431,8 +433,8 @@ async def show_ai_profile_async(message: Message, user_id: int):
 
 👇 {bold('Что дальше?')}
 """
-                        # Для последней части используем message и клавиатуру
-                        await safe_send_message(
+                        # ✅ УБРАН await перед safe_send_message
+                        safe_send_message(
                             message,
                             text,
                             reply_markup=keyboard,
@@ -443,8 +445,8 @@ async def show_ai_profile_async(message: Message, user_id: int):
                     else:
                         part_text = f"{part}\n\n<code>✉️ Часть {i+1}/{len(formatted_parts)}</code>"
                         
-                        # Для промежуточных частей
-                        await safe_send_message(
+                        # ✅ УБРАН await перед safe_send_message
+                        safe_send_message(
                             None,
                             part_text,
                             parse_mode='HTML',
@@ -494,7 +496,8 @@ async def show_ai_profile_async(message: Message, user_id: int):
         
         if status_msg:
             try:
-                await safe_delete_message(message.chat.id, status_msg.message_id)
+                # ✅ УБРАН await перед safe_delete_message
+                safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
@@ -515,7 +518,8 @@ async def show_ai_profile_async(message: Message, user_id: int):
     )
     keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
     
-    await safe_send_message(
+    # ✅ УБРАН await перед safe_send_message
+    safe_send_message(
         message,
         text,
         reply_markup=keyboard,
@@ -530,7 +534,8 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
     context = user_contexts.get(user_id)
     user_name = context.name if context and context.name else ""
     
-    status_msg = await safe_send_message(
+    # ✅ УБРАН await перед safe_send_message
+    status_msg = safe_send_message(
         message,
         "🧠 Анализирую ваш профиль и формирую мысли психолога...\n\nЭто займёт несколько секунд.",
         delete_previous=True
@@ -549,7 +554,8 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
         
         if status_msg:
             try:
-                await safe_delete_message(message.chat.id, status_msg.message_id)
+                # ✅ УБРАН await перед safe_delete_message
+                safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
@@ -590,7 +596,8 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
 
 👇 {bold('Что дальше?')}
 """
-                        await safe_send_message(
+                        # ✅ УБРАН await перед safe_send_message
+                        safe_send_message(
                             message,
                             text,
                             reply_markup=keyboard,
@@ -606,7 +613,8 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
 
 <code>✉️ Продолжение следует...</code>
 """
-                        await safe_send_message(
+                        # ✅ УБРАН await перед safe_send_message
+                        safe_send_message(
                             None,
                             part_text,
                             parse_mode='HTML',
@@ -646,7 +654,8 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
         
         if status_msg:
             try:
-                await safe_delete_message(message.chat.id, status_msg.message_id)
+                # ✅ УБРАН await перед safe_delete_message
+                safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
@@ -664,7 +673,8 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
     keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
     
-    await safe_send_message(
+    # ✅ УБРАН await перед safe_send_message
+    safe_send_message(
         message,
         text,
         reply_markup=keyboard,
@@ -679,7 +689,8 @@ async def show_final_profile_async(message: Message, user_id: int):
     
     if user_id in _profile_generation_in_progress and _profile_generation_in_progress[user_id]:
         logger.info(f"⏳ Генерация профиля уже выполняется для пользователя {user_id}")
-        await safe_send_message(
+        # ✅ УБРАН await перед safe_send_message
+        safe_send_message(
             message,
             "⏳ Ваш профиль уже генерируется, пожалуйста, подождите...",
             delete_previous=True
@@ -693,7 +704,8 @@ async def show_final_profile_async(message: Message, user_id: int):
         await show_ai_profile_async(message, user_id)
         return
     
-    status_msg = await safe_send_message(
+    # ✅ УБРАН await перед safe_send_message
+    status_msg = safe_send_message(
         message,
         "🧠 Анализирую данные...\n\n"
         "Собираю воедино результаты 5 этапов тестирования.\n"
@@ -729,7 +741,8 @@ async def show_final_profile_async(message: Message, user_id: int):
         
         if status_msg:
             try:
-                await safe_delete_message(message.chat.id, status_msg.message_id)
+                # ✅ УБРАН await перед safe_delete_message
+                safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
