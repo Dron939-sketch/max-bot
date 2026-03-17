@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики голосовых сообщений для MAX
-Версия 2.2 - ПОЛНАЯ с поддержкой отправки голоса
+Версия 2.3 - ПОЛНАЯ с поддержкой отправки голоса (исправлены циклические импорты)
 """
 
 import os
@@ -15,6 +15,7 @@ from typing import Optional
 
 from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
+# Импортируем bot напрямую из bot_instance
 from bot_instance import bot
 from message_utils import safe_send_message, safe_delete_message
 from services import speech_to_text, text_to_speech
@@ -362,5 +363,5 @@ async def test_voice_message(message: Message, text: str = "Привет! Это
 __all__ = [
     'handle_voice_message',
     'test_voice_message',
-    'send_voice_to_max'  # ✅ Добавлено
+    'send_voice_to_max'
 ]
