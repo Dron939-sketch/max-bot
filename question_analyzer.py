@@ -627,6 +627,12 @@ class QuestionContextAnalyzer:
 
 
 # ============================================
+# ДОБАВЛЯЕМ АЛИАС ДЛЯ СОВМЕСТИМОСТИ
+# ============================================
+QuestionAnalyzer = QuestionContextAnalyzer
+
+
+# ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ СОЗДАНИЯ АНАЛИЗАТОРА
 # ============================================
 
@@ -666,6 +672,7 @@ def create_analyzer_from_user_data(user_data: Dict, user_name: str = "друг")
 
 __all__ = [
     'QuestionContextAnalyzer',
+    'QuestionAnalyzer',  # Добавлен алиас
     'ConfinementReporter',
     'create_analyzer_from_user_data'
 ]
