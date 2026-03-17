@@ -118,7 +118,7 @@ from handlers.help import show_help, show_tale, show_benefits
 from handlers.goals import *
 from handlers.questions import *
 from handlers.admin import *
-from handlers.voice import handle_voice_message  # 👈 НОВЫЙ ИМПОРТ
+from handlers.voice import handle_voice_message
 
 # Настройка логирования
 logging.basicConfig(
@@ -151,7 +151,7 @@ hypno = HypnoOrchestrator()
 tales = TherapeuticTales()
 anchoring = Anchoring()
 weekend_planner = WeekendPlanner()
-scheduler = TaskScheduler()  # 👈 НОВЫЙ МЕНЕДЖЕР
+scheduler = TaskScheduler()
 
 # ============================================
 # HEALTH CHECK ДЛЯ RENDER
@@ -397,8 +397,11 @@ def cmd_test_yandex(message: types.Message):
         safe_send_message(message, "⛔ Доступ запрещен")
         return
     
-    # Создаем задачу для асинхронного тестирования
-    asyncio.create_task(test_yandex_async(message))
+    # Создаем отдельный поток для асинхронной задачи
+    def run_async():
+        asyncio.run(test_yandex_async(message))
+    
+    threading.Thread(target=run_async, daemon=True).start()
 
 @bot.message_handler(commands=['test_weather'])
 def cmd_test_weather(message: types.Message):
@@ -407,7 +410,10 @@ def cmd_test_weather(message: types.Message):
         safe_send_message(message, "⛔ Доступ запрещен")
         return
     
-    asyncio.create_task(test_weather_async(message))
+    def run_async():
+        asyncio.run(test_weather_async(message))
+    
+    threading.Thread(target=run_async, daemon=True).start()
 
 @bot.message_handler(commands=['test_voices'])
 def cmd_test_voices(message: types.Message):
@@ -416,7 +422,10 @@ def cmd_test_voices(message: types.Message):
         safe_send_message(message, "⛔ Доступ запрещен")
         return
     
-    asyncio.create_task(test_voices_async(message))
+    def run_async():
+        asyncio.run(test_voices_async(message))
+    
+    threading.Thread(target=run_async, daemon=True).start()
 
 @bot.message_handler(commands=['weekend'])
 def cmd_weekend(message: types.Message):
@@ -432,7 +441,10 @@ def cmd_weekend(message: types.Message):
         )
         return
     
-    asyncio.create_task(show_weekend_ideas(message, user_id))
+    def run_async():
+        asyncio.run(show_weekend_ideas(message, user_id))
+    
+    threading.Thread(target=run_async, daemon=True).start()
 
 # 👇 АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ ТЕСТИРОВАНИЯ
 async def test_yandex_async(message: types.Message):
@@ -449,8 +461,6 @@ async def test_yandex_async(message: types.Message):
     for mode in ["coach", "psychologist", "trainer"]:
         audio = await text_to_speech(test_text, mode)
         if audio:
-            # Здесь нужно отправить аудиофайл
-            # В MAX API может быть другой способ
             results.append(f"✅ {COMMUNICATION_MODES[mode]['display_name']}")
         else:
             results.append(f"❌ {COMMUNICATION_MODES[mode]['display_name']}")
@@ -697,7 +707,10 @@ def handle_context_message_wrapper(message: types.Message):
 @bot.message_handler(content_types=['voice'])
 def handle_voice_wrapper(message: types.Message):
     """Обработчик голосовых сообщений"""
-    asyncio.create_task(handle_voice_message(message))
+    def run_async():
+        asyncio.run(handle_voice_message(message))
+    
+    threading.Thread(target=run_async, daemon=True).start()
 
 @bot.message_handler(func=lambda message: True)
 def handle_unknown_message(message: types.Message):
@@ -745,6 +758,22 @@ def cleanup_resources():
     except Exception as e:
         logger.error(f"❌ Ошибка при очистке ресурсов: {e}")
 
+def run_async_tasks():
+    """Запускает асинхронные задачи в отдельном потоке"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Запускаем проверку API
+    try:
+        loop.run_until_complete(check_api_on_startup())
+    except Exception as e:
+        logger.error(f"❌ Ошибка при проверке API: {e}")
+    
+    # Здесь можно добавить другие асинхронные задачи
+    # loop.run_until_complete(some_other_task())
+    
+    loop.close()
+
 def main():
     print("\n" + "="*80)
     print("🚀 ВИРТУАЛЬНЫЙ ПСИХОЛОГ - МАТРИЦА ПОВЕДЕНИЙ 4×6 v9.6 (MAX)")
@@ -765,11 +794,12 @@ def main():
     
     logger.info("🚀 Бот для MAX запущен!")
     
-    # Запускаем проверку API
-    asyncio.create_task(check_api_on_startup())
-    
-    # Запускаем планировщик
+    # Запускаем планировщик (он сам создаст свои задачи)
     scheduler.start()
+    
+    # Запускаем асинхронные задачи в отдельном потоке
+    async_thread = threading.Thread(target=run_async_tasks, daemon=True)
+    async_thread.start()
     
     is_render = os.environ.get('RENDER') is not None
     retry_count = 0
