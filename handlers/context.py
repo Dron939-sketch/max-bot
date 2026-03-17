@@ -3,6 +3,7 @@
 """
 Обработчики сбора контекста (город, возраст, пол) для MAX
 Восстановлено из оригинального bot3.py и адаптировано
+ИСПРАВЛЕНО: кнопка НАЧАТЬ ТЕСТ ведет на start_stage_1_direct, убраны HTML-теги
 """
 
 import logging
@@ -139,9 +140,9 @@ def start_context(message: Message):
             
             safe_send_message(
                 message,
-                f"📝 <b>Давайте познакомимся</b>\n\n{question}",
+                f"📝 **Давайте познакомимся**\n\n{question}",
                 reply_markup=keyboard,
-                parse_mode='HTML',
+                parse_mode=None,
                 delete_previous=True
             )
             logger.info(f"✅ Вопрос о городе отправлен, устанавливаем состояние awaiting_context")
@@ -193,9 +194,9 @@ def handle_context_callback(call: CallbackQuery):
         if question:
             safe_send_message(
                 call.message,
-                f"📝 <b>Давайте познакомимся</b>\n\n{question}",
+                f"📝 **Давайте познакомимся**\n\n{question}",
                 reply_markup=keyboard,
-                parse_mode='HTML',
+                parse_mode=None,
                 delete_previous=True
             )
         else:
@@ -216,9 +217,9 @@ def handle_context_callback(call: CallbackQuery):
         if question:
             safe_send_message(
                 call.message,
-                f"📝 <b>Давайте познакомимся</b>\n\n{question}",
+                f"📝 **Давайте познакомимся**\n\n{question}",
                 reply_markup=keyboard,
-                parse_mode='HTML',
+                parse_mode=None,
                 delete_previous=True
             )
         else:
@@ -239,9 +240,9 @@ def handle_context_callback(call: CallbackQuery):
         if question:
             safe_send_message(
                 call.message,
-                f"📝 <b>Давайте познакомимся</b>\n\n{question}",
+                f"📝 **Давайте познакомимся**\n\n{question}",
                 reply_markup=keyboard,
-                parse_mode='HTML',
+                parse_mode=None,
                 delete_previous=True
             )
         else:
@@ -260,7 +261,7 @@ def handle_context_callback(call: CallbackQuery):
             f"⏭ Хорошо, будем общаться без привязки к месту и времени.\n\n"
             "Но помните: с контекстом советы точнее 😉\n"
             "Можете в любой момент рассказать о себе — просто напишите /context",
-            parse_mode='HTML',
+            parse_mode=None,
             delete_previous=True
         )
         
@@ -340,9 +341,9 @@ def handle_context_message(message: Message) -> bool:
             logger.info(f"📤 Отправляем вопрос о поле...")
             safe_send_message(
                 message,
-                f"📝 <b>Давайте познакомимся</b>\n\n{question}",
+                f"📝 **Давайте познакомимся**\n\n{question}",
                 reply_markup=keyboard,
-                parse_mode='HTML',
+                parse_mode=None,
                 delete_previous=True
             )
             logger.info(f"✅ Вопрос о поле отправлен")
@@ -371,9 +372,9 @@ def handle_context_message(message: Message) -> bool:
                     logger.info(f"📤 Отправляем следующий вопрос...")
                     safe_send_message(
                         message,
-                        f"📝 <b>Давайте познакомимся</b>\n\n{question}",
+                        f"📝 **Давайте познакомимся**\n\n{question}",
                         reply_markup=keyboard,
-                        parse_mode='HTML',
+                        parse_mode=None,
                         delete_previous=True
                     )
                     logger.info(f"✅ Вопрос отправлен")
@@ -384,16 +385,16 @@ def handle_context_message(message: Message) -> bool:
                 logger.warning(f"⚠️ Возраст вне диапазона: {age}")
                 safe_send_message(
                     message,
-                    "<b>❌ Возраст должен быть от 1 до 120 лет.</b>\n\n📅 Сколько вам лет? (напишите число)",
-                    parse_mode='HTML',
+                    "**❌ Возраст должен быть от 1 до 120 лет.**\n\n📅 Сколько вам лет? (напишите число)",
+                    parse_mode=None,
                     delete_previous=True
                 )
         except ValueError:
             logger.warning(f"⚠️ Некорректное число: {text}")
             safe_send_message(
                 message,
-                "<b>❌ Пожалуйста, введите число.</b>\n\n📅 Сколько вам лет? (напишите число)",
-                parse_mode='HTML',
+                "**❌ Пожалуйста, введите число.**\n\n📅 Сколько вам лет? (напишите число)",
+                parse_mode=None,
                 delete_previous=True
             )
         
@@ -424,9 +425,9 @@ def handle_context_message(message: Message) -> bool:
             logger.info(f"📤 Отправляем следующий вопрос...")
             safe_send_message(
                 message,
-                f"📝 <b>Давайте познакомимся</b>\n\n{question}",
+                f"📝 **Давайте познакомимся**\n\n{question}",
                 reply_markup=keyboard,
-                parse_mode='HTML',
+                parse_mode=None,
                 delete_previous=True
             )
             logger.info(f"✅ Вопрос отправлен")
@@ -455,28 +456,28 @@ def show_context_complete(message: Message, context: UserContext):
     context.update_weather()
     
     # Формируем сводку
-    summary = f"✅ <b>Отлично! Теперь я знаю о вас:</b>\n\n"
+    summary = f"✅ **Отлично! Теперь я знаю о вас:**\n\n"
     
     if context.city:
-        summary += f"📍 <b>Город:</b> {context.city}\n"
+        summary += f"📍 **Город:** {context.city}\n"
     if context.gender:
         gender_str = "Мужчина" if context.gender == "male" else "Женщина" if context.gender == "female" else "Другое"
-        summary += f"👤 <b>Пол:</b> {gender_str}\n"
+        summary += f"👤 **Пол:** {gender_str}\n"
     if context.age:
-        summary += f"📅 <b>Возраст:</b> {context.age}\n"
+        summary += f"📅 **Возраст:** {context.age}\n"
     if context.weather_cache:
         weather = context.weather_cache
-        summary += f"{weather['icon']} <b>Погода:</b> {weather['description']}, {weather['temp']}°C\n"
+        summary += f"{weather['icon']} **Погода:** {weather['description']}, {weather['temp']}°C\n"
     
     summary += f"\n🎯 Теперь я буду учитывать это в наших разговорах!\n\n"
-    summary += f"🧠 <b>ЧТО ДАЛЬШЕ?</b>\n\n"
+    summary += f"🧠 **ЧТО ДАЛЬШЕ?**\n\n"
     summary += "Чтобы я мог помочь по-настоящему, нужно пройти тест (15 минут).\n"
     summary += "Он определит ваш психологический профиль по 4 векторам и глубинным паттернам.\n\n"
-    summary += f"👇 <b>Начинаем?</b>"
+    summary += f"👇 **Начинаем?**"
     
-    # ✅ ИСПРАВЛЕНО: убрана кнопка "❓ ЗАДАТЬ ВОПРОС"
+    # ✅ ИСПРАВЛЕНО: меняем callback на прямой старт теста
     keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton("🚀 НАЧАТЬ ТЕСТ", callback_data="show_stage_1_intro"))
+    keyboard.row(InlineKeyboardButton("🚀 НАЧАТЬ ТЕСТ", callback_data="start_stage_1_direct"))
     keyboard.row(InlineKeyboardButton("📖 ЧТО ДАЕТ ТЕСТ", callback_data="show_benefits"))
     # ❌ Кнопка "❓ ЗАДАТЬ ВОПРОС" удалена
     
@@ -485,7 +486,7 @@ def show_context_complete(message: Message, context: UserContext):
         message,
         summary,
         reply_markup=keyboard,
-        parse_mode='HTML',
+        parse_mode=None,
         delete_previous=True
     )
     logger.info(f"✅ Итоговый экран отправлен")
@@ -520,8 +521,8 @@ def cmd_context(message: Message):
     
     safe_send_message(
         message,
-        "🔄 <b>Давайте обновим ваш контекст</b>",
-        parse_mode='HTML',
+        "🔄 **Давайте обновим ваш контекст**",
+        parse_mode=None,
         delete_previous=True
     )
     
@@ -555,8 +556,8 @@ def ensure_context(message: Message) -> bool:
     # Контекст не заполнен - начинаем сбор
     safe_send_message(
         message,
-        "📝 <b>Для точной работы мне нужно немного узнать о вас.</b>",
-        parse_mode='HTML',
+        "📝 **Для точной работы мне нужно немного узнать о вас.**",
+        parse_mode=None,
         delete_previous=True
     )
     
@@ -583,7 +584,7 @@ def show_current_context(message: Message):
         return
     
     if not is_context_complete(user_id):
-        text = "📝 <b>Контекст не заполнен</b>\n\n"
+        text = "📝 **Контекст не заполнен**\n\n"
         text += "Необходимо указать город, пол и возраст."
         
         keyboard = InlineKeyboardMarkup()
@@ -594,30 +595,30 @@ def show_current_context(message: Message):
             message,
             text,
             reply_markup=keyboard,
-            parse_mode='HTML',
+            parse_mode=None,
             delete_previous=True
         )
         return
     
     # Формируем текст с текущим контекстом
-    text = f"📊 <b>ТВОЙ КОНТЕКСТ</b>\n\n"
+    text = f"📊 **ТВОЙ КОНТЕКСТ**\n\n"
     
     if context.name:
-        text += f"👤 <b>Имя:</b> {context.name}\n"
+        text += f"👤 **Имя:** {context.name}\n"
     if context.city:
-        text += f"📍 <b>Город:</b> {context.city}\n"
+        text += f"📍 **Город:** {context.city}\n"
     if context.gender:
         gender_str = "Мужчина" if context.gender == "male" else "Женщина" if context.gender == "female" else "Другое"
-        text += f"👤 <b>Пол:</b> {gender_str}\n"
+        text += f"👤 **Пол:** {gender_str}\n"
     if context.age:
-        text += f"📅 <b>Возраст:</b> {context.age}\n"
+        text += f"📅 **Возраст:** {context.age}\n"
     if context.weather_cache:
         weather = context.weather_cache
-        text += f"{weather['icon']} <b>Погода:</b> {weather['description']}, {weather['temp']}°C\n"
+        text += f"{weather['icon']} **Погода:** {weather['description']}, {weather['temp']}°C\n"
     
     # Жизненный контекст, если есть
     if context.life_context_complete:
-        text += f"\n📋 <b>ЖИЗНЕННЫЙ КОНТЕКСТ:</b>\n"
+        text += f"\n📋 **ЖИЗНЕННЫЙ КОНТЕКСТ:**\n"
         if context.family_status:
             text += f"• Семья: {context.family_status}\n"
         if context.has_children:
@@ -637,7 +638,7 @@ def show_current_context(message: Message):
         message,
         text,
         reply_markup=keyboard,
-        parse_mode='HTML',
+        parse_mode=None,
         delete_previous=True
     )
 
@@ -741,7 +742,7 @@ def parse_life_context_from_text(text: str) -> dict:
 
 __all__ = [
     'start_context',
-    'handle_context_callback',  # ← ДОБАВЛЕНО!
+    'handle_context_callback',
     'set_gender_male',
     'set_gender_female',
     'skip_context',
