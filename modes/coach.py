@@ -9,6 +9,7 @@ import logging
 
 from .base_mode import BaseMode
 from profiles import VECTORS, LEVEL_PROFILES
+from models import ConfinementModel9  # 👈 ДОБАВЛЕНО
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +202,7 @@ class CoachMode(BaseMode):
             self.last_tools_used.append("open_question")
         
         # Сохраняем в историю
-        self.save_to_history(question, response, self.last_tools_used)
+        self.save_to_history(question, response)
         
         # Генерируем предложения для продолжения
         suggestions = self._generate_suggestions()
@@ -225,6 +226,43 @@ class CoachMode(BaseMode):
             text=response,
             suggestions=suggestions
         )
+    
+    def format_response(self, text: str, suggestions: List[str] = None) -> Dict[str, Any]:
+        """
+        Форматирует ответ для отправки пользователю
+        """
+        return {
+            "response": text,
+            "tools_used": self.last_tools_used,
+            "follow_up": True,  # Коуч всегда задает уточняющие вопросы
+            "suggestions": suggestions or [],
+            "hypnotic_suggestion": "hypnosis_considered" in self.last_tools_used,
+            "tale_suggested": "tale_suggested" in self.last_tools_used
+        }
+    
+    def should_suggest_tale(self, question: str) -> bool:
+        """
+        Определяет, нужно ли предложить сказку на основе вопроса
+        """
+        tale_triggers = [
+            "сказк", "истори", "притч", "метафор",
+            "как быть", "что делать", "не знаю",
+            "груст", "тяжел", "сложн"
+        ]
+        question_lower = question.lower()
+        return any(trigger in question_lower for trigger in tale_triggers)
+    
+    def should_use_hypnosis(self, question: str) -> bool:
+        """
+        Определяет, нужно ли использовать гипнотические техники
+        """
+        hypnosis_triggers = [
+            "расслаб", "уснуть", "отдых", "сон",
+            "стресс", "напряж", "устал",
+            "медитац", "транс"
+        ]
+        question_lower = question.lower()
+        return any(trigger in question_lower for trigger in hypnosis_triggers)
     
     def _handle_fear_question(self) -> str:
         """Обрабатывает вопросы про страх (вектор СБ)"""
