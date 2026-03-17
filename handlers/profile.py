@@ -3,6 +3,7 @@
 """
 Обработчики профиля пользователя для MAX
 Версия 2.1 - ИСПРАВЛЕННОЕ ФОРМАТИРОВАНИЕ
+ИСПРАВЛЕНО: убраны повторяющиеся заголовки в промежуточных частях сообщений
 """
 
 import logging
@@ -600,12 +601,9 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                         )
                         logger.info(f"✅ Отправлена последняя часть мысли {i+1} с кнопками")
                     else:
-                        # ✅ Добавляем индикатор части без HTML-тегов
-                        part_text = f"""
-🧠 {bold('МЫСЛИ ПСИХОЛОГА')} (часть {i+1}/{len(formatted_parts)})
-
-{part}
-"""
+                        # 👇 ИСПРАВЛЕНО: ТОЛЬКО ТЕКСТ, БЕЗ ЗАГОЛОВКА
+                        part_text = part
+                        
                         safe_send_message(
                             None,
                             part_text,
