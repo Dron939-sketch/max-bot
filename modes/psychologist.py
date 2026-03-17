@@ -208,7 +208,7 @@ class PsychologistMode(BaseMode):
             hypnotic_suggestion = False
         
         # Сохраняем в историю
-        self.save_to_history(question, response, self.last_tools_used)
+        self.save_to_history(question, response)
         
         # Генерируем предложения
         suggestions = self._generate_therapeutic_suggestions()
@@ -227,6 +227,44 @@ class PsychologistMode(BaseMode):
             text=response,
             suggestions=suggestions
         )
+    
+    def format_response(self, text: str, suggestions: List[str] = None) -> Dict[str, Any]:
+        """
+        Форматирует ответ для отправки пользователю
+        """
+        return {
+            "response": text,
+            "tools_used": self.last_tools_used,
+            "follow_up": True,
+            "suggestions": suggestions or [],
+            "hypnotic_suggestion": "hypnosis" in self.last_tools_used,
+            "tale_suggested": "tale_suggested" in self.last_tools_used
+        }
+    
+    def should_suggest_tale(self, question: str) -> bool:
+        """
+        Определяет, нужно ли предложить сказку на основе вопроса
+        """
+        tale_triggers = [
+            "сказк", "истори", "притч", "метафор",
+            "как быть", "что делать", "не знаю",
+            "груст", "тяжел", "сложн", "больно",
+            "одинок", "страшн", "тревож"
+        ]
+        question_lower = question.lower()
+        return any(trigger in question_lower for trigger in tale_triggers)
+    
+    def should_use_hypnosis(self, question: str) -> bool:
+        """
+        Определяет, нужно ли использовать гипнотические техники
+        """
+        hypnosis_triggers = [
+            "расслаб", "уснуть", "отдых", "сон",
+            "стресс", "напряж", "устал",
+            "медитац", "транс", "гипноз"
+        ]
+        question_lower = question.lower()
+        return any(trigger in question_lower for trigger in hypnosis_triggers)
     
     def _generate_hypnotic_induction(self) -> str:
         """Генерирует гипнотическую индукцию используя hypno_module"""
