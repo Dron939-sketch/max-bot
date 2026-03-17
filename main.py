@@ -3,6 +3,7 @@
 """
 ВИРТУАЛЬНЫЙ ПСИХОЛОГ - МАТРИЦА ПОВЕДЕНИЙ 4×6
 ВЕРСИЯ ДЛЯ MAX
+ИСПРАВЛЕНО: обработка вопросов без await для синхронных функций
 """
 
 import os
@@ -103,7 +104,7 @@ from question_analyzer import QuestionAnalyzer, create_analyzer_from_user_data
 # Импорты из formatters.py
 from formatters import (
     bold, italic, emoji_text, clean_text_for_safe_display,
-    format_profile_text, format_psychologist_text, strip_html
+    format_profile_text, format_psychologist_text, strip_html, split_long_message
 )
 
 # Импорты из обработчиков
@@ -116,7 +117,7 @@ from handlers.profile import show_profile, show_ai_profile, show_psychologist_th
 from handlers.stages import *
 from handlers.help import show_help, show_tale, show_benefits
 from handlers.goals import *
-from handlers.questions import *
+from handlers.questions import *  # Импортируем всё, включая process_text_question_sync
 from handlers.admin import *
 from handlers.voice import handle_voice_message, send_voice_to_max
 
@@ -198,62 +199,7 @@ health_thread.start()
 # ============================================
 # ФУНКЦИИ ДЛЯ РАБОТЫ С ДЛИННЫМИ СООБЩЕНИЯМИ
 # ============================================
-
-def split_long_message(text: str, max_length: int = 4000) -> List[str]:
-    """Разбивает длинное сообщение на части"""
-    if len(text) <= max_length:
-        return [text]
-    
-    parts = []
-    current_part = ""
-    
-    paragraphs = text.split('\n\n')
-    
-    for para in paragraphs:
-        if len(para) > max_length:
-            sentences = re.split(r'(?<=[.!?])\s+', para)
-            for sent in sentences:
-                if len(current_part) + len(sent) + 2 <= max_length:
-                    if current_part:
-                        current_part += "\n\n" + sent
-                    else:
-                        current_part = sent
-                else:
-                    if current_part:
-                        parts.append(current_part)
-                    if len(sent) > max_length:
-                        words = sent.split()
-                        temp = ""
-                        for word in words:
-                            if len(temp) + len(word) + 1 <= max_length:
-                                if temp:
-                                    temp += " " + word
-                                else:
-                                    temp = word
-                            else:
-                                parts.append(temp)
-                                temp = word
-                        if temp:
-                            current_part = temp
-                        else:
-                            current_part = ""
-                    else:
-                        current_part = sent
-        else:
-            if len(current_part) + len(para) + 2 <= max_length:
-                if current_part:
-                    current_part += "\n\n" + para
-                else:
-                    current_part = para
-            else:
-                if current_part:
-                    parts.append(current_part)
-                current_part = para
-    
-    if current_part:
-        parts.append(current_part)
-    
-    return parts
+# Функция split_long_message теперь импортируется из formatters.py
 
 # ============================================
 # ФУНКЦИЯ ДЛЯ ГЕНЕРАЦИИ УНИКАЛЬНЫХ CALLBACK'ОВ
@@ -761,10 +707,13 @@ def handle_question_message(message: types.Message):
     
     logger.info(f"❓ Получен вопрос от пользователя {user_id} в состоянии awaiting_question: {text[:50]}...")
     
-    def run_async():
-        asyncio.run(process_text_question_async(message, user_id, text))
+    def run_sync():
+        # Импортируем синхронную функцию из questions.py
+        from handlers.questions import process_text_question_sync
+        process_text_question_sync(message, user_id, text)
     
-    threading.Thread(target=run_async, daemon=True).start()
+    # Запускаем в отдельном потоке (без asyncio.run)
+    threading.Thread(target=run_sync, daemon=True).start()
 
 
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_custom_goal)
@@ -837,22 +786,6 @@ def handle_unknown_message(message: types.Message):
 # ============================================
 # АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ ОБРАБОТКИ СООБЩЕНИЙ
 # ============================================
-
-async def process_text_question_async(message: types.Message, user_id: int, text: str):
-    """Асинхронная обработка текстового вопроса"""
-    try:
-        from handlers.questions import process_text_question_async as process_question
-        await process_question(message, user_id, text)
-    except Exception as e:
-        logger.error(f"❌ Ошибка при обработке вопроса: {e}")
-        import traceback
-        traceback.print_exc()
-        await safe_send_message(
-            message,
-            "❌ Произошла ошибка при обработке вопроса. Пожалуйста, попробуйте еще раз.",
-            delete_previous=True
-        )
-
 
 async def process_custom_goal_async(message: types.Message, user_id: int, text: str):
     """Асинхронная обработка пользовательской цели"""
