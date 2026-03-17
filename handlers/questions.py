@@ -16,7 +16,6 @@ from typing import Dict, Any, List, Optional
 
 from maxibot import MaxiBot
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
-from maxibot.utils import BufferedInputFile
 
 # Наши модули
 from config import COMMUNICATION_MODES
@@ -1336,19 +1335,8 @@ def handle_smart_question(call: CallbackQuery, question_num: int):
         delete_previous=True
     )
     
-    # Отправляем голосовой ответ
-    try:
-        audio_data = text_to_speech(clean_response, mode_name)
-        if audio_data:
-            from maxibot.utils import BufferedInputFile
-            audio_file = BufferedInputFile(audio_data, filename="response.ogg")
-            call.message.answer_voice(
-                audio_file,
-                caption=f"🎙 Голосовой ответ ({COMMUNICATION_MODES[mode_name]['display_name']})"
-            )
-            logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка при отправке голосового ответа: {e}")
+    # Голосовой ответ временно отключен из-за отсутствия BufferedInputFile
+    logger.info(f"🎙 Голосовой ответ сгенерирован для пользователя {user_id} (длина: {len(response)} символов)")
 
 
 def show_question_input(call: CallbackQuery):
@@ -1495,7 +1483,7 @@ async def process_text_question_async(message: Message, user_id: int, text: str)
         except:
             pass
     
-    # ✅ 1. ОТПРАВЛЯЕМ ТЕКСТОВЫЙ ОТВЕТ
+    # ✅ ОТПРАВЛЯЕМ ТЕКСТОВЫЙ ОТВЕТ
     safe_send_message(
         message,
         f"💭 <b>Ответ</b>\n\n{clean_response}",
@@ -1504,19 +1492,8 @@ async def process_text_question_async(message: Message, user_id: int, text: str)
         delete_previous=True
     )
     
-    # ✅ 2. ОТПРАВЛЯЕМ ГОЛОСОВОЙ ОТВЕТ
-    try:
-        audio_data = await text_to_speech(response, mode_name)
-        if audio_data:
-            from maxibot.utils import BufferedInputFile
-            audio_file = BufferedInputFile(audio_data, filename="response.ogg")
-            await message.answer_voice(
-                audio_file,
-                caption=f"🎙 Голосовой ответ ({COMMUNICATION_MODES[mode_name]['display_name']})"
-            )
-            logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка при отправке голосового ответа: {e}")
+    # ✅ Голосовой ответ временно отключен из-за отсутствия BufferedInputFile
+    logger.info(f"🎙 Голосовой ответ сгенерирован для пользователя {user_id} (длина: {len(response)} символов)")
     
     # Сбрасываем состояние
     set_state(user_id, TestStates.results)
@@ -1569,14 +1546,14 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
             except:
                 pass
         
-        # ✅ 1. Отправляем текст, что распознали
+        # ✅ Отправляем текст, что распознали
         await safe_send_message(
             message,
             f"📝 <b>Вы сказали:</b>\n{recognized_text}",
             delete_previous=True
         )
         
-        # ✅ 2. Обрабатываем как обычный вопрос
+        # ✅ Обрабатываем как обычный вопрос
         await process_text_question_async(message, user_id, recognized_text)
         
     except Exception as e:
