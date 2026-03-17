@@ -21,7 +21,7 @@ from reality_check import get_theoretical_path
 # Импорты из state.py
 from state import (
     user_data, user_contexts, user_state_data, user_states,
-    get_state, set_state, get_state_data, update_state_data, TestStates
+    get_state, set_state, get_state_data, update_state_data, TestStates, user_names
 )
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,6 @@ def get_user_context_obj(user_id: int):
 
 def get_user_name(user_id: int) -> str:
     """Получает имя пользователя"""
-    from state import user_names
     return user_names.get(user_id, "друг")
 
 # ============================================
@@ -84,19 +83,24 @@ def show_goals_categories(message, user_id: int):
 👇 <b>Куда двинемся?</b>
 """
     
-    # Получаем категории из DESTINATIONS
-    destinations = DESTINATIONS.get(mode, DESTINATIONS["coach"])
-    
-    # Строим клавиатуру
+    # Строим клавиатуру с основными категориями
     keyboard = InlineKeyboardMarkup()
-    for cat_id, category in destinations.items():
-        if cat_id not in ["weak", "strong", "general"]:  # Исключаем служебные ключи
-            keyboard.add(InlineKeyboardButton(
-                text=category.get('name', cat_id),
-                callback_data=f"goal_cat_{cat_id}"
-            ))
-    
-    keyboard.add(InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_mode_selected"))
+    keyboard.row(
+        InlineKeyboardButton("🗣 Отношения", callback_data="goal_cat_relations"),
+        InlineKeyboardButton("💰 Деньги", callback_data="goal_cat_money")
+    )
+    keyboard.row(
+        InlineKeyboardButton("🧠 Самоощущение", callback_data="goal_cat_self"),
+        InlineKeyboardButton("📚 Развитие", callback_data="goal_cat_knowledge")
+    )
+    keyboard.row(
+        InlineKeyboardButton("💪 Здоровье", callback_data="goal_cat_health"),
+        InlineKeyboardButton("🎨 Творчество", callback_data="goal_cat_creative")
+    )
+    keyboard.row(
+        InlineKeyboardButton("🎯 ДИНАМИЧЕСКИЙ ПОДБОР", callback_data="show_dynamic_destinations")
+    )
+    keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_mode_selected"))
     
     safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
 
@@ -109,10 +113,41 @@ def show_goals_for_category(call: CallbackQuery, category: str):
     
     mode = user_data_dict.get("communication_mode", "coach")
     
-    # Получаем цели для данной категории из DESTINATIONS
-    destinations = DESTINATIONS.get(mode, DESTINATIONS["coach"])
-    category_data = destinations.get(category, {})
-    goals = category_data.get("destinations", [])
+    # Определяем цели для категории
+    category_goals = {
+        "relations": [
+            {"id": "improve_relations", "name": "Улучшить отношения с близкими", "time": "4-6 недель", "difficulty": "medium", "description": "Построй гармоничные отношения с семьей и друзьями"},
+            {"id": "find_partner", "name": "Найти партнёра", "time": "3-5 месяцев", "difficulty": "hard", "description": "Встретить человека для серьёзных отношений"},
+            {"id": "boundaries", "name": "Научиться защищать границы", "time": "2-3 недели", "difficulty": "medium", "description": "Освой искусство говорить 'нет'"}
+        ],
+        "money": [
+            {"id": "income_growth", "name": "Увеличить доход", "time": "4-6 недель", "difficulty": "hard", "description": "Создай стратегию для роста дохода"},
+            {"id": "financial_plan", "name": "Создать финансовый план", "time": "2-3 недели", "difficulty": "easy", "description": "Составь личный финансовый план"},
+            {"id": "money_blocks", "name": "Проработать денежные блоки", "time": "3-4 недели", "difficulty": "medium", "description": "Выяви и устрани препятствия"}
+        ],
+        "self": [
+            {"id": "self_esteem", "name": "Повысить самооценку", "time": "4-5 недель", "difficulty": "medium", "description": "Научись ценить себя"},
+            {"id": "anxiety", "name": "Справиться с тревогой", "time": "3-4 недели", "difficulty": "medium", "description": "Обрети внутреннее спокойствие"},
+            {"id": "purpose", "name": "Найти предназначение", "time": "5-7 недель", "difficulty": "hard", "description": "Ответь на вопрос 'зачем я здесь?'"}
+        ],
+        "knowledge": [
+            {"id": "new_skill", "name": "Освоить новый навык", "time": "4-6 недель", "difficulty": "medium", "description": "Научись чему-то новому"},
+            {"id": "reading", "name": "Читать по книге в неделю", "time": "8 недель", "difficulty": "easy", "description": "Сформируй привычку читать"},
+            {"id": "course", "name": "Пройти онлайн-курс", "time": "6-8 недель", "difficulty": "medium", "description": "Получи новые знания"}
+        ],
+        "health": [
+            {"id": "sport", "name": "Начать заниматься спортом", "time": "4 недели", "difficulty": "medium", "description": "Внедри регулярные тренировки"},
+            {"id": "sleep", "name": "Наладить сон", "time": "3-4 недели", "difficulty": "easy", "description": "Улучши качество сна"},
+            {"id": "energy", "name": "Повысить уровень энергии", "time": "4 недели", "difficulty": "medium", "description": "Чувствуй себя бодрее"}
+        ],
+        "creative": [
+            {"id": "start_creative", "name": "Начать творить", "time": "3-4 недели", "difficulty": "easy", "description": "Найди своё творческое выражение"},
+            {"id": "overcome_block", "name": "Преодолеть творческий блок", "time": "2-3 недели", "difficulty": "medium", "description": "Верни вдохновение"},
+            {"id": "project", "name": "Завершить творческий проект", "time": "6-8 недель", "difficulty": "hard", "description": "Доведи дело до конца"}
+        ]
+    }
+    
+    goals = category_goals.get(category, [])
     
     if not goals:
         safe_send_message(
@@ -123,13 +158,20 @@ def show_goals_for_category(call: CallbackQuery, category: str):
         )
         return
     
-    category_name = category_data.get("name", category)
-    category_desc = category_data.get("description", "")
+    # Названия категорий
+    category_names = {
+        "relations": "🗣 Отношения",
+        "money": "💰 Деньги",
+        "self": "🧠 Самоощущение",
+        "knowledge": "📚 Развитие",
+        "health": "💪 Здоровье",
+        "creative": "🎨 Творчество"
+    }
+    
+    category_name = category_names.get(category, category)
     
     text = f"""
 🧠 <b>{category_name}</b>
-
-{category_desc}
 
 👇 <b>Выбери конкретную цель:</b>
 """
@@ -207,18 +249,44 @@ def select_goal(call: CallbackQuery, goal_id: str):
 
 def find_goal_by_id(goal_id: str, mode: str) -> Optional[Dict]:
     """Ищет цель по ID во всех категориях"""
-    destinations = DESTINATIONS.get(mode, DESTINATIONS["coach"])
+    # Сначала проверяем в динамических целях
+    try:
+        from config import DESTINATIONS
+        destinations = DESTINATIONS.get(mode, DESTINATIONS["coach"])
+        
+        for category_key, category in destinations.items():
+            if isinstance(category, dict) and "destinations" in category:
+                for goal in category.get("destinations", []):
+                    if goal.get("id") == goal_id:
+                        if "description" not in goal:
+                            goal["description"] = category.get("description", "")
+                        return goal
+    except:
+        pass
     
-    # Проверяем все ключи в destinations
-    for category_key, category in destinations.items():
-        if isinstance(category, dict) and "destinations" in category:
-            for goal in category.get("destinations", []):
-                if goal.get("id") == goal_id:
-                    # Добавляем описание, если его нет
-                    if "description" not in goal:
-                        goal["description"] = category.get("description", "")
-                    return goal
-    return None
+    # Затем проверяем в статических категориях
+    all_goals = {
+        "improve_relations": {"name": "Улучшить отношения с близкими", "time": "4-6 недель", "difficulty": "medium", "description": "Построй гармоничные отношения с семьей и друзьями"},
+        "find_partner": {"name": "Найти партнёра", "time": "3-5 месяцев", "difficulty": "hard", "description": "Встретить человека для серьёзных отношений"},
+        "boundaries": {"name": "Научиться защищать границы", "time": "2-3 недели", "difficulty": "medium", "description": "Освой искусство говорить 'нет'"},
+        "income_growth": {"name": "Увеличить доход", "time": "4-6 недель", "difficulty": "hard", "description": "Создай стратегию для роста дохода"},
+        "financial_plan": {"name": "Создать финансовый план", "time": "2-3 недели", "difficulty": "easy", "description": "Составь личный финансовый план"},
+        "money_blocks": {"name": "Проработать денежные блоки", "time": "3-4 недели", "difficulty": "medium", "description": "Выяви и устрани препятствия"},
+        "self_esteem": {"name": "Повысить самооценку", "time": "4-5 недель", "difficulty": "medium", "description": "Научись ценить себя"},
+        "anxiety": {"name": "Справиться с тревогой", "time": "3-4 недели", "difficulty": "medium", "description": "Обрети внутреннее спокойствие"},
+        "purpose": {"name": "Найти предназначение", "time": "5-7 недель", "difficulty": "hard", "description": "Ответь на вопрос 'зачем я здесь?'"},
+        "new_skill": {"name": "Освоить новый навык", "time": "4-6 недель", "difficulty": "medium", "description": "Научись чему-то новому"},
+        "reading": {"name": "Читать по книге в неделю", "time": "8 недель", "difficulty": "easy", "description": "Сформируй привычку читать"},
+        "course": {"name": "Пройти онлайн-курс", "time": "6-8 недель", "difficulty": "medium", "description": "Получи новые знания"},
+        "sport": {"name": "Начать заниматься спортом", "time": "4 недели", "difficulty": "medium", "description": "Внедри регулярные тренировки"},
+        "sleep": {"name": "Наладить сон", "time": "3-4 недели", "difficulty": "easy", "description": "Улучши качество сна"},
+        "energy": {"name": "Повысить уровень энергии", "time": "4 недели", "difficulty": "medium", "description": "Чувствуй себя бодрее"},
+        "start_creative": {"name": "Начать творить", "time": "3-4 недели", "difficulty": "easy", "description": "Найди своё творческое выражение"},
+        "overcome_block": {"name": "Преодолеть творческий блок", "time": "2-3 недели", "difficulty": "medium", "description": "Верни вдохновение"},
+        "project": {"name": "Завершить творческий проект", "time": "6-8 недель", "difficulty": "hard", "description": "Доведи дело до конца"}
+    }
+    
+    return all_goals.get(goal_id)
 
 # ============================================
 # ДИНАМИЧЕСКИЙ ПОДБОР ЦЕЛЕЙ
@@ -315,7 +383,6 @@ def get_dynamic_destinations(profile_code: str, mode: str) -> List[Dict]:
                     {"id": "family_system", "name": "Проработать семейную систему", "time": "6-8 недель", "difficulty": "hard", "description": "Исследуй родовые сценарии"}
                 ]
             },
-            # Добавляем strong для психолога
             "strong": {
                 "СБ": [
                     {"id": "resilience", "name": "Укрепить психологическую устойчивость", "time": "4-6 недель", "difficulty": "medium", "description": "Стань устойчивее к стрессу"},
@@ -363,7 +430,6 @@ def get_dynamic_destinations(profile_code: str, mode: str) -> List[Dict]:
                     {"id": "influence", "name": "Навыки влияния", "time": "5-7 недель", "difficulty": "hard", "description": "Научись влиять на людей"}
                 ]
             },
-            # Добавляем strong для тренера
             "strong": {
                 "СБ": [
                     {"id": "leader_courage", "name": "Лидерская смелость", "time": "4-6 недель", "difficulty": "medium", "description": "Развивай смелость лидера"},
