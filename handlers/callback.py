@@ -2,16 +2,18 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик всех callback-запросов для MAX
+Версия 2.0 - ПОЛНАЯ с поддержкой state
 """
 
 import logging
 import asyncio
+import traceback
 from typing import Optional
 
 from maxibot.types import CallbackQuery
 
 # Импорты из наших модулей
-from state import get_state, get_state_data, user_contexts, user_data, clear_state
+from state import get_state, get_state_data, user_contexts, user_data, clear_state, update_state_data
 from message_utils import safe_send_message
 
 # Импорты обработчиков этапов
@@ -33,13 +35,17 @@ from handlers.modes import show_mode_selection, show_mode_selected, show_main_me
 from handlers.context import handle_context_callback, start_context
 
 # Импорты обработчиков reality check
-from handlers.reality import handle_reality_callback
+from handlers.reality import (
+    show_reality_check, skip_life_context, skip_goal_questions,
+    skip_to_route, accept_feasibility_plan, adjust_timeline, reduce_goal,
+    apply_extended_timeline, select_goal_50, select_goal_30, select_goal_blocks
+)
 
 # Импорты обработчиков целей
 from handlers.goals import (
     show_dynamic_destinations, handle_dynamic_destination,
     custom_destination, route_step_done, show_goals_categories,
-    show_goals_for_category, select_goal
+    show_goals_for_category, select_goal, build_route
 )
 
 # Импорты обработчиков вопросов
@@ -48,7 +54,7 @@ from handlers.questions import (
 )
 
 # Импорты обработчиков помощи
-from handlers.help import show_help, show_benefits, show_tale
+from handlers.help import show_help, show_benefits, show_tale, show_weekend_ideas
 
 # Импорты обработчиков профиля
 from handlers.profile import (
@@ -60,7 +66,7 @@ from handlers.profile import (
 )
 
 # Импорты обработчиков старта
-from handlers.start import cmd_start
+from handlers.start import cmd_start, show_intro, show_why_details
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +76,8 @@ logger = logging.getLogger(__name__)
 
 def handle_unknown_callback(call: CallbackQuery):
     """Обработка неизвестного callback"""
-    logger.warning(f"⚠️ Неизвестный callback: {call.data}")
+    user_id = call.from_user.id
+    logger.warning(f"⚠️ Неизвестный callback: {call.data} от пользователя {user_id}")
     safe_send_message(
         call.message,
         "🤔 Неизвестная команда. Пожалуйста, используйте меню.",
@@ -79,10 +86,14 @@ def handle_unknown_callback(call: CallbackQuery):
 
 def handle_error_callback(call: CallbackQuery, error: Exception):
     """Обработка ошибок в callback"""
-    logger.error(f"❌ Ошибка в callback {call.data}: {error}")
+    user_id = call.from_user.id
+    logger.error(f"❌ Ошибка в callback {call.data} для пользователя {user_id}: {error}")
+    traceback.print_exc()
+    
     safe_send_message(
         call.message,
-        "❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.",
+        "❌ Произошла техническая ошибка. Пожалуйста, попробуйте еще раз позже.\n\n"
+        "Если ошибка повторяется, используйте /start для перезапуска.",
         delete_previous=True
     )
 
@@ -158,7 +169,6 @@ async def async_callback_handler(call: CallbackQuery):
             
     except Exception as e:
         logger.error(f"❌ Ошибка в async_callback_handler для {data}: {e}")
-        import traceback
         traceback.print_exc()
         handle_error_callback(call, e)
 
@@ -167,12 +177,20 @@ async def handle_sync_callback(call: CallbackQuery):
     """Обработчик синхронных callback'ов"""
     user_id = call.from_user.id
     data = call.data
+    state_data = get_state_data(user_id)
     
     # ============================================
     # ПЕРЕЗАПУСК ТЕСТА
     # ============================================
     if data == "restart_test":
         restart_test(call)
+    
+    # ============================================
+    # ПОЧЕМУ ДЕТАЛИ (WHY DETAILS)
+    # ============================================
+    elif data == "why_details":
+        logger.info(f"❓ why_details для пользователя {user_id}")
+        show_why_details(call)
     
     # ============================================
     # КОНТЕКСТ
@@ -186,17 +204,14 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "show_stage_1_intro":
         logger.info(f"📢 show_stage_1_intro для пользователя {user_id}")
-        state_data = get_state_data(user_id)
         show_stage_1_intro(call.message, user_id, state_data)
     
     elif data == "start_stage_1":
         logger.info(f"🎬 start_stage_1 для пользователя {user_id}")
-        state_data = get_state_data(user_id)
         start_stage_1(call.message, user_id, state_data)
     
     elif data.startswith("stage1_"):
         logger.info(f"📥 stage1 ответ: {data}")
-        state_data = get_state_data(user_id)
         handle_stage_1_answer(call, user_id, state_data)
     
     # ============================================
@@ -204,17 +219,14 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "show_stage_2_intro":
         logger.info(f"📢 show_stage_2_intro для пользователя {user_id}")
-        state_data = get_state_data(user_id)
         show_stage_2_intro(call.message, user_id, state_data)
     
     elif data == "start_stage_2":
         logger.info(f"🎬 start_stage_2 для пользователя {user_id}")
-        state_data = get_state_data(user_id)
         start_stage_2(call.message, user_id, state_data)
     
     elif data.startswith("stage2_"):
         logger.info(f"📥 stage2 ответ: {data}")
-        state_data = get_state_data(user_id)
         handle_stage_2_answer(call, user_id, state_data)
     
     # ============================================
@@ -222,17 +234,14 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "show_stage_3_intro":
         logger.info(f"📢 show_stage_3_intro для пользователя {user_id}")
-        state_data = get_state_data(user_id)
         show_stage_3_intro(call.message, user_id, state_data)
     
     elif data == "start_stage_3":
         logger.info(f"🎬 start_stage_3 для пользователя {user_id}")
-        state_data = get_state_data(user_id)
         start_stage_3(call.message, user_id, state_data)
     
     elif data.startswith("stage3_"):
         logger.info(f"📥 stage3 ответ: {data}")
-        state_data = get_state_data(user_id)
         handle_stage_3_answer(call, user_id, state_data)
     
     # ============================================
@@ -240,17 +249,14 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "show_stage_4_intro":
         logger.info(f"📢 show_stage_4_intro для пользователя {user_id}")
-        state_data = get_state_data(user_id)
         show_stage_4_intro(call.message, user_id, state_data)
     
     elif data == "start_stage_4":
         logger.info(f"🎬 start_stage_4 для пользователя {user_id}")
-        state_data = get_state_data(user_id)
         start_stage_4(call.message, user_id, state_data)
     
     elif data.startswith("stage4_"):
         logger.info(f"📥 stage4 ответ: {data}")
-        state_data = get_state_data(user_id)
         handle_stage_4_answer(call, user_id, state_data)
     
     # ============================================
@@ -258,17 +264,14 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "show_stage_5_intro":
         logger.info(f"📢 show_stage_5_intro для пользователя {user_id}")
-        state_data = get_state_data(user_id)
         show_stage_5_intro(call.message, user_id, state_data)
     
     elif data == "start_stage_5":
         logger.info(f"🎬 start_stage_5 для пользователя {user_id}")
-        state_data = get_state_data(user_id)
         start_stage_5(call.message, user_id, state_data)
     
     elif data.startswith("stage5_"):
         logger.info(f"📥 stage5 ответ: {data}")
-        state_data = get_state_data(user_id)
         handle_stage_5_answer(call, user_id, state_data)
     
     # ============================================
@@ -313,9 +316,11 @@ async def handle_sync_callback(call: CallbackQuery):
         logger.info(f"🎭 show_mode_selection для пользователя {user_id}")
         show_mode_selection(call.message)
     
-    elif data.startswith("mode_"):
-        mode = data.replace("mode_", "")
-        logger.info(f"🎭 Выбран режим: {mode} для пользователя {user_id}")
+    elif data in ["set_mode_coach", "set_mode_psychologist", "set_mode_trainer"]:
+        mode = data.replace("set_mode_", "")
+        logger.info(f"🎭 Установка режима: {mode} для пользователя {user_id}")
+        # Обновляем режим в данных пользователя
+        update_state_data(user_id, communication_mode=mode)
         show_mode_selected(call.message, mode)
     
     elif data == "back_to_mode_selected":
@@ -334,12 +339,49 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     # REALITY CHECK
     # ============================================
-    elif data in [
-        "check_reality", "skip_life_context", "skip_goal_questions",
-        "skip_to_route", "accept_feasibility_plan", "adjust_timeline", "reduce_goal"
-    ]:
-        logger.info(f"🔍 reality check: {data} для пользователя {user_id}")
-        handle_reality_callback(call)
+    elif data == "check_reality":
+        logger.info(f"🔍 check_reality для пользователя {user_id}")
+        show_reality_check(call, state_data)
+    
+    elif data == "skip_life_context":
+        logger.info(f"⏭ skip_life_context для пользователя {user_id}")
+        skip_life_context(call, state_data)
+    
+    elif data == "skip_goal_questions":
+        logger.info(f"⏭ skip_goal_questions для пользователя {user_id}")
+        skip_goal_questions(call, state_data)
+    
+    elif data == "skip_to_route":
+        logger.info(f"⏭ skip_to_route для пользователя {user_id}")
+        skip_to_route(call, state_data)
+    
+    elif data == "accept_feasibility_plan":
+        logger.info(f"✅ accept_feasibility_plan для пользователя {user_id}")
+        accept_feasibility_plan(call, state_data)
+    
+    elif data == "adjust_timeline":
+        logger.info(f"🔄 adjust_timeline для пользователя {user_id}")
+        adjust_timeline(call, state_data)
+    
+    elif data == "reduce_goal":
+        logger.info(f"📉 reduce_goal для пользователя {user_id}")
+        reduce_goal(call, state_data)
+    
+    elif data == "apply_extended_timeline":
+        logger.info(f"⏱ apply_extended_timeline для пользователя {user_id}")
+        apply_extended_timeline(call, state_data)
+    
+    elif data == "select_goal_50":
+        logger.info(f"📈 select_goal_50 для пользователя {user_id}")
+        select_goal_50(call, state_data)
+    
+    elif data == "select_goal_30":
+        logger.info(f"📈 select_goal_30 для пользователя {user_id}")
+        select_goal_30(call, state_data)
+    
+    elif data == "select_goal_blocks":
+        logger.info(f"🧱 select_goal_blocks для пользователя {user_id}")
+        select_goal_blocks(call, state_data)
     
     # ============================================
     # ЦЕЛИ И МАРШРУТЫ
@@ -350,7 +392,7 @@ async def handle_sync_callback(call: CallbackQuery):
     
     elif data == "show_dynamic_destinations":
         logger.info(f"🎯 show_dynamic_destinations для пользователя {user_id}")
-        show_dynamic_destinations(call)
+        show_dynamic_destinations(call, state_data)
     
     elif data.startswith("goal_cat_"):
         logger.info(f"🎯 Категория целей: {data} для пользователя {user_id}")
@@ -364,15 +406,20 @@ async def handle_sync_callback(call: CallbackQuery):
     
     elif data.startswith("dynamic_dest_"):
         logger.info(f"🎯 Выбор динамической цели: {data} для пользователя {user_id}")
-        handle_dynamic_destination(call)
+        handle_dynamic_destination(call, state_data)
     
     elif data == "custom_destination":
         logger.info(f"✏️ custom_destination для пользователя {user_id}")
-        custom_destination(call)
+        custom_destination(call, state_data)
     
     elif data == "route_step_done":
         logger.info(f"✅ route_step_done для пользователя {user_id}")
-        route_step_done(call)
+        route_step_done(call, state_data)
+    
+    elif data.startswith("build_route_"):
+        logger.info(f"🛤 build_route: {data} для пользователя {user_id}")
+        goal_id = data.replace("build_route_", "")
+        build_route(call, state_data, goal_id)
     
     # ============================================
     # ВОПРОСЫ И ПОМОЩЬ
@@ -389,13 +436,21 @@ async def handle_sync_callback(call: CallbackQuery):
         logger.info(f"📚 show_tale для пользователя {user_id}")
         show_tale(call)
     
+    elif data == "weekend_ideas":
+        logger.info(f"🎨 weekend_ideas для пользователя {user_id}")
+        show_weekend_ideas(call)
+    
     elif data == "smart_questions":
         logger.info(f"🤔 smart_questions для пользователя {user_id}")
         show_smart_questions(call)
     
     elif data.startswith("smart_q_"):
         logger.info(f"❓ smart question ответ: {data} для пользователя {user_id}")
-        handle_smart_question(call)
+        try:
+            question_num = int(data.replace("smart_q_", ""))
+            handle_smart_question(call, question_num)
+        except ValueError:
+            logger.error(f"❌ Неверный формат smart_q: {data}")
     
     elif data == "ask_pretest":
         logger.info(f"❓ ask_pretest для пользователя {user_id}")
@@ -417,6 +472,35 @@ async def handle_sync_callback(call: CallbackQuery):
     elif data == "show_profile":
         logger.info(f"🧠 show_profile для пользователя {user_id}")
         show_profile(call.message, user_id)
+    
+    elif data == "show_results":
+        logger.info(f"📊 show_results для пользователя {user_id}")
+        show_profile(call.message, user_id)
+    
+    # ============================================
+    # НАВИГАЦИЯ
+    # ============================================
+    elif data == "back_to_main":
+        logger.info(f"◀️ back_to_main для пользователя {user_id}")
+        context = user_contexts.get(user_id)
+        if context:
+            from handlers.modes import show_main_menu_after_mode
+            show_main_menu_after_mode(call.message, context)
+    
+    elif data == "back_to_results":
+        logger.info(f"◀️ back_to_results для пользователя {user_id}")
+        show_profile(call.message, user_id)
+    
+    elif data == "back_to_intro":
+        logger.info(f"◀️ back_to_intro для пользователя {user_id}")
+        show_intro(call.message)
+    
+    # ============================================
+    # ИГНОРИРУЕМЫЕ CALLBACK'И (ЗАГОЛОВКИ И Т.Д.)
+    # ============================================
+    elif data == "ignore":
+        logger.debug(f"⏭ Игнорируем callback: {data}")
+        # Просто игнорируем
     
     # ============================================
     # НЕИЗВЕСТНЫЙ CALLBACK
