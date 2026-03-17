@@ -4,6 +4,7 @@
 ОБЪЕДИНЕННЫЙ ФАЙЛ: Обработчики вопросов тестирования И умных вопросов
 Версия для MAX - ПОЛНАЯ с голосовой поддержкой
 ИСПРАВЛЕНО: убраны HTML-теги, используется Markdown, исправлено дублирование сообщений, добавлена блокировка
+ИСПРАВЛЕНО (v2.1): Убраны await перед синхронными функциями safe_send_message
 """
 
 import logging
@@ -1437,25 +1438,24 @@ def show_question_input(call: CallbackQuery):
     set_state(user_id, TestStates.awaiting_question)
 
 
-async def process_text_question_async(
+# ============================================
+# СИНХРОННАЯ ФУНКЦИЯ ОБРАБОТКИ ВОПРОСА (БЕЗ await)
+# ============================================
+
+def process_text_question_sync(
     message: Message, 
     user_id: int, 
     text: str, 
     show_question_text: bool = True
 ):
     """
-    Асинхронная обработка текстового вопроса пользователя
-    
-    Args:
-        message: сообщение
-        user_id: ID пользователя
-        text: текст вопроса
-        show_question_text: показывать ли текст вопроса (False для голосовых, где уже показали)
+    СИНХРОННАЯ обработка текстового вопроса пользователя
+    (вызывается из потока, НЕ использует await)
     """
     # ✅ Проверяем, не обрабатывается ли уже запрос
     if is_processing(user_id):
         logger.warning(f"⚠️ Запрос от пользователя {user_id} уже обрабатывается, пропускаем")
-        await safe_send_message(
+        safe_send_message(
             message,
             "⏳ Ваш предыдущий вопрос еще обрабатывается. Пожалуйста, подождите...",
             delete_previous=True
@@ -1470,7 +1470,7 @@ async def process_text_question_async(
         
         # Проверяем, завершен ли тест
         if not is_test_completed_check(user_data_dict):
-            await safe_send_message(
+            safe_send_message(
                 message,
                 "❓ Сначала нужно пройти тест. Используйте /start",
                 delete_previous=True
@@ -1478,7 +1478,7 @@ async def process_text_question_async(
             return
         
         # Отправляем статусное сообщение
-        status_msg = await safe_send_message(
+        status_msg = safe_send_message(
             message,
             "🎙 Думаю над ответом...",
             delete_previous=True
@@ -1515,8 +1515,13 @@ async def process_text_question_async(
 Напиши свой ответ ТОЛЬКО ТЕКСТОМ, готовым для озвучивания.
 """
         
-        # Получаем ответ от ИИ
-        response = await call_deepseek(prompt, max_tokens=1000)
+        # Получаем ответ от ИИ (синхронная обертка)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            response = loop.run_until_complete(call_deepseek(prompt, max_tokens=1000))
+        finally:
+            loop.close()
         
         if not response:
             response = "Извините, я немного задумался. Можете повторить вопрос?"
@@ -1542,20 +1547,20 @@ async def process_text_question_async(
         # Удаляем статусное сообщение
         if status_msg:
             try:
-                await safe_delete_message(message.chat.id, status_msg.message_id)
+                safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
         # ПОКАЗЫВАЕМ ТЕКСТ ВОПРОСА ТОЛЬКО ЕСЛИ НУЖНО
         if show_question_text:
-            await safe_send_message(
+            safe_send_message(
                 message,
                 f"📝 **Вы сказали:**\n{text}",
                 delete_previous=False  # не удаляем ничего, просто отправляем
             )
         
         # ОТПРАВЛЯЕМ ТЕКСТОВЫЙ ОТВЕТ
-        await safe_send_message(
+        safe_send_message(
             message,
             f"💭 **Ответ**\n\n{clean_response}",
             reply_markup=keyboard,
@@ -1565,15 +1570,21 @@ async def process_text_question_async(
         
         # Генерируем и отправляем голосовой ответ
         try:
-            audio_data = await text_to_speech(response, mode_name)
-            if audio_data:
-                success = await send_voice_to_max(message.chat.id, audio_data)
-                if success:
-                    logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
+            # Создаем новый event loop для асинхронной операции
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                audio_data = loop.run_until_complete(text_to_speech(response, mode_name))
+                if audio_data:
+                    success = loop.run_until_complete(send_voice_to_max(message.chat.id, audio_data))
+                    if success:
+                        logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
+                    else:
+                        logger.warning(f"⚠️ Не удалось отправить голос пользователю {user_id}")
                 else:
-                    logger.warning(f"⚠️ Не удалось отправить голос пользователю {user_id}")
-            else:
-                logger.warning(f"⚠️ Не удалось сгенерировать голос для пользователя {user_id}")
+                    logger.warning(f"⚠️ Не удалось сгенерировать голос для пользователя {user_id}")
+            finally:
+                loop.close()
         except Exception as e:
             logger.error(f"❌ Ошибка при отправке голоса: {e}", exc_info=True)
         
@@ -1583,6 +1594,28 @@ async def process_text_question_async(
     finally:
         # ✅ ВАЖНО: Снимаем блокировку в любом случае
         set_processing(user_id, False)
+
+
+# ============================================
+# АСИНХРОННАЯ ОБЕРТКА (ДЛЯ СОВМЕСТИМОСТИ)
+# ============================================
+
+async def process_text_question_async(
+    message: Message, 
+    user_id: int, 
+    text: str, 
+    show_question_text: bool = True
+):
+    """
+    Асинхронная обертка для синхронной функции обработки вопроса
+    (вызывается из main.py с await)
+    """
+    # Запускаем синхронную функцию в отдельном потоке
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        None,  # используем ThreadPoolExecutor по умолчанию
+        lambda: process_text_question_sync(message, user_id, text, show_question_text)
+    )
 
 
 async def process_voice_message_async(message: Message, user_id: int, file_path: str):
@@ -1691,6 +1724,7 @@ __all__ = [
     'show_smart_questions',
     'handle_smart_question',
     'show_question_input',
+    'process_text_question_sync',  # ✅ Добавлено для синхронного вызова
     'process_text_question_async',
     'process_voice_message_async',
     
