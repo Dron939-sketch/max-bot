@@ -4,7 +4,12 @@
 Обработчики команды /start и начальных экранов для MAX
 """
 import logging
+import time
+from typing import Optional
+
 from maxibot import types
+from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
+
 from bot_instance import bot
 from models import UserContext
 from config import COMMUNICATION_MODES
@@ -16,7 +21,6 @@ from keyboards import (
 )
 from formatters import bold
 from message_utils import safe_send_message
-import time
 
 # ИСПРАВЛЕННЫЕ ИМПОРТЫ - используем state.py
 from state import (
@@ -46,6 +50,10 @@ def get_user_profile(user_id: int) -> dict:
     """Получает профиль пользователя"""
     data = user_data.get(user_id, {})
     return data.get("profile_data", {})
+
+def get_user_name(user_id: int) -> str:
+    """Получает имя пользователя"""
+    return user_names.get(user_id, "Пользователь")
 
 # ============================================
 # ВРЕМЕННАЯ СТАТИСТИКА (потом в БД)
@@ -152,7 +160,7 @@ def cmd_start(message: types.Message):
         return
     
     # Если контекст уже заполнен, показываем меню
-    from .modes import show_main_menu_after_mode
+    from handlers.modes import show_main_menu_after_mode
     show_main_menu_after_mode(message, context)
 
 
@@ -162,7 +170,7 @@ def cmd_menu(message: types.Message):
     user_id = message.from_user.id
     
     if user_id in user_contexts:
-        from .modes import show_main_menu_after_mode
+        from handlers.modes import show_main_menu_after_mode
         show_main_menu_after_mode(message, user_contexts[user_id])
     else:
         # Если нет контекста, показываем /start
@@ -176,7 +184,7 @@ def cmd_menu(message: types.Message):
 @bot.callback_query_handler(func=lambda call: call.data == 'start_context')
 def callback_start_context(call: types.CallbackQuery):
     """Начать заполнение контекста"""
-    from .context import start_context
+    from handlers.context import start_context
     start_context(call.message)
 
 
@@ -196,11 +204,17 @@ def callback_restart_test(call: types.CallbackQuery):
         # Сохраняем только базовую информацию, удаляем данные теста
         user_data[user_id] = {}
     
+    # Очищаем состояние
+    clear_state(user_id)
+    
     # Обновляем контекст
     if user_id in user_contexts:
         context = user_contexts[user_id]
-        context.profile_data = {}
-        context.confinement_model = {}
+        # Очищаем данные профиля
+        if hasattr(context, 'profile_data'):
+            context.profile_data = {}
+        if hasattr(context, 'confinement_model'):
+            context.confinement_model = {}
     
     # Показываем приветствие
     text = f"""
@@ -219,14 +233,14 @@ def callback_restart_test(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'show_profile')
 def callback_show_profile(call: types.CallbackQuery):
     """Показать профиль"""
-    from .profile import show_profile
-    show_profile(call.message)
+    from handlers.profile import show_profile
+    show_profile(call.message, call.from_user.id)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'show_modes')
 def callback_show_modes(call: types.CallbackQuery):
     """Показать выбор режимов"""
-    from .modes import show_mode_selection
+    from handlers.modes import show_mode_selection
     show_mode_selection(call.message)
 
 
@@ -236,7 +250,7 @@ def callback_back_to_start(call: types.CallbackQuery):
     # Создаем фейковое сообщение для cmd_start
     class FakeMessage:
         def __init__(self, user_id, chat_id, text):
-            self.from_user = type('obj', (), {'id': user_id, 'first_name': user_names.get(user_id, 'Пользователь')})
+            self.from_user = type('obj', (), {'id': user_id, 'first_name': get_user_name(user_id)})
             self.chat = type('obj', (), {'id': chat_id})
             self.text = text
             self.message_id = call.message.message_id
@@ -285,10 +299,10 @@ def show_why_details(call: types.CallbackQuery):
 
 👌 Погнали?"""
     
-    keyboard = types.InlineKeyboardMarkup()
+    keyboard = InlineKeyboardMarkup()
     keyboard.row(
-        types.InlineKeyboardButton("🚀 ПОГНАЛИ!", callback_data="start_context"),
-        types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_start")
+        InlineKeyboardButton("🚀 ПОГНАЛИ!", callback_data="start_context"),
+        InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_start")
     )
     
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
@@ -305,9 +319,10 @@ def show_main_menu(message: types.Message, context: UserContext):
     
     welcome_text = f"{context.get_greeting(context.name)}\n\n"
     
-    if hasattr(context, 'weather_cache') and context.weather_cache:
+    # Безопасная проверка погоды
+    if context.weather_cache and isinstance(context.weather_cache, dict):
         weather = context.weather_cache
-        welcome_text += f"{weather['icon']} {weather['description']}, {weather['temp']}°C\n"
+        welcome_text += f"{weather.get('icon', '🌍')} {weather.get('description', 'данные погоды')}, {weather.get('temp', '?')}°C\n"
     
     if day_context['is_weekend']:
         welcome_text += f"🏖 Сегодня выходной! Как настроение?\n\n"
@@ -321,3 +336,21 @@ def show_main_menu(message: types.Message, context: UserContext):
     keyboard = get_main_menu_keyboard()
     
     safe_send_message(message, welcome_text, reply_markup=keyboard)
+
+
+# ============================================
+# ЭКСПОРТ
+# ============================================
+
+__all__ = [
+    'cmd_start',
+    'cmd_menu',
+    'show_why_details',
+    'show_main_menu',
+    'callback_start_context',
+    'callback_why_details',
+    'callback_restart_test',
+    'callback_show_profile',
+    'callback_show_modes',
+    'callback_back_to_start'
+]
