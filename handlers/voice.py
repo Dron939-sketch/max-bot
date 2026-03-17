@@ -12,7 +12,8 @@ import asyncio
 from typing import Optional
 
 from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from maxibot.utils import BufferedInputFile
+# ❌ Удаляем импорт BufferedInputFile
+# from maxibot.utils import BufferedInputFile
 
 from bot_instance import bot
 from message_utils import safe_send_message, safe_delete_message
@@ -217,12 +218,9 @@ async def test_voice_message(message: Message, text: str = "Привет! Это
     for mode in ["coach", "psychologist", "trainer"]:
         audio = await text_to_speech(text, mode)
         if audio:
-            audio_file = BufferedInputFile(audio, filename=f"test_{mode}.ogg")
-            await message.answer_voice(
-                audio_file,
-                caption=f"🎙 Режим: {COMMUNICATION_MODES[mode]['display_name']}"
-            )
-            results.append(f"✅ {COMMUNICATION_MODES[mode]['display_name']}")
+            # ❌ Отключаем отправку голоса, только логируем
+            logger.info(f"🎙 Тестовый голос для режима {mode} сгенерирован (длина: {len(audio)} байт)")
+            results.append(f"✅ {COMMUNICATION_MODES[mode]['display_name']} (голос сгенерирован)")
         else:
             results.append(f"❌ {COMMUNICATION_MODES[mode]['display_name']}")
         await asyncio.sleep(0.5)
