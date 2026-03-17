@@ -16,7 +16,7 @@ from maxibot import MaxiBot
 # Импортируем бота (убедись, что bot_instance.py существует)
 from bot_instance import bot
 
-from formatters import clean_text_for_safe_display, html_to_markdown  # 👈 ДОБАВЛЕН ИМПОРТ
+from formatters import clean_text_for_safe_display, html_to_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ def safe_send_message(
     message: Optional[Union[types.Message, int]],
     text: str,
     reply_markup: Any = None,
-    parse_mode: str = None,  # 👈 ИГНОРИРУЕТСЯ
+    parse_mode: str = None,
     delete_previous: bool = False,
     keep_last: int = 1,
     silent: bool = False,
@@ -115,13 +115,12 @@ def safe_send_message(
         # Отправляем новое сообщение с Markdown
         send_kwargs = {
             'chat_id': cid,
-            'text': markdown_text  # 👈 используем текст с Markdown
+            'text': markdown_text
         }
         
         if reply_markup is not None:
             send_kwargs['reply_markup'] = reply_markup
         
-        # Добавляем дополнительные параметры из kwargs
         send_kwargs.update(kwargs)
         
         sent_msg = bot.send_message(**send_kwargs)
@@ -132,7 +131,6 @@ def safe_send_message(
         
         user_messages_history[cid].append(sent_msg.message_id)
         
-        # Ограничиваем размер истории
         if len(user_messages_history[cid]) > MAX_HISTORY_PER_USER:
             user_messages_history[cid] = user_messages_history[cid][-MAX_HISTORY_PER_USER:]
         
@@ -142,12 +140,10 @@ def safe_send_message(
         return sent_msg
         
     except Exception as e:
-        error_msg = str(e).lower()
         logger.error(f"❌ Ошибка при отправке сообщения: {e}")
         
         # Если ошибка, пробуем отправить без Markdown (чистый текст)
         try:
-            # Убираем Markdown-символы
             plain_text = re.sub(r'\*\*(.*?)\*\*', r'\1', markdown_text)
             plain_text = re.sub(r'\*(.*?)\*', r'\1', plain_text)
             
@@ -160,7 +156,6 @@ def safe_send_message(
                 reply_markup=reply_markup
             )
             
-            # Сохраняем в историю
             if cid not in user_messages_history:
                 user_messages_history[cid] = []
             user_messages_history[cid].append(sent_msg.message_id)
@@ -178,7 +173,7 @@ def send_with_status_cleanup(
     text: str, 
     status_msg: Optional[types.Message] = None, 
     reply_markup: Any = None, 
-    parse_mode: str = None,  # 👈 ИГНОРИРУЕТСЯ
+    parse_mode: str = None,
     keep_last: int = 1
 ) -> Optional[types.Message]:
     """
@@ -285,7 +280,7 @@ def safe_edit_message(
     message: types.Message, 
     new_text: str, 
     reply_markup: Any = None, 
-    parse_mode: str = None  # 👈 ИГНОРИРУЕТСЯ
+    parse_mode: str = None
 ) -> Optional[types.Message]:
     """
     Безопасно редактирует существующее сообщение
@@ -345,7 +340,6 @@ def safe_send_typing(chat_id: int):
         chat_id: ID чата
     """
     try:
-        # Проверяем, есть ли такой метод в MAX API
         if hasattr(bot, 'send_chat_action'):
             bot.send_chat_action(chat_id, 'typing')
             logger.debug(f"✏️ Отправлен статус 'печатает' в чат {chat_id}")
@@ -368,7 +362,6 @@ def safe_delete_message(chat_id: int, message_id: int) -> bool:
         bot.delete_message(chat_id, message_id)
         logger.debug(f"🗑️ Удалено сообщение {message_id}")
         
-        # Удаляем из истории
         if chat_id in user_messages_history:
             if message_id in user_messages_history[chat_id]:
                 user_messages_history[chat_id].remove(message_id)
@@ -423,7 +416,7 @@ def split_and_send_long_message(
     message: Union[types.Message, int],
     text: str,
     reply_markup: Any = None,
-    parse_mode: str = None,  # 👈 ИГНОРИРУЕТСЯ
+    parse_mode: str = None,
     delete_previous: bool = False,
     keep_last: int = 1,
     max_length: int = 3500
@@ -451,10 +444,13 @@ def split_and_send_long_message(
     parts = split_long_message(markdown_text, max_length)
     sent_messages = []
     
+    # Создаем разделитель на всю ширину
+    separator = "─" * 40  # 40 символов, растянется на всю ширину
+    
     for i, part in enumerate(parts):
-        # Добавляем индикатор части для всех, кроме последней
+        # Для промежуточных частей - добавляем индикатор на всю ширину
         if i < len(parts) - 1:
-            part_text = f"{part}\n\n✉️ Часть {i+1}/{len(parts)}"
+            part_text = f"{part}\n\n{separator}\n📄 Часть {i+1} из {len(parts)}\n{separator}"
             current_markup = None
         else:
             part_text = part
