@@ -2,17 +2,20 @@
 # -*- coding: utf-8 -*-
 """
 ОБЪЕДИНЕННЫЙ ФАЙЛ: Обработчики вопросов тестирования И умных вопросов
-Версия для MAX
+Версия для MAX - ПОЛНАЯ с голосовой поддержкой
 """
 
 import logging
 import re
 import time
 import random
+import asyncio
+import tempfile
+import os
 from typing import Dict, Any, List, Optional
 
 from bot_instance import bot
-from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
+from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message, BufferedInputFile
 
 # Наши модули
 from config import COMMUNICATION_MODES
@@ -46,7 +49,7 @@ from questions import (
 
 # Импорты из services.py
 from services import call_deepseek, text_to_speech, speech_to_text
-from modes import get_mode
+from question_analyzer import create_analyzer_from_user_data
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +199,41 @@ def calculate_profile_final(user_data_dict: dict) -> dict:
 # ЭТАП 1: ВОСПРИЯТИЕ
 # ============================================
 
+def show_stage_1_intro(message, user_id: int, state_data: dict):
+    """Показывает введение в этап 1"""
+    text = f"""
+🧠 {bold('ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ')}
+
+Восприятие — это линза, через которую вы смотрите на мир.
+
+🔍 {bold('Что мы исследуем:')}
+• Куда направлено ваше внимание — вовне или внутрь
+• Какая тревога доминирует — страх отвержения или страх потери контроля
+
+📊 {bold('Вопросов:')} 8
+⏱ {bold('Время:')} ~3 минуты
+
+Отвечайте честно — это поможет мне лучше понять вас.
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_1"))
+    
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+
+
+def start_stage_1(message, user_id: int, state_data: dict):
+    """Начало этапа 1"""
+    update_state_data(user_id,
+        stage1_current=0,
+        stage1_last_answered=-1,
+        stage1_start_time=time.time(),
+        perception_scores={"EXTERNAL": 0, "INTERNAL": 0, "SYMBOLIC": 0, "MATERIAL": 0}
+    )
+    
+    ask_stage_1_question(message, user_id)
+
+
 def ask_stage_1_question(message, user_id: int):
     """Задаёт вопрос ЭТАПА 1"""
     data = get_state_data(user_id)
@@ -225,12 +263,11 @@ def ask_stage_1_question(message, user_id: int):
             callback_data=f"stage1_{current}_{option_id}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
 
-def handle_stage_1_answer(call: CallbackQuery):
+def handle_stage_1_answer(call: CallbackQuery, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 1"""
-    user_id = call.from_user.id
     data = get_state_data(user_id)
     
     if data.get("processing", False):
@@ -312,13 +349,51 @@ def finish_stage_1(message, user_id: int):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 2", callback_data="show_stage_2_intro"))
     
-    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     set_state(user_id, TestStates.stage_2)
 
 
 # ============================================
 # ЭТАП 2: МЫШЛЕНИЕ
 # ============================================
+
+def show_stage_2_intro(message, user_id: int, state_data: dict):
+    """Показывает введение в этап 2"""
+    perception_type = user_data.get(user_id, {}).get("perception_type", "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ")
+    total_questions = get_stage2_total(perception_type)
+    
+    text = f"""
+🧠 {bold('ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ')}
+
+Восприятие определяет, что вы видите. Мышление — как вы это понимаете.
+
+🎯 {bold('Самое важное:')}
+Конфигурация мышления — это траектория с чётким пунктом назначения: результат, к которому вы придёте.
+
+📊 {bold('Вопросов:')} {total_questions}
+⏱ {bold('Время:')} ~3-4 минуты
+
+Продолжим исследование?
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_2"))
+    
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+
+
+def start_stage_2(message, user_id: int, state_data: dict):
+    """Начало этапа 2"""
+    update_state_data(user_id,
+        stage2_current=0,
+        stage2_last_answered=-1,
+        stage2_start_time=time.time(),
+        stage2_level_scores_dict={"1": 0, "2": 0, "3": 0, "4": 0, "5": 0, "6": 0, "7": 0, "8": 0, "9": 0},
+        strategy_levels={"СБ": [], "ТФ": [], "УБ": [], "ЧВ": []}
+    )
+    
+    ask_stage_2_question(message, user_id)
+
 
 def ask_stage_2_question(message, user_id: int):
     """Задаёт вопрос ЭТАПА 2"""
@@ -355,12 +430,11 @@ def ask_stage_2_question(message, user_id: int):
             callback_data=f"stage2_{current}_{level_num}_{measures}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
 
-def handle_stage_2_answer(call: CallbackQuery):
+def handle_stage_2_answer(call: CallbackQuery, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 2"""
-    user_id = call.from_user.id
     data = get_state_data(user_id)
     
     if data.get("processing", False):
@@ -464,13 +538,52 @@ def finish_stage_2(message, user_id: int):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 3", callback_data="show_stage_3_intro"))
     
-    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     set_state(user_id, TestStates.stage_3)
 
 
 # ============================================
 # ЭТАП 3: ПОВЕДЕНИЕ
 # ============================================
+
+def show_stage_3_intro(message, user_id: int, state_data: dict):
+    """Показывает введение в этап 3"""
+    text = f"""
+🧠 {bold('ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ')}
+
+Восприятие определяет, что вы видите.
+Мышление — как вы это понимаете.
+
+Конфигурация поведения — это то, как вы на это реагируете.
+
+🔍 {bold('Здесь мы исследуем:')}
+• Ваши автоматические реакции
+• Как вы действуете в разных ситуациях
+
+📊 {bold('Вопросов:')} 8
+⏱ {bold('Время:')} ~3 минуты
+
+Продолжим?
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_3"))
+    
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+
+
+def start_stage_3(message, user_id: int, state_data: dict):
+    """Начало этапа 3"""
+    update_state_data(user_id,
+        stage3_current=0,
+        stage3_last_answered=-1,
+        stage3_start_time=time.time(),
+        stage3_level_scores=[],
+        behavioral_levels={"СБ": [], "ТФ": [], "УБ": [], "ЧВ": []}
+    )
+    
+    ask_stage_3_question(message, user_id)
+
 
 def ask_stage_3_question(message, user_id: int):
     """Задаёт вопрос ЭТАПА 3"""
@@ -502,12 +615,11 @@ def ask_stage_3_question(message, user_id: int):
             callback_data=f"stage3_{current}_{option_id}_{strategy}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
 
-def handle_stage_3_answer(call: CallbackQuery):
+def handle_stage_3_answer(call: CallbackQuery, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 3"""
-    user_id = call.from_user.id
     data = get_state_data(user_id)
     
     if data.get("processing", False):
@@ -615,13 +727,48 @@ def finish_stage_3(message, user_id: int):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 4", callback_data="show_stage_4_intro"))
     
-    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     set_state(user_id, TestStates.stage_4)
 
 
 # ============================================
 # ЭТАП 4: ТОЧКА РОСТА
 # ============================================
+
+def show_stage_4_intro(message, user_id: int, state_data: dict):
+    """Показывает введение в этап 4"""
+    text = f"""
+🧠 {bold('ЭТАП 4: ТОЧКА РОСТА')}
+
+Восприятие — что вы видите.
+Мышление — как понимаете.
+Поведение — как реагируете.
+
+🔍 {bold('Здесь мы найдём:')} где именно находится рычаг — место, где минимальное усилие даёт максимальные изменения.
+
+📊 {bold('Вопросов:')} 8
+⏱ {bold('Время:')} ~3 минуты
+
+Готовы найти свою точку роста?
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_4"))
+    
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+
+
+def start_stage_4(message, user_id: int, state_data: dict):
+    """Начало этапа 4"""
+    update_state_data(user_id,
+        stage4_current=0,
+        stage4_last_answered=-1,
+        stage4_start_time=time.time(),
+        dilts_counts={"ENVIRONMENT": 0, "BEHAVIOR": 0, "CAPABILITIES": 0, "VALUES": 0, "IDENTITY": 0}
+    )
+    
+    ask_stage_4_question(message, user_id)
+
 
 def ask_stage_4_question(message, user_id: int):
     """Задаёт вопрос ЭТАПА 4"""
@@ -652,12 +799,11 @@ def ask_stage_4_question(message, user_id: int):
             callback_data=f"stage4_{current}_{option_id}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
 
-def handle_stage_4_answer(call: CallbackQuery):
+def handle_stage_4_answer(call: CallbackQuery, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 4"""
-    user_id = call.from_user.id
     data = get_state_data(user_id)
     
     if data.get("processing", False):
@@ -742,6 +888,42 @@ def finish_stage_4(message, user_id: int):
 # ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ
 # ============================================
 
+def show_stage_5_intro(message, user_id: int, state_data: dict):
+    """Показывает введение в этап 5"""
+    text = f"""
+🧠 {bold('ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ')}
+
+Мы узнали, как вы воспринимаете мир, мыслите и действуете.
+Теперь пришло время заглянуть глубже — в то, что сформировало вас.
+
+🔍 {bold('Здесь мы исследуем:')}
+• Какой у вас тип привязанности
+• Какие защитные механизмы вы используете
+• Какие глубинные убеждения управляют вами
+
+📊 {bold('Вопросов:')} 10
+⏱ {bold('Время:')} ~5 минут
+
+👇 {bold('Готовы заглянуть вглубь себя?')}
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_5"))
+    
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+
+
+def start_stage_5(message, user_id: int, state_data: dict):
+    """Начало этапа 5"""
+    update_state_data(user_id,
+        stage5_current=0,
+        stage5_last_answered=-1,
+        stage5_answers=[]
+    )
+    
+    ask_stage_5_question(message, user_id)
+
+
 def ask_stage_5_question(message, user_id: int):
     """Задаёт вопрос 5-го этапа"""
     data = get_state_data(user_id)
@@ -771,12 +953,11 @@ def ask_stage_5_question(message, user_id: int):
             callback_data=f"stage5_{current}_{option_id}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
 
-def handle_stage_5_answer(call: CallbackQuery):
+def handle_stage_5_answer(call: CallbackQuery, user_id: int, state_data: dict):
     """Обработка ответа 5-го этапа"""
-    user_id = call.from_user.id
     data = get_state_data(user_id)
     
     if data.get("processing", False):
@@ -876,12 +1057,11 @@ def ask_clarifying_question(message, user_id: int):
             callback_data=f"clarify_answer_{current}_{opt_key}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
 
-def handle_clarifying_answer(call: CallbackQuery):
+def handle_clarifying_answer(call: CallbackQuery, user_id: int, state_data: dict):
     """Обрабатывает ответ на уточняющий вопрос"""
-    user_id = call.from_user.id
     data = get_state_data(user_id)
     
     parts = call.data.split("_")
@@ -1085,12 +1265,22 @@ def show_smart_questions(call: CallbackQuery):
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
 
-def handle_smart_question(call: CallbackQuery, question: str):
+def handle_smart_question(call: CallbackQuery, question_num: int):
     """
     Обрабатывает выбранный умный вопрос
     """
     user_id = call.from_user.id
     user_data_dict = get_user_data_dict(user_id)
+    
+    # Получаем вопрос из сохраненных
+    data = get_state_data(user_id)
+    questions = data.get("smart_questions", [])
+    
+    if question_num < 1 or question_num > len(questions):
+        logger.error(f"❌ Неверный номер вопроса: {question_num}")
+        return
+    
+    question = questions[question_num - 1]
     
     # Отправляем статусное сообщение
     status_msg = safe_send_message(
@@ -1102,7 +1292,8 @@ def handle_smart_question(call: CallbackQuery, question: str):
     context_obj = get_user_context_obj(user_id)
     mode_name = context_obj.communication_mode if context_obj else "coach"
     
-    # Создаём экземпляр режима
+    # Получаем режим
+    from modes import get_mode
     mode = get_mode(mode_name, user_id, user_data_dict, context_obj)
     
     # Обрабатываем вопрос через режим
@@ -1157,7 +1348,7 @@ def show_question_input(call: CallbackQuery):
     user_id = call.from_user.id
     user_data_dict = get_user_data_dict(user_id)
     context = get_user_context_obj(user_id)
-    user_name = context.name if context and context.name else "друг"
+    user_name = get_user_name(user_id)
     
     profile_data = user_data_dict.get("profile_data", {})
     profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
@@ -1210,15 +1401,15 @@ def show_question_input(call: CallbackQuery):
     set_state(user_id, TestStates.awaiting_question)
 
 
-def process_text_question(message: Message, user_id: int, text: str):
+async def process_text_question_async(message: Message, user_id: int, text: str):
     """
-    Обрабатывает текстовый вопрос пользователя
+    Асинхронная обработка текстового вопроса пользователя
     """
     user_data_dict = get_user_data_dict(user_id)
     
     # Проверяем, завершен ли тест
     if not is_test_completed_check(user_data_dict):
-        safe_send_message(
+        await safe_send_message(
             message,
             "❓ Сначала нужно пройти тест. Используйте /start",
             delete_previous=True
@@ -1226,7 +1417,7 @@ def process_text_question(message: Message, user_id: int, text: str):
         return
     
     # Отправляем статусное сообщение
-    status_msg = safe_send_message(
+    status_msg = await safe_send_message(
         message,
         "🎙 Думаю над ответом...",
         delete_previous=True
@@ -1235,17 +1426,45 @@ def process_text_question(message: Message, user_id: int, text: str):
     context_obj = get_user_context_obj(user_id)
     mode_name = context_obj.communication_mode if context_obj else "coach"
     
-    # Создаём экземпляр режима
-    mode = get_mode(mode_name, user_id, user_data_dict, context_obj)
+    # Формируем промпт для ИИ
+    prompt = f"""
+Ты - {COMMUNICATION_MODES[mode_name]['name']} Фреди. Ты общаешься с пользователем.
+
+❗️ВАЖНЕЙШИЕ ПРАВИЛА ДЛЯ ТВОИХ ОТВЕТОВ:
+
+1. Твой текст БУДЕТ ОЗВУЧЕН, поэтому:
+   - НЕ ИСПОЛЬЗУЙ НИКАКИЕ СИМВОЛЫ: * # _ - • → [ ] ( ) 
+   - НЕ ИСПОЛЬЗУЙ НУМЕРАЦИЮ (1., 2., 3.)
+   - НЕ ИСПОЛЬЗУЙ МАРКИРОВАННЫЕ СПИСКИ
+   - Пиши ТОЛЬКО ТЕКСТ, как в разговоре
+
+2. Стиль речи - теплый, эмпатичный психологический разговор:
+   - Используй имя пользователя: {get_user_name(user_id)}
+   - Говори короткими предложениями
+   - Добавляй паузы с помощью многоточий...
+   - Задавай риторические вопросы
+
+Вопрос пользователя: {text}
+
+Информация о пользователе:
+Профиль: {user_data_dict.get('profile_data', {}).get('display_name', 'не определен')}
+Тип восприятия: {user_data_dict.get('perception_type', 'не определен')}
+Уровень мышления: {user_data_dict.get('thinking_level', 5)}/9
+
+Напиши свой ответ ТОЛЬКО ТЕКСТОМ, готовым для озвучивания.
+"""
     
-    # Обрабатываем вопрос через режим
-    result = mode.process_question(text)
-    response = result["response"]
+    # Получаем ответ от ИИ
+    response = await call_deepseek(prompt, max_tokens=1000)
     
-    # Обновляем данные с новой историей
-    if "history" not in user_data_dict:
-        user_data_dict["history"] = []
-    user_data_dict["history"] = mode.history
+    if not response:
+        response = "Извините, я немного задумался. Можете повторить вопрос?"
+    
+    # Сохраняем в историю
+    history = user_data_dict.get('history', [])
+    history.append({"role": "user", "content": text})
+    history.append({"role": "assistant", "content": response})
+    user_data_dict["history"] = history
     
     # Очищаем ответ от форматирования
     clean_response = clean_text_for_safe_display(response)
@@ -1256,48 +1475,47 @@ def process_text_question(message: Message, user_id: int, text: str):
         InlineKeyboardButton("🎤 ЗАДАТЬ ЕЩЁ", callback_data="ask_question"),
         InlineKeyboardButton("🎯 К ЦЕЛИ", callback_data="show_dynamic_destinations")
     )
-    keyboard.row(InlineKeyboardButton("🧠 МЫСЛИ ПСИХОЛОГА", callback_data="show_psychologist_thought"))
+    keyboard.row(InlineKeyboardButton("🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"))
     keyboard.row(InlineKeyboardButton("◀️ К ПОРТРЕТУ", callback_data="show_results"))
-    
-    # Добавляем предложения, если есть
-    suggestions_text = ""
-    if result.get("suggestions"):
-        suggestions_text = "\n\n" + "\n".join(result["suggestions"])
     
     # Удаляем статусное сообщение
     if status_msg:
         try:
-            safe_delete_message(message.chat.id, status_msg.message_id)
+            await safe_delete_message(message.chat.id, status_msg.message_id)
         except:
             pass
     
     # Отправляем ответ
-    safe_send_message(
+    await safe_send_message(
         message,
-        f"💭 <b>Ответ</b>\n\n{clean_response}{suggestions_text}",
+        f"💭 <b>Ответ</b>\n\n{clean_response}",
         reply_markup=keyboard,
         parse_mode='HTML',
         delete_previous=True
     )
     
     # Отправляем голосовой ответ
-    audio_data = text_to_speech(clean_response, mode_name)
+    audio_data = await text_to_speech(clean_response, mode_name)
     if audio_data:
-        logger.info(f"🎙 Голосовой ответ сгенерирован для пользователя {user_id}")
+        audio_file = BufferedInputFile(audio_data, filename="response.ogg")
+        await message.answer_voice(
+            audio_file,
+            caption=f"🎙 Голосовой ответ ({COMMUNICATION_MODES[mode_name]['display_name']})"
+        )
     
     # Сбрасываем состояние
     set_state(user_id, TestStates.results)
 
 
-def process_voice_message(message, user_id: int, file_path: str):
+async def process_voice_message_async(message: Message, user_id: int, file_path: str):
     """
-    Обрабатывает голосовое сообщение пользователя
+    Асинхронная обработка голосового сообщения пользователя
     """
     user_data_dict = get_user_data_dict(user_id)
     
     # Проверяем, завершен ли тест
     if not is_test_completed_check(user_data_dict):
-        safe_send_message(
+        await safe_send_message(
             message,
             "🎙 Голосовые сообщения доступны только после завершения теста",
             delete_previous=True
@@ -1305,7 +1523,7 @@ def process_voice_message(message, user_id: int, file_path: str):
         return
     
     # Отправляем статусное сообщение
-    status_msg = safe_send_message(
+    status_msg = await safe_send_message(
         message,
         "🎤 Распознаю речь...",
         delete_previous=True
@@ -1313,16 +1531,16 @@ def process_voice_message(message, user_id: int, file_path: str):
     
     try:
         # Распознаём речь
-        recognized_text = speech_to_text(file_path)
+        recognized_text = await speech_to_text(file_path)
         
         if not recognized_text:
             if status_msg:
                 try:
-                    safe_delete_message(message.chat.id, status_msg.message_id)
+                    await safe_delete_message(message.chat.id, status_msg.message_id)
                 except:
                     pass
             
-            safe_send_message(
+            await safe_send_message(
                 message,
                 "❌ Не удалось распознать речь\n\nПопробуйте еще раз или напишите текстом.",
                 delete_previous=True
@@ -1332,23 +1550,23 @@ def process_voice_message(message, user_id: int, file_path: str):
         # Удаляем статусное сообщение
         if status_msg:
             try:
-                safe_delete_message(message.chat.id, status_msg.message_id)
+                await safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
         # Обрабатываем распознанный текст как обычный вопрос
-        process_text_question(message, user_id, recognized_text)
+        await process_text_question_async(message, user_id, recognized_text)
         
     except Exception as e:
         logger.error(f"Ошибка при обработке голосового сообщения: {e}")
         
         if status_msg:
             try:
-                safe_delete_message(message.chat.id, status_msg.message_id)
+                await safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
-        safe_send_message(
+        await safe_send_message(
             message,
             "❌ Произошла ошибка при обработке голоса",
             delete_previous=True
@@ -1361,24 +1579,28 @@ def process_voice_message(message, user_id: int, file_path: str):
 
 __all__ = [
     # Функции этапов тестирования
-    'determine_perception_type',
-    'calculate_thinking_level_by_scores',
-    'get_level_group',
-    'calculate_final_level',
-    'determine_dominant_dilts',
-    'calculate_profile_final',
+    'show_stage_1_intro',
+    'start_stage_1',
     'ask_stage_1_question',
     'handle_stage_1_answer',
     'finish_stage_1',
+    'show_stage_2_intro',
+    'start_stage_2',
     'ask_stage_2_question',
     'handle_stage_2_answer',
     'finish_stage_2',
+    'show_stage_3_intro',
+    'start_stage_3',
     'ask_stage_3_question',
     'handle_stage_3_answer',
     'finish_stage_3',
+    'show_stage_4_intro',
+    'start_stage_4',
     'ask_stage_4_question',
     'handle_stage_4_answer',
     'finish_stage_4',
+    'show_stage_5_intro',
+    'start_stage_5',
     'ask_stage_5_question',
     'handle_stage_5_answer',
     'finish_stage_5',
@@ -1391,6 +1613,14 @@ __all__ = [
     'show_smart_questions',
     'handle_smart_question',
     'show_question_input',
-    'process_text_question',
-    'process_voice_message'
+    'process_text_question_async',
+    'process_voice_message_async',
+    
+    # Вспомогательные функции
+    'determine_perception_type',
+    'calculate_thinking_level_by_scores',
+    'get_level_group',
+    'calculate_final_level',
+    'determine_dominant_dilts',
+    'calculate_profile_final'
 ]
