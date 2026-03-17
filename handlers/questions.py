@@ -16,6 +16,7 @@ from typing import Dict, Any, List, Optional
 
 from maxibot import MaxiBot
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
+from maxibot.utils import BufferedInputFile
 
 # Наши модули
 from config import COMMUNICATION_MODES
@@ -1335,10 +1336,19 @@ def handle_smart_question(call: CallbackQuery, question_num: int):
         delete_previous=True
     )
     
-    # Отправляем голосовой ответ (временно отключено)
-    # audio_data = text_to_speech(clean_response, mode_name)
-    # if audio_data:
-    #     logger.info(f"🎙 Голосовой ответ сгенерирован для пользователя {user_id}")
+    # Отправляем голосовой ответ
+    try:
+        audio_data = text_to_speech(clean_response, mode_name)
+        if audio_data:
+            from maxibot.utils import BufferedInputFile
+            audio_file = BufferedInputFile(audio_data, filename="response.ogg")
+            call.message.answer_voice(
+                audio_file,
+                caption=f"🎙 Голосовой ответ ({COMMUNICATION_MODES[mode_name]['display_name']})"
+            )
+            logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при отправке голосового ответа: {e}")
 
 
 def show_question_input(call: CallbackQuery):
@@ -1417,7 +1427,6 @@ async def process_text_question_async(message: Message, user_id: int, text: str)
         return
     
     # Отправляем статусное сообщение
-    # ✅ ИСПРАВЛЕНО: убран await
     status_msg = safe_send_message(
         message,
         "🎙 Думаю над ответом...",
@@ -1467,7 +1476,7 @@ async def process_text_question_async(message: Message, user_id: int, text: str)
     history.append({"role": "assistant", "content": response})
     user_data_dict["history"] = history
     
-    # Очищаем ответ от форматирования
+    # Очищаем ответ от форматирования для отображения
     clean_response = clean_text_for_safe_display(response)
     
     # Клавиатура
@@ -1482,13 +1491,11 @@ async def process_text_question_async(message: Message, user_id: int, text: str)
     # Удаляем статусное сообщение
     if status_msg:
         try:
-            # ✅ ИСПРАВЛЕНО: убран await
             safe_delete_message(message.chat.id, status_msg.message_id)
         except:
             pass
     
-    # Отправляем ответ
-    # ✅ ИСПРАВЛЕНО: убран await
+    # ✅ 1. ОТПРАВЛЯЕМ ТЕКСТОВЫЙ ОТВЕТ
     safe_send_message(
         message,
         f"💭 <b>Ответ</b>\n\n{clean_response}",
@@ -1497,10 +1504,19 @@ async def process_text_question_async(message: Message, user_id: int, text: str)
         delete_previous=True
     )
     
-    # Отправляем голосовой ответ (временно отключено)
-    # audio_data = await text_to_speech(clean_response, mode_name)
-    # if audio_data:
-    #     logger.info(f"🎙 Голосовой ответ сгенерирован для пользователя {user_id}")
+    # ✅ 2. ОТПРАВЛЯЕМ ГОЛОСОВОЙ ОТВЕТ
+    try:
+        audio_data = await text_to_speech(response, mode_name)
+        if audio_data:
+            from maxibot.utils import BufferedInputFile
+            audio_file = BufferedInputFile(audio_data, filename="response.ogg")
+            await message.answer_voice(
+                audio_file,
+                caption=f"🎙 Голосовой ответ ({COMMUNICATION_MODES[mode_name]['display_name']})"
+            )
+            logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при отправке голосового ответа: {e}")
     
     # Сбрасываем состояние
     set_state(user_id, TestStates.results)
@@ -1522,7 +1538,6 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
         return
     
     # Отправляем статусное сообщение
-    # ✅ ИСПРАВЛЕНО: убран await
     status_msg = safe_send_message(
         message,
         "🎤 Распознаю речь...",
@@ -1536,7 +1551,6 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
         if not recognized_text:
             if status_msg:
                 try:
-                    # ✅ ИСПРАВЛЕНО: убран await
                     safe_delete_message(message.chat.id, status_msg.message_id)
                 except:
                     pass
@@ -1551,12 +1565,18 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
         # Удаляем статусное сообщение
         if status_msg:
             try:
-                # ✅ ИСПРАВЛЕНО: убран await
                 safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
-        # Обрабатываем распознанный текст как обычный вопрос
+        # ✅ 1. Отправляем текст, что распознали
+        await safe_send_message(
+            message,
+            f"📝 <b>Вы сказали:</b>\n{recognized_text}",
+            delete_previous=True
+        )
+        
+        # ✅ 2. Обрабатываем как обычный вопрос
         await process_text_question_async(message, user_id, recognized_text)
         
     except Exception as e:
@@ -1564,7 +1584,6 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
         
         if status_msg:
             try:
-                # ✅ ИСПРАВЛЕНО: убран await
                 safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
