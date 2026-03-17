@@ -576,6 +576,21 @@ def show_profile(message: Message, user_id: int):
         )
         return
     
+    # ✅ 1. ПРОВЕРЯЕМ НАЛИЧИЕ AI ПРОФИЛЯ
+    if data.get("ai_generated_profile"):
+        logger.info(f"✅ Найден AI профиль для пользователя {user_id}, показываем его")
+        show_ai_profile(message, user_id)
+        return
+    
+    # ✅ 2. ПРОВЕРЯЕМ НАЛИЧИЕ ФИНАЛЬНОГО ПРОФИЛЯ
+    if data.get("profile_data"):
+        logger.info(f"✅ Найден profile_data для пользователя {user_id}, показываем финальный профиль")
+        show_final_profile(message, user_id)
+        return
+    
+    # ✅ 3. ЕСЛИ НЕТ НИЧЕГО, ПОКАЗЫВАЕМ СТАНДАРТНЫЙ
+    logger.info(f"📊 Нет AI профиля для пользователя {user_id}, показываем стандартный")
+    
     scores = {}
     for k in VECTORS:
         levels = data.get("behavioral_levels", {}).get(k, [])
