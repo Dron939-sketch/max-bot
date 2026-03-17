@@ -27,7 +27,7 @@ user_messages_history: Dict[int, List[int]] = {}
 # Максимальное количество сообщений для хранения истории на пользователя
 MAX_HISTORY_PER_USER = 10
 
-# Максимальная длина сообщения (лимит Telegram)
+# Максимальная длина сообщения (лимит MAX)
 MAX_MESSAGE_LENGTH = 4096
 
 
@@ -35,7 +35,7 @@ def safe_send_message(
     message: Optional[Union[types.Message, int]],
     text: str,
     reply_markup: Any = None,
-    parse_mode: str = 'HTML',
+    parse_mode: str = None,  # 👈 ИЗМЕНЕНО: по умолчанию None
     delete_previous: bool = False,
     keep_last: int = 1,
     silent: bool = False,
@@ -49,7 +49,7 @@ def safe_send_message(
         message: исходное сообщение или chat_id (может быть None)
         text: текст для отправки
         reply_markup: клавиатура (опционально)
-        parse_mode: режим форматирования
+        parse_mode: режим форматирования (не используется в MAX, оставлен для совместимости)
         delete_previous: удалить ли предыдущие сообщения бота
         keep_last: сколько последних сообщений оставлять
         silent: не логировать успешные отправки
@@ -112,9 +112,12 @@ def safe_send_message(
         # Отправляем новое сообщение
         send_kwargs = {
             'chat_id': cid,
-            'text': text,
-            'parse_mode': parse_mode
+            'text': text
         }
+        
+        # 👇 УБИРАЕМ parse_mode, так как MAX не поддерживает HTML
+        # if parse_mode:
+        #     send_kwargs['parse_mode'] = parse_mode
         
         if reply_markup is not None:
             send_kwargs['reply_markup'] = reply_markup
@@ -143,9 +146,12 @@ def safe_send_message(
         error_msg = str(e).lower()
         logger.error(f"❌ Ошибка при отправке сообщения: {e}")
         
-        # Пробуем отправить без форматирования
+        # Пробуем отправить без форматирования (очищаем от Markdown, если есть проблемы)
         try:
-            clean_text = re.sub(r'<[^>]+>', '', text)
+            # Убираем Markdown-символы, если они вызывают ошибки
+            clean_text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+            clean_text = re.sub(r'\*(.*?)\*', r'\1', clean_text)
+            
             if len(clean_text) > MAX_MESSAGE_LENGTH:
                 clean_text = clean_text[:MAX_MESSAGE_LENGTH - 3] + "..."
             
@@ -173,7 +179,7 @@ def send_with_status_cleanup(
     text: str, 
     status_msg: Optional[types.Message] = None, 
     reply_markup: Any = None, 
-    parse_mode: str = 'HTML',
+    parse_mode: str = None,  # 👈 ИЗМЕНЕНО
     keep_last: int = 1
 ) -> Optional[types.Message]:
     """
@@ -184,7 +190,7 @@ def send_with_status_cleanup(
         text: текст для отправки
         status_msg: статусное сообщение для удаления
         reply_markup: клавиатура
-        parse_mode: режим форматирования
+        parse_mode: режим форматирования (не используется)
         keep_last: сколько последних сообщений оставлять
     
     Returns:
@@ -198,7 +204,7 @@ def send_with_status_cleanup(
         # Разбиваем на части и отправляем первую часть
         from handlers.profile import split_long_message
         parts = split_long_message(text, MAX_MESSAGE_LENGTH - 100)
-        text = parts[0] + f"\n\n<code>✉️ Часть 1/{len(parts)}</code>"
+        text = parts[0]  # 👉 УБРАЛИ HTML-тег
     
     # Удаляем статусное сообщение, если оно есть
     if status_msg:
@@ -236,8 +242,8 @@ def send_with_status_cleanup(
         sent_msg = bot.send_message(
             chat_id, 
             text, 
-            reply_markup=reply_markup, 
-            parse_mode=parse_mode
+            reply_markup=reply_markup
+            # 👇 УБРАЛИ parse_mode
         )
         logger.debug(f"📤 Отправлено новое сообщение {sent_msg.message_id}")
         
@@ -249,34 +255,15 @@ def send_with_status_cleanup(
         return sent_msg
         
     except Exception as e:
-        error_msg = str(e).lower()
-        
-        if "can't parse entities" in error_msg or "parse" in error_msg:
-            clean_text = clean_text_for_safe_display(text)
-            logger.warning(f"⚠️ Ошибка парсинга HTML, отправляем без форматирования: {e}")
-            
-            try:
-                sent_msg = bot.send_message(chat_id, clean_text, reply_markup=reply_markup)
-                
-                # Сохраняем в историю
-                if chat_id not in user_messages_history:
-                    user_messages_history[chat_id] = []
-                user_messages_history[chat_id].append(sent_msg.message_id)
-                
-                return sent_msg
-            except Exception as e2:
-                logger.error(f"❌ Ошибка при отправке без форматирования: {e2}")
-                return None
-        else:
-            logger.error(f"❌ Критическая ошибка при отправке: {e}")
-            return None
+        logger.error(f"❌ Критическая ошибка при отправке: {e}")
+        return None
 
 
 def safe_edit_message(
     message: types.Message, 
     new_text: str, 
     reply_markup: Any = None, 
-    parse_mode: str = 'HTML'
+    parse_mode: str = None  # 👈 ИЗМЕНЕНО
 ) -> Optional[types.Message]:
     """
     Безопасно редактирует существующее сообщение
@@ -285,7 +272,7 @@ def safe_edit_message(
         message: сообщение для редактирования
         new_text: новый текст
         reply_markup: новая клавиатура (или None)
-        parse_mode: режим форматирования
+        parse_mode: режим форматирования (не используется)
     
     Returns:
         отредактированное сообщение или None при ошибке
@@ -300,8 +287,8 @@ def safe_edit_message(
             chat_id=message.chat.id,
             message_id=message.message_id,
             text=new_text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode
+            reply_markup=reply_markup
+            # 👇 УБРАЛИ parse_mode
         )
         logger.debug(f"✏️ Отредактировано сообщение {message.message_id}")
         return edited_msg
@@ -314,21 +301,6 @@ def safe_edit_message(
             logger.debug("Сообщение не изменилось, пропускаем")
             return message
             
-        elif "can't parse entities" in error_str:
-            clean_text = clean_text_for_safe_display(new_text)
-            logger.warning(f"⚠️ Ошибка парсинга HTML при редактировании: {e}")
-            
-            try:
-                return bot.edit_message_text(
-                    chat_id=message.chat.id,
-                    message_id=message.message_id,
-                    text=clean_text,
-                    reply_markup=reply_markup
-                )
-            except Exception as e2:
-                logger.error(f"❌ Ошибка при повторном редактировании: {e2}")
-                return None
-        
         elif "message to edit not found" in error_str:
             logger.error(f"❌ Сообщение {message.message_id} не найдено для редактирования")
             return None
@@ -427,7 +399,7 @@ def split_and_send_long_message(
     message: Union[types.Message, int],
     text: str,
     reply_markup: Any = None,
-    parse_mode: str = 'HTML',
+    parse_mode: str = None,  # 👈 ИЗМЕНЕНО
     delete_previous: bool = False,
     keep_last: int = 1,
     max_length: int = 3500
@@ -439,7 +411,7 @@ def split_and_send_long_message(
         message: исходное сообщение или chat_id
         text: длинный текст
         reply_markup: клавиатура (будет прикреплена только к последней части)
-        parse_mode: режим форматирования
+        parse_mode: режим форматирования (не используется)
         delete_previous: удалять ли предыдущие сообщения
         keep_last: сколько последних сообщений оставлять
         max_length: максимальная длина одной части
@@ -455,7 +427,7 @@ def split_and_send_long_message(
     for i, part in enumerate(parts):
         # Добавляем индикатор части для всех, кроме последней
         if i < len(parts) - 1:
-            part_text = f"{part}\n\n<code>✉️ Часть {i+1}/{len(parts)}</code>"
+            part_text = f"{part}\n\n✉️ Часть {i+1}/{len(parts)}"  # 👈 УБРАЛИ HTML-тег
             current_markup = None
         else:
             part_text = part
@@ -463,7 +435,7 @@ def split_and_send_long_message(
         
         # Для последней части добавляем "Что дальше?" если нужно
         if i == len(parts) - 1 and "👇" not in part_text:
-            part_text = f"{part_text}\n\n👇 <b>Что дальше?</b>"
+            part_text = f"{part_text}\n\n👇 Что дальше?"  # 👈 УБРАЛИ HTML-тег
         
         # Отправляем часть
         sent = safe_send_message(
