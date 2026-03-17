@@ -16,7 +16,7 @@ from maxibot import MaxiBot
 # Импортируем бота (убедись, что bot_instance.py существует)
 from bot_instance import bot
 
-from formatters import clean_text_for_safe_display
+from formatters import clean_text_for_safe_display, html_to_markdown  # 👈 ДОБАВЛЕН ИМПОРТ
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ def safe_send_message(
     message: Optional[Union[types.Message, int]],
     text: str,
     reply_markup: Any = None,
-    parse_mode: str = None,  # 👈 ИЗМЕНЕНО: по умолчанию None
+    parse_mode: str = None,  # 👈 ИГНОРИРУЕТСЯ
     delete_previous: bool = False,
     keep_last: int = 1,
     silent: bool = False,
@@ -49,7 +49,7 @@ def safe_send_message(
         message: исходное сообщение или chat_id (может быть None)
         text: текст для отправки
         reply_markup: клавиатура (опционально)
-        parse_mode: режим форматирования (не используется в MAX, оставлен для совместимости)
+        parse_mode: ИГНОРИРУЕТСЯ - всегда используем Markdown
         delete_previous: удалить ли предыдущие сообщения бота
         keep_last: сколько последних сообщений оставлять
         silent: не логировать успешные отправки
@@ -64,11 +64,14 @@ def safe_send_message(
         logger.error("❌ Попытка отправить пустое сообщение")
         return None
     
+    # ✅ Преобразуем HTML в Markdown
+    markdown_text = html_to_markdown(text)
+    
     # Проверяем длину текста
-    if len(text) > MAX_MESSAGE_LENGTH:
-        logger.error(f"❌ Длина текста {len(text)} превышает лимит {MAX_MESSAGE_LENGTH}")
+    if len(markdown_text) > MAX_MESSAGE_LENGTH:
+        logger.error(f"❌ Длина текста {len(markdown_text)} превышает лимит {MAX_MESSAGE_LENGTH}")
         # Обрезаем до безопасной длины
-        text = text[:MAX_MESSAGE_LENGTH - 3] + "..."
+        markdown_text = markdown_text[:MAX_MESSAGE_LENGTH - 3] + "..."
         logger.info(f"✂️ Текст обрезан до {MAX_MESSAGE_LENGTH} символов")
     
     # Получаем chat_id
@@ -109,15 +112,11 @@ def safe_send_message(
                 # Оставляем только последние keep_last сообщений
                 user_messages_history[cid] = history[-keep_last:] if keep_last > 0 else []
         
-        # Отправляем новое сообщение
+        # Отправляем новое сообщение с Markdown
         send_kwargs = {
             'chat_id': cid,
-            'text': text
+            'text': markdown_text  # 👈 используем текст с Markdown
         }
-        
-        # 👇 УБИРАЕМ parse_mode, так как MAX не поддерживает HTML
-        # if parse_mode:
-        #     send_kwargs['parse_mode'] = parse_mode
         
         if reply_markup is not None:
             send_kwargs['reply_markup'] = reply_markup
@@ -146,18 +145,18 @@ def safe_send_message(
         error_msg = str(e).lower()
         logger.error(f"❌ Ошибка при отправке сообщения: {e}")
         
-        # Пробуем отправить без форматирования (очищаем от Markdown, если есть проблемы)
+        # Если ошибка, пробуем отправить без Markdown (чистый текст)
         try:
-            # Убираем Markdown-символы, если они вызывают ошибки
-            clean_text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-            clean_text = re.sub(r'\*(.*?)\*', r'\1', clean_text)
+            # Убираем Markdown-символы
+            plain_text = re.sub(r'\*\*(.*?)\*\*', r'\1', markdown_text)
+            plain_text = re.sub(r'\*(.*?)\*', r'\1', plain_text)
             
-            if len(clean_text) > MAX_MESSAGE_LENGTH:
-                clean_text = clean_text[:MAX_MESSAGE_LENGTH - 3] + "..."
+            if len(plain_text) > MAX_MESSAGE_LENGTH:
+                plain_text = plain_text[:MAX_MESSAGE_LENGTH - 3] + "..."
             
             sent_msg = bot.send_message(
                 chat_id=cid,
-                text=clean_text,
+                text=plain_text,
                 reply_markup=reply_markup
             )
             
@@ -166,7 +165,7 @@ def safe_send_message(
                 user_messages_history[cid] = []
             user_messages_history[cid].append(sent_msg.message_id)
             
-            logger.warning(f"⚠️ Сообщение отправлено без форматирования в чат {cid}")
+            logger.warning(f"⚠️ Сообщение отправлено без Markdown в чат {cid}")
             return sent_msg
             
         except Exception as e2:
@@ -179,7 +178,7 @@ def send_with_status_cleanup(
     text: str, 
     status_msg: Optional[types.Message] = None, 
     reply_markup: Any = None, 
-    parse_mode: str = None,  # 👈 ИЗМЕНЕНО
+    parse_mode: str = None,  # 👈 ИГНОРИРУЕТСЯ
     keep_last: int = 1
 ) -> Optional[types.Message]:
     """
@@ -190,7 +189,7 @@ def send_with_status_cleanup(
         text: текст для отправки
         status_msg: статусное сообщение для удаления
         reply_markup: клавиатура
-        parse_mode: режим форматирования (не используется)
+        parse_mode: ИГНОРИРУЕТСЯ
         keep_last: сколько последних сообщений оставлять
     
     Returns:
@@ -198,13 +197,16 @@ def send_with_status_cleanup(
     """
     chat_id = message.chat.id
     
+    # Преобразуем HTML в Markdown
+    markdown_text = html_to_markdown(text)
+    
     # Проверяем длину текста
-    if len(text) > MAX_MESSAGE_LENGTH:
-        logger.warning(f"⚠️ Текст слишком длинный: {len(text)} > {MAX_MESSAGE_LENGTH}")
+    if len(markdown_text) > MAX_MESSAGE_LENGTH:
+        logger.warning(f"⚠️ Текст слишком длинный: {len(markdown_text)} > {MAX_MESSAGE_LENGTH}")
         # Разбиваем на части и отправляем первую часть
         from handlers.profile import split_long_message
-        parts = split_long_message(text, MAX_MESSAGE_LENGTH - 100)
-        text = parts[0]  # 👉 УБРАЛИ HTML-тег
+        parts = split_long_message(markdown_text, MAX_MESSAGE_LENGTH - 100)
+        markdown_text = parts[0]
     
     # Удаляем статусное сообщение, если оно есть
     if status_msg:
@@ -241,9 +243,8 @@ def send_with_status_cleanup(
     try:
         sent_msg = bot.send_message(
             chat_id, 
-            text, 
+            markdown_text, 
             reply_markup=reply_markup
-            # 👇 УБРАЛИ parse_mode
         )
         logger.debug(f"📤 Отправлено новое сообщение {sent_msg.message_id}")
         
@@ -256,14 +257,35 @@ def send_with_status_cleanup(
         
     except Exception as e:
         logger.error(f"❌ Критическая ошибка при отправке: {e}")
-        return None
+        
+        # Пробуем отправить без Markdown
+        try:
+            plain_text = re.sub(r'\*\*(.*?)\*\*', r'\1', markdown_text)
+            plain_text = re.sub(r'\*(.*?)\*', r'\1', plain_text)
+            
+            sent_msg = bot.send_message(
+                chat_id, 
+                plain_text, 
+                reply_markup=reply_markup
+            )
+            
+            if chat_id not in user_messages_history:
+                user_messages_history[chat_id] = []
+            user_messages_history[chat_id].append(sent_msg.message_id)
+            
+            logger.warning(f"⚠️ Сообщение отправлено без Markdown")
+            return sent_msg
+            
+        except Exception as e2:
+            logger.error(f"❌ Критическая ошибка при отправке без Markdown: {e2}")
+            return None
 
 
 def safe_edit_message(
     message: types.Message, 
     new_text: str, 
     reply_markup: Any = None, 
-    parse_mode: str = None  # 👈 ИЗМЕНЕНО
+    parse_mode: str = None  # 👈 ИГНОРИРУЕТСЯ
 ) -> Optional[types.Message]:
     """
     Безопасно редактирует существующее сообщение
@@ -272,23 +294,25 @@ def safe_edit_message(
         message: сообщение для редактирования
         new_text: новый текст
         reply_markup: новая клавиатура (или None)
-        parse_mode: режим форматирования (не используется)
+        parse_mode: ИГНОРИРУЕТСЯ
     
     Returns:
         отредактированное сообщение или None при ошибке
     """
+    # Преобразуем HTML в Markdown
+    markdown_text = html_to_markdown(new_text)
+    
     # Проверяем длину текста
-    if len(new_text) > MAX_MESSAGE_LENGTH:
-        logger.warning(f"⚠️ Текст для редактирования слишком длинный: {len(new_text)} > {MAX_MESSAGE_LENGTH}")
-        new_text = new_text[:MAX_MESSAGE_LENGTH - 3] + "..."
+    if len(markdown_text) > MAX_MESSAGE_LENGTH:
+        logger.warning(f"⚠️ Текст для редактирования слишком длинный: {len(markdown_text)} > {MAX_MESSAGE_LENGTH}")
+        markdown_text = markdown_text[:MAX_MESSAGE_LENGTH - 3] + "..."
     
     try:
         edited_msg = bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=message.message_id,
-            text=new_text,
+            text=markdown_text,
             reply_markup=reply_markup
-            # 👇 УБРАЛИ parse_mode
         )
         logger.debug(f"✏️ Отредактировано сообщение {message.message_id}")
         return edited_msg
@@ -399,7 +423,7 @@ def split_and_send_long_message(
     message: Union[types.Message, int],
     text: str,
     reply_markup: Any = None,
-    parse_mode: str = None,  # 👈 ИЗМЕНЕНО
+    parse_mode: str = None,  # 👈 ИГНОРИРУЕТСЯ
     delete_previous: bool = False,
     keep_last: int = 1,
     max_length: int = 3500
@@ -411,7 +435,7 @@ def split_and_send_long_message(
         message: исходное сообщение или chat_id
         text: длинный текст
         reply_markup: клавиатура (будет прикреплена только к последней части)
-        parse_mode: режим форматирования (не используется)
+        parse_mode: ИГНОРИРУЕТСЯ
         delete_previous: удалять ли предыдущие сообщения
         keep_last: сколько последних сообщений оставлять
         max_length: максимальная длина одной части
@@ -421,13 +445,16 @@ def split_and_send_long_message(
     """
     from handlers.profile import split_long_message
     
-    parts = split_long_message(text, max_length)
+    # Преобразуем HTML в Markdown
+    markdown_text = html_to_markdown(text)
+    
+    parts = split_long_message(markdown_text, max_length)
     sent_messages = []
     
     for i, part in enumerate(parts):
         # Добавляем индикатор части для всех, кроме последней
         if i < len(parts) - 1:
-            part_text = f"{part}\n\n✉️ Часть {i+1}/{len(parts)}"  # 👈 УБРАЛИ HTML-тег
+            part_text = f"{part}\n\n✉️ Часть {i+1}/{len(parts)}"
             current_markup = None
         else:
             part_text = part
@@ -435,7 +462,7 @@ def split_and_send_long_message(
         
         # Для последней части добавляем "Что дальше?" если нужно
         if i == len(parts) - 1 and "👇" not in part_text:
-            part_text = f"{part_text}\n\n👇 Что дальше?"  # 👈 УБРАЛИ HTML-тег
+            part_text = f"{part_text}\n\n👇 Что дальше?"
         
         # Отправляем часть
         sent = safe_send_message(
@@ -443,7 +470,7 @@ def split_and_send_long_message(
             part_text,
             reply_markup=current_markup,
             parse_mode=parse_mode,
-            delete_previous=(i == 0 and delete_previous),  # Удаляем предыдущие только для первой части
+            delete_previous=(i == 0 and delete_previous),
             keep_last=keep_last,
             silent=True
         )
