@@ -7,6 +7,7 @@
 
 import logging
 import asyncio
+import time
 import traceback
 from typing import Optional
 
@@ -215,6 +216,36 @@ async def handle_sync_callback(call: CallbackQuery):
     elif data.startswith("stage1_"):
         logger.info(f"📥 stage1 ответ: {data}")
         handle_stage_1_answer(call, user_id, state_data)
+    
+    # ============================================
+    # ПРЯМОЙ СТАРТ ТЕСТА (БЕЗ СБОРА КОНТЕКСТА)
+    # ============================================
+    elif data == "start_stage_1_direct":
+        logger.info(f"🎬 Прямой старт этапа 1 для пользователя {user_id}")
+        
+        # Очищаем данные теста, но сохраняем контекст
+        if user_id in user_data:
+            # Сохраняем контекст, но очищаем данные теста
+            user_context = user_contexts.get(user_id)
+            user_data[user_id] = {}
+            if user_context:
+                user_contexts[user_id] = user_context
+        
+        # Устанавливаем состояние для этапа 1
+        set_state(user_id, TestStates.stage_1)
+        
+        # Обновляем данные состояния
+        update_state_data(user_id,
+            stage1_current=0,
+            stage1_last_answered=-1,
+            stage1_start_time=time.time(),
+            perception_scores={"EXTERNAL": 0, "INTERNAL": 0, "SYMBOLIC": 0, "MATERIAL": 0}
+        )
+        
+        # Показываем введение в этап 1
+        from handlers.stages import show_stage_1_intro
+        state_data = get_state_data(user_id)
+        show_stage_1_intro(call.message, user_id, state_data)
     
     # ============================================
     # ЭТАП 2
