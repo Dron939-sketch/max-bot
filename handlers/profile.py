@@ -339,7 +339,7 @@ def show_preliminary_profile(message: Message, user_id: int):
         message,
         text,
         reply_markup=keyboard,
-        parse_mode=None,  # 👈 УБРАЛИ HTML
+        parse_mode=None,
         delete_previous=True
     )
     
@@ -435,18 +435,19 @@ async def show_ai_profile_async(message: Message, user_id: int):
                             message if i == 0 else None,
                             text,
                             reply_markup=keyboard if i == len(formatted_parts) - 1 else None,
-                            parse_mode=None,  # 👈 УБРАЛИ HTML
+                            parse_mode=None,
                             delete_previous=(i == 0),
                             chat_id=chat_id if i > 0 else None
                         )
                         logger.info(f"✅ Отправлена последняя часть {i+1} с кнопками")
                     else:
+                        # ✅ Просто текст без индикаторов HTML
                         part_text = part
                         
                         safe_send_message(
                             None,
                             part_text,
-                            parse_mode=None,  # 👈 УБРАЛИ HTML
+                            parse_mode=None,
                             delete_previous=False,
                             chat_id=chat_id
                         )
@@ -518,7 +519,7 @@ async def show_ai_profile_async(message: Message, user_id: int):
         message,
         text,
         reply_markup=keyboard,
-        parse_mode=None,  # 👈 УБРАЛИ HTML
+        parse_mode=None,
         delete_previous=True
     )
 
@@ -593,12 +594,13 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                             message if i == 0 else None,
                             text,
                             reply_markup=keyboard,
-                            parse_mode=None,  # 👈 УБРАЛИ HTML
+                            parse_mode=None,
                             delete_previous=(i == 0),
                             chat_id=chat_id if i > 0 else None
                         )
                         logger.info(f"✅ Отправлена последняя часть мысли {i+1} с кнопками")
                     else:
+                        # ✅ Добавляем индикатор части без HTML-тегов
                         part_text = f"""
 🧠 {bold('МЫСЛИ ПСИХОЛОГА')} (часть {i+1}/{len(formatted_parts)})
 
@@ -607,7 +609,7 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                         safe_send_message(
                             None,
                             part_text,
-                            parse_mode=None,  # 👈 УБРАЛИ HTML
+                            parse_mode=None,
                             delete_previous=False,
                             chat_id=chat_id
                         )
@@ -666,7 +668,7 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
         message,
         text,
         reply_markup=keyboard,
-        parse_mode=None,  # 👈 УБРАЛИ HTML
+        parse_mode=None,
         delete_previous=True
     )
 
@@ -797,7 +799,7 @@ def show_profile(message: Message, user_id: int):
         message,
         text,
         reply_markup=keyboard,
-        parse_mode=None,  # 👈 УБРАЛИ HTML
+        parse_mode=None,
         delete_previous=True
     )
 
@@ -866,7 +868,7 @@ def show_old_final_profile(message: Message, user_id: int, status_msg: Optional[
         message,
         text,
         reply_markup=keyboard,
-        parse_mode=None,  # 👈 УБРАЛИ HTML
+        parse_mode=None,
         delete_previous=True
     )
 
