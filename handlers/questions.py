@@ -16,7 +16,6 @@ from typing import Dict, Any, List, Optional
 
 from maxibot import MaxiBot
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
-from maxibot.utils import BufferedInputFile
 
 # Наши модули
 from config import COMMUNICATION_MODES
@@ -1336,10 +1335,10 @@ def handle_smart_question(call: CallbackQuery, question_num: int):
         delete_previous=True
     )
     
-    # Отправляем голосовой ответ
-    audio_data = text_to_speech(clean_response, mode_name)
-    if audio_data:
-        logger.info(f"🎙 Голосовой ответ сгенерирован для пользователя {user_id}")
+    # Отправляем голосовой ответ (временно отключено, так как нет BufferedInputFile)
+    # audio_data = text_to_speech(clean_response, mode_name)
+    # if audio_data:
+    #     logger.info(f"🎙 Голосовой ответ сгенерирован для пользователя {user_id}")
 
 
 def show_question_input(call: CallbackQuery):
@@ -1495,14 +1494,11 @@ async def process_text_question_async(message: Message, user_id: int, text: str)
         delete_previous=True
     )
     
-    # Отправляем голосовой ответ
-    audio_data = await text_to_speech(clean_response, mode_name)
-    if audio_data:
-        audio_file = BufferedInputFile(audio_data, filename="response.ogg")
-        await message.answer_voice(
-            audio_file,
-            caption=f"🎙 Голосовой ответ ({COMMUNICATION_MODES[mode_name]['display_name']})"
-        )
+    # Отправляем голосовой ответ (временно отключено, так как нет BufferedInputFile)
+    # audio_data = await text_to_speech(clean_response, mode_name)
+    # if audio_data:
+    #     logger.info(f"🎙 Голосовой ответ сгенерирован для пользователя {user_id} (длина: {len(audio_data)} байт)")
+    #     # TODO: найти способ отправить голос в maxibot
     
     # Сбрасываем состояние
     set_state(user_id, TestStates.results)
