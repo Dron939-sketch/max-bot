@@ -325,14 +325,13 @@ def show_stage_1_intro(message, user_id: int, state_data: dict):
     
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_1"))
-    # ✅ МЕНЯЕМ ЭТУ СТРОКУ:
     keyboard.add(InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_context"))
     
     safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     state_data["stage"] = 1
     state_data["stage1_current"] = 0
     logger.info(f"✅ stage1 инициализирован, stage1_current=0")
-    
+
 def start_stage_1(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 1"""
     logger.info(f"🎬 start_stage_1 для user {user_id}")
@@ -461,7 +460,7 @@ def handle_stage_1_answer(call, user_id: int, state_data: dict):
         state_data["processing"] = False
 
 def finish_stage_1(message, user_id: int, state_data: dict):
-    """Завершение ЭТАПА 1 (ИСПРАВЛЕНО - убрана очистка HTML)"""
+    """Завершение ЭТАПА 1"""
     logger.info(f"🏁 finish_stage_1 для user {user_id}")
     
     perception_scores = state_data.get("perception_scores", {})
@@ -494,7 +493,6 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     
     result_text = STAGE_1_FEEDBACK.get(perception_type, STAGE_1_FEEDBACK["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"])
     
-    # ✅ ИСПРАВЛЕНО: убрана очистка HTML
     text = f"{result_text}\n\n▶️ <b>Перейти к этапу 2</b>"
     
     keyboard = InlineKeyboardMarkup()
@@ -665,7 +663,7 @@ def handle_stage_2_answer(call, user_id: int, state_data: dict):
         state_data["processing"] = False
 
 def finish_stage_2(message, user_id: int, state_data: dict):
-    """Завершение ЭТАПА 2 (ИСПРАВЛЕНО - убрана очистка HTML)"""
+    """Завершение ЭТАПА 2"""
     logger.info(f"🏁 finish_stage_2 для user {user_id}")
     
     level_scores_dict = state_data.get("stage2_level_scores_dict", {})
@@ -690,7 +688,6 @@ def finish_stage_2(message, user_id: int, state_data: dict):
     if not result_text:
         result_text = STAGE_2_FEEDBACK[("СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ", "1-3")]
     
-    # ✅ ИСПРАВЛЕНО: убрана очистка HTML
     text = f"{result_text}\n\n▶️ <b>Перейти к этапу 3</b>"
     
     keyboard = InlineKeyboardMarkup()
@@ -848,7 +845,7 @@ def handle_stage_3_answer(call, user_id: int, state_data: dict):
         state_data["processing"] = False
 
 def finish_stage_3(message, user_id: int, state_data: dict):
-    """Завершение ЭТАПА 3 (ИСПРАВЛЕНО - убрана очистка HTML)"""
+    """Завершение ЭТАПА 3"""
     logger.info(f"🏁 finish_stage_3 для user {user_id}")
     
     stage2_level = user_data.get(user_id, {}).get("thinking_level", 1)
@@ -879,7 +876,6 @@ def finish_stage_3(message, user_id: int, state_data: dict):
     
     result_text = STAGE_3_FEEDBACK.get(behavior_level, STAGE_3_FEEDBACK[1])
     
-    # ✅ ИСПРАВЛЕНО: убрана очистка HTML
     text = f"{result_text}\n\n▶️ <b>Перейти к этапу 4</b>"
     
     keyboard = InlineKeyboardMarkup()
@@ -1023,7 +1019,7 @@ def handle_stage_4_answer(call, user_id: int, state_data: dict):
         state_data["processing"] = False
 
 def finish_stage_4(message, user_id: int, state_data: dict):
-    """Завершение ЭТАПА 4 (ИСПРАВЛЕНО)"""
+    """Завершение ЭТАПА 4"""
     logger.info(f"🏁 finish_stage_4 для user {user_id}")
     
     dilts_counts = state_data.get("dilts_counts", {})
@@ -1051,7 +1047,6 @@ def finish_stage_4(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 4 complete, profile={profile_data.get('display_name', 'unknown')}")
     
-    # ✅ ИСПРАВЛЕНО: убран state_data
     show_preliminary_profile(message, user_id)
 
 
@@ -1124,6 +1119,7 @@ def profile_confirm(call):
     state_data = get_state_data(user_id)
     show_stage_5_intro(call.message, user_id, state_data)
 
+
 def profile_doubt(call):
     """Пользователь сомневается"""
     user_id = call.from_user.id
@@ -1137,6 +1133,7 @@ def profile_doubt(call):
         current_levels[vector] = sum(levels) / len(levels) if levels else 3
     
     ask_whats_wrong(call, current_levels)
+
 
 def profile_reject(call):
     """Пользователь полностью не согласен"""
@@ -1172,6 +1169,7 @@ def profile_reject(call):
         keep_last=1
     )
 
+
 def handle_goodbye(call):
     """Обработчик кнопки Досвидули"""
     user_id = call.from_user.id
@@ -1187,6 +1185,7 @@ def handle_goodbye(call):
     
     from state import clear_state
     clear_state(user_id)
+
 
 def ask_whats_wrong(call, current_levels: dict):
     """Спрашивает, что именно не так"""
@@ -1208,7 +1207,7 @@ def ask_whats_wrong(call, current_levels: dict):
 👇 <b>Выберите и нажмите ДАЛЬШЕ</b>
 """
     
-    update_state_data(user_id, clarifying_levels=current_levels)
+    update_state_data(user_id, clarifying_levels=current_levels, discrepancies=[])
     
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("🎭 Про людей", callback_data="discrepancy_people"))
@@ -1218,15 +1217,11 @@ def ask_whats_wrong(call, current_levels: dict):
     keyboard.row(InlineKeyboardButton("🛡 Про давление", callback_data="discrepancy_sb"))
     keyboard.row(InlineKeyboardButton("➡️ ДАЛЬШЕ", callback_data="clarify_next"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, delete_previous=True, keep_last=1)
-    
-    from state import set_state
-    set_state(user_id, TestStates.clarifying_selection)
-    
-    update_state_data(user_id, discrepancies=[])
+    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True, keep_last=1)
+
 
 def handle_discrepancy(call, discrepancy: str):
-    """Обрабатывает выбор расхождения"""
+    """Обрабатывает выбор расхождения (ИСПРАВЛЕНО)"""
     user_id = call.from_user.id
     logger.info(f"🔍 handle_discrepancy: {discrepancy} для пользователя {user_id}")
     
@@ -1236,11 +1231,16 @@ def handle_discrepancy(call, discrepancy: str):
     if discrepancy not in discrepancies:
         discrepancies.append(discrepancy)
         update_state_data(user_id, discrepancies=discrepancies)
-        safe_send_message(call.message, f"✅ Добавлено", delete_previous=True, keep_last=1)
+        # ✅ ПОКАЗЫВАЕМ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ
+        call.answer(f"✅ Добавлено", show_alert=False)
     else:
         discrepancies.remove(discrepancy)
         update_state_data(user_id, discrepancies=discrepancies)
-        safe_send_message(call.message, f"❌ Убрано", delete_previous=True, keep_last=1)
+        # ✅ ПОКАЗЫВАЕМ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ
+        call.answer(f"❌ Убрано", show_alert=False)
+    
+    # НЕ ОТПРАВЛЯЕМ НОВОЕ СООБЩЕНИЕ!
+
 
 def clarify_next(call):
     """Переходит к уточняющим вопросам"""
@@ -1252,13 +1252,13 @@ def clarify_next(call):
     current_levels = data.get("clarifying_levels", {})
     
     if not discrepancies:
-        safe_send_message(call.message, "Выберите хотя бы одно расхождение!", delete_previous=True, keep_last=1)
+        call.answer("Выберите хотя бы одно расхождение!", show_alert=True)
         return
     
     questions = get_clarifying_questions(discrepancies, current_levels)
     
     if not questions:
-        safe_send_message(call.message, "Зададим общие уточняющие вопросы", delete_previous=True, keep_last=1)
+        call.answer("Зададим общие уточняющие вопросы", show_alert=False)
         return
     
     update_state_data(user_id,
@@ -1268,6 +1268,7 @@ def clarify_next(call):
     )
     
     ask_clarifying_question(call.message, user_id)
+
 
 def ask_clarifying_question(message, user_id: int):
     """Задаёт уточняющий вопрос"""
@@ -1295,10 +1296,11 @@ def ask_clarifying_question(message, user_id: int):
             callback_data=f"clarify_answer_{current}_{opt_key}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
+    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True, keep_last=1)
+
 
 def handle_clarifying_answer(call):
-    """Обрабатывает ответ на уточняющий вопрос"""
+    """Обрабатывает ответ на уточняющий вопрос (ИСПРАВЛЕНО)"""
     user_id = call.from_user.id
     logger.info(f"❓ handle_clarifying_answer для пользователя {user_id}, data={call.data}")
     
@@ -1333,10 +1335,14 @@ def handle_clarifying_answer(call):
         clarifying_current=current + 1
     )
     
+    # ✅ ПОКАЗЫВАЕМ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ
+    call.answer(f"✅ Ответ принят", show_alert=False)
+    
     ask_clarifying_question(call.message, user_id)
 
+
 def update_profile_with_clarifications(message, user_id: int):
-    """Обновляет профиль с учётом уточнений (ИСПРАВЛЕНО)"""
+    """Обновляет профиль с учётом уточнений"""
     logger.info(f"🔄 update_profile_with_clarifications для пользователя {user_id}")
     
     data = get_state_data(user_id)
@@ -1344,19 +1350,17 @@ def update_profile_with_clarifications(message, user_id: int):
     iteration = data.get("clarification_iteration", 0) + 1
     update_state_data(user_id, clarification_iteration=iteration)
     
-    # ✅ ИСПРАВЛЕНО: убран data
     show_preliminary_profile(message, user_id)
 
 
 # ============================================
-# ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ (ИСПРАВЛЕНО)
+# ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ
 # ============================================
 
 def show_stage_5_intro(message, user_id: int, state_data: dict):
     """Экран перед 5-м этапом"""
     logger.info(f"📢 show_stage_5_intro для user {user_id}")
     
-    # ✅ ВАЖНО: устанавливаем состояние
     set_state(user_id, TestStates.stage_5)
     
     intro_text = f"""
@@ -1383,6 +1387,7 @@ def show_stage_5_intro(message, user_id: int, state_data: dict):
     safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     state_data["stage"] = 5
 
+
 def start_stage_5(message, user_id: int, state_data: dict):
     """Начало 5-го этапа"""
     logger.info(f"🎬 start_stage_5 для user {user_id}")
@@ -1393,6 +1398,7 @@ def start_stage_5(message, user_id: int, state_data: dict):
     })
     
     ask_stage_5_question(message, user_id, state_data)
+
 
 def ask_stage_5_question(message, user_id: int, state_data: dict):
     """Задаёт вопрос 5-го этапа"""
@@ -1424,6 +1430,7 @@ def ask_stage_5_question(message, user_id: int, state_data: dict):
         ))
     
     safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
+
 
 def handle_stage_5_answer(call, user_id: int, state_data: dict):
     """Обработка ответа 5-го этапа"""
@@ -1477,6 +1484,7 @@ def handle_stage_5_answer(call, user_id: int, state_data: dict):
         ask_stage_5_question(call.message, user_id, state_data)
     finally:
         state_data["processing"] = False
+
 
 def finish_stage_5(message, user_id: int, state_data: dict):
     """Завершение 5-го этапа"""
