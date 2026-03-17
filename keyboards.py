@@ -226,22 +226,41 @@ def get_main_menu_keyboard() -> types.InlineKeyboardMarkup:
     return create_inline_keyboard(buttons)
 
 
-def get_main_menu_after_mode_keyboard() -> types.InlineKeyboardMarkup:
-    """Главное меню (после выбора режима)"""
-    buttons = [
-        [
-            {"text": "🎯 ВЫБРАТЬ ЦЕЛЬ", "callback_data": "show_goals"},
-            {"text": "🧠 ЗАДАТЬ ВОПРОС", "callback_data": "ask_question"}
-        ],
-        [
-            {"text": "📊 МОЙ ПРОФИЛЬ", "callback_data": "show_profile"},
-            {"text": "🔄 СМЕНИТЬ РЕЖИМ", "callback_data": "show_modes"}
-        ],
-        [
-            {"text": "📖 СКАЗКА", "callback_data": "ask_tale"},
-            {"text": "🌙 ГИПНОЗ", "callback_data": "ask_hypnosis"}
-        ]
+def get_main_menu_after_mode_keyboard(has_profile: bool = False) -> types.InlineKeyboardMarkup:
+    """
+    Главное меню (после выбора режима) - 4 основные кнопки
+    
+    Args:
+        has_profile: есть ли у пользователя профиль
+    """
+    buttons = []
+    
+    # Первый ряд - две кнопки: СКАЗКА и ВОПРОС
+    row1 = [
+        {"text": "📖 СКАЗКА", "callback_data": "ask_tale"},
+        {"text": "❓ ВОПРОС", "callback_data": "ask_question"}
     ]
+    buttons.append(row1)
+    
+    # Второй ряд - две кнопки: ПРОФИЛЬ и ПРОЙТИ ТЕСТ
+    row2 = []
+    
+    # Кнопка ПРОФИЛЬ (ведет на профиль или сообщение о необходимости теста)
+    if has_profile:
+        row2.append({"text": "📊 ПРОФИЛЬ", "callback_data": "show_profile"})
+    else:
+        row2.append({"text": "📊 ПРОФИЛЬ", "callback_data": "profile_not_ready"})
+    
+    # Кнопка ПРОЙТИ ТЕСТ (всегда есть)
+    row2.append({"text": "🚀 ПРОЙТИ ТЕСТ", "callback_data": "start_context"})
+    
+    buttons.append(row2)
+    
+    # Третий ряд - кнопка смены режима
+    buttons.append([
+        {"text": "🔄 СМЕНИТЬ РЕЖИМ", "callback_data": "show_modes"}
+    ])
+    
     return create_inline_keyboard(buttons)
 
 
@@ -301,7 +320,7 @@ def get_profile_keyboard() -> types.InlineKeyboardMarkup:
             {"text": "🔄 ПРОЙТИ ЗАНОВО", "callback_data": "restart_test"}
         ],
         [
-            {"text": "◀️ В МЕНЮ", "callback_data": "main_menu"}
+            {"text": "◀️ В МЕНЮ", "callback_data": "back_to_mode_selected"}
         ]
     ]
     return create_inline_keyboard(buttons)
@@ -365,7 +384,7 @@ def get_goals_categories_keyboard() -> types.InlineKeyboardMarkup:
             {"text": "🏆 ВЫЗОВЫ", "callback_data": "goals_challenges"}
         ],
         [
-            {"text": "◀️ НАЗАД", "callback_data": "main_menu"}
+            {"text": "◀️ НАЗАД", "callback_data": "back_to_mode_selected"}
         ]
     ]
     return create_inline_keyboard(buttons)
@@ -379,7 +398,7 @@ def get_goal_details_keyboard(goal_id: str) -> types.InlineKeyboardMarkup:
             {"text": "🎯 ДРУГАЯ ЦЕЛЬ", "callback_data": "show_goals"}
         ],
         [
-            {"text": "◀️ НАЗАД", "callback_data": "main_menu"}
+            {"text": "◀️ НАЗАД", "callback_data": "back_to_mode_selected"}
         ]
     ]
     return create_inline_keyboard(buttons)
@@ -427,7 +446,7 @@ def get_confirm_keyboard() -> types.InlineKeyboardMarkup:
 # КЛАВИАТУРЫ ДЛЯ НАВИГАЦИИ
 # ============================================
 
-def get_back_keyboard(callback_data: str = "main_menu") -> types.InlineKeyboardMarkup:
+def get_back_keyboard(callback_data: str = "back_to_mode_selected") -> types.InlineKeyboardMarkup:
     """Клавиатура с одной кнопкой 'Назад'"""
     buttons = [
         [{"text": "◀️ НАЗАД", "callback_data": callback_data}]
@@ -443,7 +462,7 @@ def get_cancel_keyboard() -> types.ReplyKeyboardMarkup:
 
 
 # ============================================
-# КЛАВИАТУРЫ ДЛЯ СКАЗОК И ГИПНОЗА
+# КЛАВИАТУРЫ ДЛЯ СКАЗОК
 # ============================================
 
 def get_tale_keyboard() -> types.InlineKeyboardMarkup:
@@ -454,25 +473,25 @@ def get_tale_keyboard() -> types.InlineKeyboardMarkup:
             {"text": "🧠 ВОПРОС", "callback_data": "ask_question"}
         ],
         [
-            {"text": "◀️ В МЕНЮ", "callback_data": "main_menu"}
+            {"text": "◀️ В МЕНЮ", "callback_data": "back_to_mode_selected"}
         ]
     ]
     return create_inline_keyboard(buttons)
 
 
-def get_hypnosis_keyboard() -> types.InlineKeyboardMarkup:
-    """Клавиатура для гипноза"""
+# ============================================
+# КЛАВИАТУРЫ ДЛЯ ИДЕЙ НА ВЫХОДНЫЕ
+# ============================================
+
+def get_weekend_ideas_keyboard() -> types.InlineKeyboardMarkup:
+    """Клавиатура для идей на выходные"""
     buttons = [
         [
-            {"text": "🌙 РАССЛАБЛЕНИЕ", "callback_data": "hypnosis_relax"},
-            {"text": "💤 СОН", "callback_data": "hypnosis_sleep"}
-        ],
-        [
-            {"text": "🔮 РЕСУРС", "callback_data": "hypnosis_resource"},
+            {"text": "🎨 ДРУГИЕ ИДЕИ", "callback_data": "weekend_ideas"},
             {"text": "🧠 ВОПРОС", "callback_data": "ask_question"}
         ],
         [
-            {"text": "◀️ В МЕНЮ", "callback_data": "main_menu"}
+            {"text": "◀️ В МЕНЮ", "callback_data": "back_to_mode_selected"}
         ]
     ]
     return create_inline_keyboard(buttons)
@@ -494,7 +513,7 @@ def get_admin_keyboard() -> types.InlineKeyboardMarkup:
             {"text": "🔧 НАСТРОЙКИ", "callback_data": "admin_settings"}
         ],
         [
-            {"text": "◀️ В МЕНЮ", "callback_data": "main_menu"}
+            {"text": "◀️ В МЕНЮ", "callback_data": "back_to_mode_selected"}
         ]
     ]
     return create_inline_keyboard(buttons)
@@ -568,9 +587,9 @@ __all__ = [
     'get_back_keyboard',
     'get_cancel_keyboard',
     
-    # Сказки и гипноз
+    # Сказки и идеи
     'get_tale_keyboard',
-    'get_hypnosis_keyboard',
+    'get_weekend_ideas_keyboard',
     
     # Админка
     'get_admin_keyboard',
