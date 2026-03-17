@@ -952,3 +952,32 @@ async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
         logger.error(f"❌ Ошибка синтеза речи: {e}")
         logger.error(traceback.format_exc())
         return None
+
+
+# ============================================
+# ЭКСПОРТ ВСЕХ ФУНКЦИЙ
+# ============================================
+
+__all__ = [
+    # Основные функции
+    'generate_ai_profile',
+    'generate_psychologist_thought',
+    'generate_route_ai',
+    'generate_response_with_full_context',
+    'generate_suggestions',
+    
+    # Функции API
+    'call_deepseek',
+    
+    # Функции для речи
+    'speech_to_text',
+    'text_to_speech',
+    
+    # Форматтеры
+    'bold',
+    'italic',
+    'emoji_text',
+    
+    # Вспомогательные
+    'make_json_serializable'
+]
