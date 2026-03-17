@@ -318,7 +318,7 @@ def show_why_details(call: CallbackQuery):
 
 
 # ============================================
-# ФУНКЦИЯ SHOW_INTRO (НОВАЯ - для кнопки НАЗАД)
+# ФУНКЦИЯ SHOW_INTRO (ИСПРАВЛЕНО)
 # ============================================
 
 def show_intro(message: Message):
@@ -334,6 +334,7 @@ def show_intro(message: Message):
 👇 {bold('Выберите, с какой интонацией будем общаться:')}
 """
     
+    # ✅ ИСПРАВЛЕНО: убрана кнопка "❓ ЗАДАТЬ ВОПРОС"
     keyboard = InlineKeyboardMarkup()
     keyboard.row(
         InlineKeyboardButton(text="🔴 ЖЕСТКИЙ", callback_data="mode_hard"),
@@ -341,8 +342,8 @@ def show_intro(message: Message):
         InlineKeyboardButton(text="🟢 МЯГКИЙ", callback_data="mode_soft")
     )
     keyboard.row(
-        InlineKeyboardButton(text="📖 ЧТО ДАЕТ ТЕСТ", callback_data="show_benefits"),
-        InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="ask_pretest")
+        InlineKeyboardButton(text="📖 ЧТО ДАЕТ ТЕСТ", callback_data="show_benefits")
+        # ❌ Кнопка "❓ ЗАДАТЬ ВОПРОС" удалена
     )
     
     safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
@@ -386,7 +387,7 @@ __all__ = [
     'cmd_start',
     'cmd_menu',
     'show_why_details',
-    'show_intro',  # ✅ ДОБАВЛЕНО
+    'show_intro',
     'show_main_menu',
     'callback_start_context',
     'callback_why_details',
