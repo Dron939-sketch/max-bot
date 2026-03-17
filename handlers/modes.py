@@ -4,6 +4,7 @@
 Обработчики выбора и подтверждения режима для MAX
 """
 import logging
+import asyncio
 from maxibot import types
 from bot_instance import bot
 from config import COMMUNICATION_MODES
@@ -17,12 +18,17 @@ from keyboards import (
 from formatters import bold
 from message_utils import safe_send_message, safe_edit_message
 
-# Импорты из state.py (новый модуль)
+# Импорты из state.py
 from state import (
     get_user_context, 
     get_user_context_dict, 
-    get_state_data,  # ← ЗАМЕНИЛИ get_user_state_data на get_state_data
-    update_state_data
+    get_state_data,
+    update_state_data,
+    user_data,
+    user_contexts,
+    clear_state,
+    set_state,
+    TestStates
 )
 import time
 
@@ -58,7 +64,8 @@ def cmd_menu(message: types.Message):
     if context:
         show_main_menu_after_mode(message, context)
     else:
-        show_mode_selection(message)
+        # Если нет контекста, показываем главное меню без режима
+        show_main_menu(message)
 
 
 # ============================================
@@ -71,20 +78,31 @@ def callback_show_modes(call: types.CallbackQuery):
     show_mode_selection(call.message)
 
 
+@bot.callback_query_handler(func=lambda call: call.data == 'set_mode_coach')
+def callback_set_mode_coach(call: types.CallbackQuery):
+    """Установить режим КОУЧ"""
+    set_mode_coach(call)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'set_mode_psychologist')
+def callback_set_mode_psychologist(call: types.CallbackQuery):
+    """Установить режим ПСИХОЛОГ"""
+    set_mode_psychologist(call)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'set_mode_trainer')
+def callback_set_mode_trainer(call: types.CallbackQuery):
+    """Установить режим ТРЕНЕР"""
+    set_mode_trainer(call)
+
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mode_'))
 def callback_mode_selected(call: types.CallbackQuery):
-    """Обработка выбора режима"""
+    """Обработка выбора режима (старый вариант, для совместимости)"""
     user_id = call.from_user.id
     mode = call.data.replace('mode_', '')
     
-    # Получаем контекст через функцию
-    context = get_user_context(user_id)
-    if not context:
-        context = UserContext(user_id)
-        contexts_dict = get_user_context_dict()
-        contexts_dict[user_id] = context
-    
-    # Устанавливаем режим
+    # Маппинг для обратной совместимости
     mode_map = {
         "coach": "coach",
         "psychologist": "psychologist",
@@ -95,13 +113,12 @@ def callback_mode_selected(call: types.CallbackQuery):
     }
     new_mode = mode_map.get(mode, "coach")
     
-    context.communication_mode = new_mode
-    # Сохраняем в словаре контекстов
-    contexts_dict = get_user_context_dict()
-    contexts_dict[user_id] = context
-    
-    # Показываем подтверждение
-    show_mode_selected(call.message, new_mode)
+    if new_mode == "coach":
+        set_mode_coach(call)
+    elif new_mode == "psychologist":
+        set_mode_psychologist(call)
+    elif new_mode == "trainer":
+        set_mode_trainer(call)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'back_to_modes')
@@ -110,12 +127,18 @@ def callback_back_to_modes(call: types.CallbackQuery):
     show_mode_selection(call.message)
 
 
+@bot.callback_query_handler(func=lambda call: call.data == 'back_to_mode_selected')
+def callback_back_to_mode_selected(call: types.CallbackQuery):
+    """Возврат к экрану выбранного режима"""
+    back_to_mode_selected(call)
+
+
 @bot.callback_query_handler(func=lambda call: call.data == 'start_test')
 def callback_start_test(call: types.CallbackQuery):
     """Начать тест после выбора режима"""
     from .stages import show_stage_1_intro
     user_id = call.from_user.id
-    state_data = get_state_data(user_id)  # ← ИСПРАВЛЕНО
+    state_data = get_state_data(user_id)
     show_stage_1_intro(call.message, user_id, state_data)
 
 
@@ -127,6 +150,181 @@ def callback_main_menu(call: types.CallbackQuery):
     
     if context:
         show_main_menu_after_mode(call.message, context)
+    else:
+        show_mode_selection(call.message)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'back_to_main')
+def callback_back_to_main(call: types.CallbackQuery):
+    """Вернуться в главное меню до теста"""
+    user_id = call.from_user.id
+    context = get_user_context(user_id)
+    
+    if context:
+        show_main_menu(call.message, context)
+    else:
+        # Если нет контекста, создаем новый
+        context = UserContext(user_id)
+        contexts_dict = get_user_context_dict()
+        contexts_dict[user_id] = context
+        show_main_menu(call.message, context)
+
+
+# ============================================
+# ФУНКЦИИ УСТАНОВКИ РЕЖИМОВ
+# ============================================
+
+def set_mode_coach(call: types.CallbackQuery):
+    """Устанавливает режим КОУЧ"""
+    user_id = call.from_user.id
+    
+    # Получаем контекст
+    context = get_user_context(user_id)
+    if not context:
+        context = UserContext(user_id)
+        contexts_dict = get_user_context_dict()
+        contexts_dict[user_id] = context
+    
+    # Устанавливаем режим
+    context.communication_mode = "coach"
+    contexts_dict = get_user_context_dict()
+    contexts_dict[user_id] = context
+    
+    # Показываем подтверждение
+    show_mode_selected(call.message, "coach")
+    
+    # Отвечаем на callback
+    try:
+        bot.answer_callback_query(call.id, "✅ Режим КОУЧ активирован")
+    except:
+        pass
+
+
+def set_mode_psychologist(call: types.CallbackQuery):
+    """Устанавливает режим ПСИХОЛОГ"""
+    user_id = call.from_user.id
+    
+    # Получаем контекст
+    context = get_user_context(user_id)
+    if not context:
+        context = UserContext(user_id)
+        contexts_dict = get_user_context_dict()
+        contexts_dict[user_id] = context
+    
+    # Устанавливаем режим
+    context.communication_mode = "psychologist"
+    contexts_dict = get_user_context_dict()
+    contexts_dict[user_id] = context
+    
+    # Показываем подтверждение
+    show_mode_selected(call.message, "psychologist")
+    
+    # Отвечаем на callback
+    try:
+        bot.answer_callback_query(call.id, "✅ Режим ПСИХОЛОГ активирован")
+    except:
+        pass
+
+
+def set_mode_trainer(call: types.CallbackQuery):
+    """Устанавливает режим ТРЕНЕР"""
+    user_id = call.from_user.id
+    
+    # Получаем контекст
+    context = get_user_context(user_id)
+    if not context:
+        context = UserContext(user_id)
+        contexts_dict = get_user_context_dict()
+        contexts_dict[user_id] = context
+    
+    # Устанавливаем режим
+    context.communication_mode = "trainer"
+    contexts_dict = get_user_context_dict()
+    contexts_dict[user_id] = context
+    
+    # Показываем подтверждение
+    show_mode_selected(call.message, "trainer")
+    
+    # Отвечаем на callback
+    try:
+        bot.answer_callback_query(call.id, "✅ Режим ТРЕНЕР активирован")
+    except:
+        pass
+
+
+def choose_mode(call: types.CallbackQuery, mode: str):
+    """
+    Выбор режима через "жесткий/средний/мягкий"
+    mode может быть: "hard", "medium", "soft"
+    """
+    user_id = call.from_user.id
+    
+    # Получаем контекст
+    context = get_user_context(user_id)
+    if not context:
+        context = UserContext(user_id)
+        contexts_dict = get_user_context_dict()
+        contexts_dict[user_id] = context
+    
+    # Маппинг
+    mode_map = {
+        "hard": "trainer",
+        "medium": "coach",
+        "soft": "psychologist"
+    }
+    new_mode = mode_map.get(mode, "coach")
+    
+    context.communication_mode = new_mode
+    contexts_dict = get_user_context_dict()
+    contexts_dict[user_id] = context
+    
+    mode_info = COMMUNICATION_MODES.get(new_mode, COMMUNICATION_MODES["coach"])
+    
+    # Отправляем подтверждение
+    text = f"{mode_info['emoji']} {bold(f'Режим выбран: {mode_info["display_name"]}')}\n\n"
+    text += f"{mode_info.get('responsibility', '')}\n\n"
+    text += "Теперь давайте познакомимся поближе."
+    
+    safe_send_message(call.message, text, delete_previous=True)
+    
+    # Небольшая пауза
+    import time
+    time.sleep(1)
+    
+    # Проверяем, заполнен ли контекст
+    if not (context.city and context.gender and context.age):
+        from .context import start_context
+        start_context(call.message)
+    else:
+        intro_text = f"""
+🧠 {bold('ВИРТУАЛЬНЫЙ ПСИХОЛОГ')}
+
+🔍 {bold('5 ЭТАПОВ ТЕСТИРОВАНИЯ:')}
+
+ЭТАП 1: Конфигурация восприятия
+ЭТАП 2: Конфигурация мышления
+ЭТАП 3: Конфигурация поведения
+ЭТАП 4: Точка роста
+ЭТАП 5: Глубинные паттерны
+
+⏱ {bold('Всего 15 минут')}
+
+👇 {bold('Начинаем?')}
+"""
+        
+        keyboard = types.InlineKeyboardMarkup()
+        keyboard.add(types.InlineKeyboardButton("🚀 НАЧАТЬ ТЕСТ", callback_data="show_stage_1_intro"))
+        
+        safe_send_message(call.message, intro_text, reply_markup=keyboard)
+
+
+def back_to_mode_selected(call: types.CallbackQuery):
+    """Возврат к экрану выбранного режима"""
+    user_id = call.from_user.id
+    context = get_user_context(user_id)
+    
+    if context and context.communication_mode:
+        show_mode_selected(call.message, context.communication_mode)
     else:
         show_mode_selection(call.message)
 
@@ -146,8 +344,11 @@ def show_mode_selection(message: types.Message):
         contexts_dict = get_user_context_dict()
         contexts_dict[user_id] = context
     
-    # Получаем данные профиля (из БД или контекста)
+    # Получаем данные профиля
     profile_data = getattr(context, 'profile_data', {})
+    if not profile_data and user_id in user_data:
+        profile_data = user_data[user_id].get("profile_data", {})
+    
     profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
     
     current_mode = context.communication_mode if context else "coach"
@@ -223,6 +424,9 @@ def show_mode_selection(message: types.Message):
     keyboard = get_mode_selection_keyboard()
     
     safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
+    
+    # Устанавливаем состояние
+    set_state(user_id, TestStates.mode_selection)
 
 
 def show_mode_selected(message: types.Message, mode: str):
@@ -233,6 +437,9 @@ def show_mode_selected(message: types.Message, mode: str):
     
     # Получаем данные профиля
     profile_data = getattr(context, 'profile_data', {})
+    if not profile_data and user_id in user_data:
+        profile_data = user_data[user_id].get("profile_data", {})
+    
     profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
     
     mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
@@ -296,6 +503,49 @@ def show_mode_selected(message: types.Message, mode: str):
     keyboard = get_mode_confirmation_keyboard()
     
     safe_send_message(message, full_text, reply_markup=keyboard, delete_previous=True)
+    
+    # Устанавливаем состояние
+    set_state(user_id, TestStates.results)
+
+
+def show_main_menu(message: types.Message, context: UserContext = None):
+    """
+    Показывает главное меню до теста
+    """
+    from keyboards import get_main_menu_keyboard
+    
+    user_id = message.chat.id
+    
+    if not context:
+        context = get_user_context(user_id)
+        if not context:
+            context = UserContext(user_id)
+            contexts_dict = get_user_context_dict()
+            contexts_dict[user_id] = context
+    
+    # Обновляем погоду
+    context.update_weather()
+    
+    day_context = context.get_day_context()
+    
+    welcome_text = f"{context.get_greeting(context.name)}\n\n"
+    
+    if context.weather_cache:
+        weather = context.weather_cache
+        welcome_text += f"{weather['icon']} {weather['description']}, {weather['temp']}°C\n"
+    
+    if day_context['is_weekend']:
+        welcome_text += f"🏖 Сегодня выходной! Как настроение?\n\n"
+    elif 9 <= day_context['hour'] < 18:
+        welcome_text += f"💼 Рабочее время. Чем займёмся?\n\n"
+    else:
+        welcome_text += f"🏡 Личное время. Есть что обсудить?\n\n"
+    
+    welcome_text += f"👇 {bold('Выберите действие:')}"
+    
+    keyboard = get_main_menu_keyboard()
+    
+    safe_send_message(message, welcome_text, reply_markup=keyboard, delete_previous=True)
 
 
 def show_main_menu_after_mode(message: types.Message, context: UserContext):
@@ -332,3 +582,43 @@ def show_main_menu_after_mode(message: types.Message, context: UserContext):
     keyboard = get_main_menu_after_mode_keyboard()
     
     safe_send_message(message, text, reply_markup=keyboard)
+
+
+def get_current_mode(user_id: int) -> str:
+    """
+    Возвращает текущий режим пользователя
+    """
+    context = get_user_context(user_id)
+    if context and hasattr(context, 'communication_mode'):
+        return context.communication_mode
+    return "coach"  # по умолчанию
+
+
+# ============================================
+# ЭКСПОРТ
+# ============================================
+
+__all__ = [
+    'cmd_mode',
+    'cmd_menu',
+    'show_mode_selection',
+    'show_mode_selected',
+    'show_main_menu',
+    'show_main_menu_after_mode',
+    'get_current_mode',
+    'set_mode_coach',
+    'set_mode_psychologist',
+    'set_mode_trainer',
+    'choose_mode',
+    'back_to_mode_selected',
+    'callback_show_modes',
+    'callback_set_mode_coach',
+    'callback_set_mode_psychologist',
+    'callback_set_mode_trainer',
+    'callback_mode_selected',
+    'callback_back_to_modes',
+    'callback_back_to_mode_selected',
+    'callback_start_test',
+    'callback_main_menu',
+    'callback_back_to_main'
+]
