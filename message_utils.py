@@ -3,13 +3,12 @@
 """
 Утилиты для отправки сообщений в MAX
 Исправленная версия с поддержкой длинных сообщений и безопасной отправкой
-ВСЕ ФУНКЦИИ СДЕЛАНЫ АСИНХРОННЫМИ
+СИНХРОННАЯ ВЕРСИЯ (возврат к работающему состоянию)
 """
 
 import logging
 import re
 import time
-import asyncio
 from typing import Optional, Union, List, Dict, Any
 
 from maxibot import types
@@ -33,7 +32,7 @@ MAX_HISTORY_PER_USER = 10
 MAX_MESSAGE_LENGTH = 4096
 
 
-async def safe_send_message(
+def safe_send_message(
     message: Optional[Union[types.Message, int]],
     text: str,
     reply_markup: Any = None,
@@ -46,7 +45,21 @@ async def safe_send_message(
 ) -> Optional[types.Message]:
     """
     Безопасно отправляет сообщение с опцией удаления предыдущих
-    АСИНХРОННАЯ ВЕРСИЯ
+    СИНХРОННАЯ ВЕРСИЯ
+    
+    Args:
+        message: исходное сообщение или chat_id (может быть None)
+        text: текст для отправки
+        reply_markup: клавиатура (опционально)
+        parse_mode: ИГНОРИРУЕТСЯ - всегда используем Markdown
+        delete_previous: удалить ли предыдущие сообщения бота
+        keep_last: сколько последних сообщений оставлять
+        silent: не логировать успешные отправки
+        chat_id: ID чата (если message=None)
+        **kwargs: дополнительные параметры для send_message
+    
+    Returns:
+        отправленное сообщение или None при ошибке
     """
     # Проверяем текст
     if not text:
@@ -89,11 +102,11 @@ async def safe_send_message(
                 
                 for msg_id in messages_to_delete:
                     try:
-                        await bot.delete_message(cid, msg_id)
+                        bot.delete_message(cid, msg_id)
                         if not silent:
                             logger.debug(f"🗑️ Удалено сообщение {msg_id} для чата {cid}")
                         # Небольшая пауза чтобы не превысить лимиты
-                        await asyncio.sleep(0.05)
+                        time.sleep(0.05)
                     except Exception as e:
                         # Игнорируем ошибки удаления (сообщение могло быть уже удалено)
                         pass
@@ -112,7 +125,7 @@ async def safe_send_message(
         
         send_kwargs.update(kwargs)
         
-        sent_msg = await bot.send_message(**send_kwargs)
+        sent_msg = bot.send_message(**send_kwargs)
         
         # Сохраняем в историю
         if cid not in user_messages_history:
@@ -120,6 +133,7 @@ async def safe_send_message(
         
         user_messages_history[cid].append(sent_msg.message_id)
         
+        # Ограничиваем размер истории
         if len(user_messages_history[cid]) > MAX_HISTORY_PER_USER:
             user_messages_history[cid] = user_messages_history[cid][-MAX_HISTORY_PER_USER:]
         
@@ -129,22 +143,25 @@ async def safe_send_message(
         return sent_msg
         
     except Exception as e:
+        error_msg = str(e).lower()
         logger.error(f"❌ Ошибка при отправке сообщения: {e}")
         
         # Если ошибка, пробуем отправить без Markdown (чистый текст)
         try:
+            # Убираем Markdown-символы
             plain_text = re.sub(r'\*\*(.*?)\*\*', r'\1', markdown_text)
             plain_text = re.sub(r'\*(.*?)\*', r'\1', plain_text)
             
             if len(plain_text) > MAX_MESSAGE_LENGTH:
                 plain_text = plain_text[:MAX_MESSAGE_LENGTH - 3] + "..."
             
-            sent_msg = await bot.send_message(
+            sent_msg = bot.send_message(
                 chat_id=cid,
                 text=plain_text,
                 reply_markup=reply_markup
             )
             
+            # Сохраняем в историю
             if cid not in user_messages_history:
                 user_messages_history[cid] = []
             user_messages_history[cid].append(sent_msg.message_id)
@@ -157,7 +174,7 @@ async def safe_send_message(
             return None
 
 
-async def send_with_status_cleanup(
+def send_with_status_cleanup(
     message: types.Message, 
     text: str, 
     status_msg: Optional[types.Message] = None, 
@@ -167,7 +184,18 @@ async def send_with_status_cleanup(
 ) -> Optional[types.Message]:
     """
     Отправляет сообщение и удаляет статусное сообщение и предыдущее сообщение пользователя
-    АСИНХРОННАЯ ВЕРСИЯ
+    СИНХРОННАЯ ВЕРСИЯ
+    
+    Args:
+        message: сообщение пользователя
+        text: текст для отправки
+        status_msg: статусное сообщение для удаления
+        reply_markup: клавиатура
+        parse_mode: ИГНОРИРУЕТСЯ
+        keep_last: сколько последних сообщений оставлять
+    
+    Returns:
+        отправленное сообщение
     """
     chat_id = message.chat.id
     
@@ -185,14 +213,14 @@ async def send_with_status_cleanup(
     # Удаляем статусное сообщение, если оно есть
     if status_msg:
         try:
-            await bot.delete_message(chat_id, status_msg.message_id)
+            bot.delete_message(chat_id, status_msg.message_id)
             logger.debug(f"🗑️ Удалено статусное сообщение {status_msg.message_id}")
         except Exception as e:
             logger.debug(f"Не удалось удалить статусное сообщение: {e}")
     
     # Удаляем предыдущее сообщение пользователя/бота
     try:
-        await bot.delete_message(chat_id, message.message_id)
+        bot.delete_message(chat_id, message.message_id)
         logger.debug(f"🗑️ Удалено исходное сообщение {message.message_id}")
     except Exception as e:
         logger.debug(f"Не удалось удалить исходное сообщение: {e}")
@@ -205,9 +233,9 @@ async def send_with_status_cleanup(
             
             for msg_id in messages_to_delete:
                 try:
-                    await bot.delete_message(chat_id, msg_id)
+                    bot.delete_message(chat_id, msg_id)
                     logger.debug(f"🗑️ Удалено сообщение из истории {msg_id}")
-                    await asyncio.sleep(0.05)
+                    time.sleep(0.05)
                 except:
                     pass
             
@@ -215,7 +243,7 @@ async def send_with_status_cleanup(
     
     # Отправляем новое сообщение
     try:
-        sent_msg = await bot.send_message(
+        sent_msg = bot.send_message(
             chat_id, 
             markdown_text, 
             reply_markup=reply_markup
@@ -237,7 +265,7 @@ async def send_with_status_cleanup(
             plain_text = re.sub(r'\*\*(.*?)\*\*', r'\1', markdown_text)
             plain_text = re.sub(r'\*(.*?)\*', r'\1', plain_text)
             
-            sent_msg = await bot.send_message(
+            sent_msg = bot.send_message(
                 chat_id, 
                 plain_text, 
                 reply_markup=reply_markup
@@ -255,7 +283,7 @@ async def send_with_status_cleanup(
             return None
 
 
-async def safe_edit_message(
+def safe_edit_message(
     message: types.Message, 
     new_text: str, 
     reply_markup: Any = None, 
@@ -263,7 +291,16 @@ async def safe_edit_message(
 ) -> Optional[types.Message]:
     """
     Безопасно редактирует существующее сообщение
-    АСИНХРОННАЯ ВЕРСИЯ
+    СИНХРОННАЯ ВЕРСИЯ
+    
+    Args:
+        message: сообщение для редактирования
+        new_text: новый текст
+        reply_markup: новая клавиатура (или None)
+        parse_mode: ИГНОРИРУЕТСЯ
+    
+    Returns:
+        отредактированное сообщение или None при ошибке
     """
     # Преобразуем HTML в Markdown
     markdown_text = html_to_markdown(new_text)
@@ -274,7 +311,7 @@ async def safe_edit_message(
         markdown_text = markdown_text[:MAX_MESSAGE_LENGTH - 3] + "..."
     
     try:
-        edited_msg = await bot.edit_message_text(
+        edited_msg = bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=message.message_id,
             text=markdown_text,
@@ -303,26 +340,37 @@ async def safe_edit_message(
 # ДОПОЛНИТЕЛЬНЫЕ УТИЛИТЫ
 # ============================================
 
-async def safe_send_typing(chat_id: int):
+def safe_send_typing(chat_id: int):
     """
     Отправляет индикатор "печатает" (если поддерживается MAX)
-    АСИНХРОННАЯ ВЕРСИЯ
+    СИНХРОННАЯ ВЕРСИЯ
+    
+    Args:
+        chat_id: ID чата
     """
     try:
+        # Проверяем, есть ли такой метод в MAX API
         if hasattr(bot, 'send_chat_action'):
-            await bot.send_chat_action(chat_id, 'typing')
+            bot.send_chat_action(chat_id, 'typing')
             logger.debug(f"✏️ Отправлен статус 'печатает' в чат {chat_id}")
     except Exception as e:
         logger.debug(f"Не удалось отправить статус печати: {e}")
 
 
-async def safe_delete_message(chat_id: int, message_id: int) -> bool:
+def safe_delete_message(chat_id: int, message_id: int) -> bool:
     """
     Безопасно удаляет сообщение по ID
-    АСИНХРОННАЯ ВЕРСИЯ
+    СИНХРОННАЯ ВЕРСИЯ
+    
+    Args:
+        chat_id: ID чата
+        message_id: ID сообщения
+    
+    Returns:
+        True если удалено, False если нет
     """
     try:
-        await bot.delete_message(chat_id, message_id)
+        bot.delete_message(chat_id, message_id)
         logger.debug(f"🗑️ Удалено сообщение {message_id}")
         
         # Удаляем из истории
@@ -339,10 +387,14 @@ async def safe_delete_message(chat_id: int, message_id: int) -> bool:
         return False
 
 
-async def clear_user_history(chat_id: int, keep_last: int = 0):
+def clear_user_history(chat_id: int, keep_last: int = 0):
     """
     Очищает всю историю сообщений пользователя
-    АСИНХРОННАЯ ВЕРСИЯ
+    СИНХРОННАЯ ВЕРСИЯ
+    
+    Args:
+        chat_id: ID чата
+        keep_last: сколько последних сообщений оставить
     """
     if chat_id not in user_messages_history:
         return
@@ -358,9 +410,9 @@ async def clear_user_history(chat_id: int, keep_last: int = 0):
     
     for msg_id in messages_to_delete:
         try:
-            await bot.delete_message(chat_id, msg_id)
+            bot.delete_message(chat_id, msg_id)
             logger.debug(f"🗑️ Удалено сообщение {msg_id} при очистке истории")
-            await asyncio.sleep(0.05)
+            time.sleep(0.05)
         except:
             pass
     
@@ -369,11 +421,11 @@ async def clear_user_history(chat_id: int, keep_last: int = 0):
 
 
 def get_user_history(chat_id: int) -> List[int]:
-    """Возвращает историю сообщений пользователя (синхронная, не требует await)"""
+    """Возвращает историю сообщений пользователя (синхронная)"""
     return user_messages_history.get(chat_id, [])
 
 
-async def split_and_send_long_message(
+def split_and_send_long_message(
     message: Union[types.Message, int],
     text: str,
     reply_markup: Any = None,
@@ -384,7 +436,7 @@ async def split_and_send_long_message(
 ) -> List[Optional[types.Message]]:
     """
     Разбивает длинное сообщение на части и отправляет их
-    АСИНХРОННАЯ ВЕРСИЯ
+    СИНХРОННАЯ ВЕРСИЯ
     
     Args:
         message: исходное сообщение или chat_id
@@ -407,7 +459,7 @@ async def split_and_send_long_message(
     sent_messages = []
     
     # Создаем разделитель на всю ширину
-    separator = "─" * 40  # 40 символов, растянется на всю ширину
+    separator = "─" * 40
     
     for i, part in enumerate(parts):
         # Для промежуточных частей - добавляем индикатор на всю ширину
@@ -423,7 +475,7 @@ async def split_and_send_long_message(
             part_text = f"{part_text}\n\n👇 Что дальше?"
         
         # Отправляем часть
-        sent = await safe_send_message(
+        sent = safe_send_message(
             message,
             part_text,
             reply_markup=current_markup,
@@ -438,7 +490,7 @@ async def split_and_send_long_message(
         
         # Пауза между отправками
         if i < len(parts) - 1:
-            await asyncio.sleep(0.5)
+            time.sleep(0.5)
     
     logger.info(f"📨 Отправлено {len(sent_messages)}/{len(parts)} частей сообщения")
     return sent_messages
