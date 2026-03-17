@@ -13,7 +13,7 @@ from typing import Optional
 from maxibot.types import CallbackQuery
 
 # Импорты из наших модулей
-from state import get_state, get_state_data, user_contexts, user_data, clear_state, update_state_data
+from state import get_state, get_state_data, user_contexts, user_data, clear_state, update_state_data, get_user_name
 from message_utils import safe_send_message
 
 # Импорты обработчиков этапов
@@ -421,7 +421,7 @@ async def handle_sync_callback(call: CallbackQuery):
     
     elif data == "show_dynamic_destinations":
         logger.info(f"🎯 show_dynamic_destinations для пользователя {user_id}")
-        await show_dynamic_destinations(call, state_data)  # ✅ добавлен await
+        await show_dynamic_destinations(call, state_data)
     
     elif data.startswith("goal_cat_"):
         logger.info(f"🎯 Категория целей: {data} для пользователя {user_id}")
@@ -435,20 +435,20 @@ async def handle_sync_callback(call: CallbackQuery):
     
     elif data.startswith("dynamic_dest_"):
         logger.info(f"🎯 Выбор динамической цели: {data} для пользователя {user_id}")
-        await handle_dynamic_destination(call, state_data)  # ✅ добавлен await
+        await handle_dynamic_destination(call, state_data)
     
     elif data == "custom_destination":
         logger.info(f"✏️ custom_destination для пользователя {user_id}")
-        await custom_destination(call, state_data)  # ✅ добавлен await
+        await custom_destination(call, state_data)
     
     elif data == "route_step_done":
         logger.info(f"✅ route_step_done для пользователя {user_id}")
-        await route_step_done(call, state_data)  # ✅ добавлен await
+        await route_step_done(call, state_data)
     
     elif data.startswith("build_route_"):
         logger.info(f"🛤 build_route: {data} для пользователя {user_id}")
         goal_id = data.replace("build_route_", "")
-        await build_route(call, state_data, goal_id)  # ✅ добавлен await
+        await build_route(call, state_data, goal_id)
     
     # ============================================
     # ВОПРОСЫ И ПОМОЩЬ
@@ -522,6 +522,21 @@ async def handle_sync_callback(call: CallbackQuery):
     elif data == "back_to_intro":
         logger.info(f"◀️ back_to_intro для пользователя {user_id}")
         show_intro(call.message)
+    
+    # ✅ ДОБАВЛЕНО: обработка back_to_start
+    elif data == "back_to_start":
+        logger.info(f"◀️ back_to_start для пользователя {user_id}")
+        from handlers.start import cmd_start
+        # Создаем фейковое сообщение для cmd_start
+        class FakeMessage:
+            def __init__(self, user_id, chat_id):
+                self.from_user = type('obj', (), {'id': user_id, 'first_name': get_user_name(user_id)})
+                self.chat = type('obj', (), {'id': chat_id})
+                self.text = '/start'
+                self.message_id = call.message.message_id
+        
+        fake_msg = FakeMessage(user_id, call.message.chat.id)
+        cmd_start(fake_msg)
     
     # ============================================
     # ИГНОРИРУЕМЫЕ CALLBACK'И
