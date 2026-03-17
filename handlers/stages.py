@@ -461,7 +461,7 @@ def handle_stage_1_answer(call, user_id: int, state_data: dict):
         state_data["processing"] = False
 
 def finish_stage_1(message, user_id: int, state_data: dict):
-    """Завершение ЭТАПА 1"""
+    """Завершение ЭТАПА 1 (ИСПРАВЛЕНО - убрана очистка HTML)"""
     logger.info(f"🏁 finish_stage_1 для user {user_id}")
     
     perception_scores = state_data.get("perception_scores", {})
@@ -494,10 +494,8 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     
     result_text = STAGE_1_FEEDBACK.get(perception_type, STAGE_1_FEEDBACK["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"])
     
-    # Используем clean_text_for_safe_display для очистки текста
-    clean_result = clean_text_for_safe_display(result_text)
-    
-    text = f"{clean_result}\n\n▶️ <b>Перейти к этапу 2</b>"
+    # ✅ ИСПРАВЛЕНО: убрана очистка HTML
+    text = f"{result_text}\n\n▶️ <b>Перейти к этапу 2</b>"
     
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 2", callback_data="show_stage_2_intro"))
@@ -667,7 +665,7 @@ def handle_stage_2_answer(call, user_id: int, state_data: dict):
         state_data["processing"] = False
 
 def finish_stage_2(message, user_id: int, state_data: dict):
-    """Завершение ЭТАПА 2"""
+    """Завершение ЭТАПА 2 (ИСПРАВЛЕНО - убрана очистка HTML)"""
     logger.info(f"🏁 finish_stage_2 для user {user_id}")
     
     level_scores_dict = state_data.get("stage2_level_scores_dict", {})
@@ -692,9 +690,8 @@ def finish_stage_2(message, user_id: int, state_data: dict):
     if not result_text:
         result_text = STAGE_2_FEEDBACK[("СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ", "1-3")]
     
-    clean_result = clean_text_for_safe_display(result_text)
-    
-    text = f"{clean_result}\n\n▶️ <b>Перейти к этапу 3</b>"
+    # ✅ ИСПРАВЛЕНО: убрана очистка HTML
+    text = f"{result_text}\n\n▶️ <b>Перейти к этапу 3</b>"
     
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 3", callback_data="show_stage_3_intro"))
@@ -851,7 +848,7 @@ def handle_stage_3_answer(call, user_id: int, state_data: dict):
         state_data["processing"] = False
 
 def finish_stage_3(message, user_id: int, state_data: dict):
-    """Завершение ЭТАПА 3"""
+    """Завершение ЭТАПА 3 (ИСПРАВЛЕНО - убрана очистка HTML)"""
     logger.info(f"🏁 finish_stage_3 для user {user_id}")
     
     stage2_level = user_data.get(user_id, {}).get("thinking_level", 1)
@@ -881,9 +878,9 @@ def finish_stage_3(message, user_id: int, state_data: dict):
     logger.info(f"✅ User {user_id}: Stage 3 complete, final_level={final_level}")
     
     result_text = STAGE_3_FEEDBACK.get(behavior_level, STAGE_3_FEEDBACK[1])
-    clean_result = clean_text_for_safe_display(result_text)
     
-    text = f"{clean_result}\n\n▶️ <b>Перейти к этапу 4</b>"
+    # ✅ ИСПРАВЛЕНО: убрана очистка HTML
+    text = f"{result_text}\n\n▶️ <b>Перейти к этапу 4</b>"
     
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 4", callback_data="show_stage_4_intro"))
