@@ -121,7 +121,12 @@ class MorningMessageManager:
             mode = context.communication_mode if context else "coach"
             
             if context:
-                await context.update_weather()
+                # Проверяем, является ли update_weather асинхронной функцией
+                if hasattr(context, 'update_weather'):
+                    if asyncio.iscoroutinefunction(context.update_weather):
+                        await context.update_weather()
+                    else:
+                        context.update_weather()
             
             # Генерируем текст для этого дня
             if day == 1:
@@ -140,26 +145,41 @@ class MorningMessageManager:
             # Клавиатура для дня (три кнопки)
             keyboard = self._get_keyboard_for_day(day)
             
-            # Отправляем текст
-            await self.bot.send_message(
-                user_id,
-                text,
-                parse_mode='HTML',
-                reply_markup=keyboard
-            )
+            # ✅ ИСПРАВЛЕНО: отправляем текст (проверяем асинхронность)
+            try:
+                if hasattr(self.bot, 'send_message') and asyncio.iscoroutinefunction(self.bot.send_message):
+                    await self.bot.send_message(
+                        user_id,
+                        text,
+                        parse_mode='HTML',
+                        reply_markup=keyboard
+                    )
+                else:
+                    self.bot.send_message(
+                        user_id,
+                        text,
+                        parse_mode='HTML',
+                        reply_markup=keyboard
+                    )
+                logger.info(f"✅ Текст для дня {day} отправлен пользователю {user_id}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки текста для дня {day}: {e}")
             
-            # Отправляем голос
+            # Отправляем голос (text_to_speech асинхронная)
             try:
                 audio_data = await text_to_speech(clean_text, mode)
                 if audio_data:
-                    # В MAX нет send_voice, используем send_audio или просто логируем
                     logger.info(f"🎙 Голос для дня {day} сгенерирован ({len(audio_data)} байт)")
-                    # Если в MAX есть поддержка аудио, можно раскомментировать:
-                    # await self.bot.send_audio(user_id, ('voice.ogg', audio_data))
+                    # Если в MAX есть метод send_audio
+                    if hasattr(self.bot, 'send_audio'):
+                        if asyncio.iscoroutinefunction(self.bot.send_audio):
+                            await self.bot.send_audio(user_id, ('voice.ogg', audio_data))
+                        else:
+                            self.bot.send_audio(user_id, ('voice.ogg', audio_data))
             except Exception as e:
-                logger.error(f"❌ Ошибка голоса: {e}")
+                logger.error(f"❌ Ошибка голоса для дня {day}: {e}")
             
-            logger.info(f"✅ День {day} отправлен пользователю {user_id}")
+            logger.info(f"✅ День {day} полностью отправлен пользователю {user_id}")
             
         except asyncio.CancelledError:
             logger.info(f"⏰ День {day} для {user_id} отменён")
@@ -556,3 +576,10 @@ class MorningMessageManager:
                 task.cancel()
                 logger.info(f"⏰ Отменён день {day} для пользователя {user_id}")
             del self.scheduled_tasks[user_id]
+
+
+# ============================================
+# ЭКСПОРТ
+# ============================================
+
+__all__ = ['MorningMessageManager']
