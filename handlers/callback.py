@@ -14,7 +14,17 @@ from typing import Optional
 from maxibot.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 # Импорты из наших модулей
-from state import get_state, get_state_data, user_contexts, user_data, clear_state, update_state_data, get_user_name
+from state import (
+    get_state, 
+    set_state,
+    get_state_data, 
+    user_contexts, 
+    user_data, 
+    clear_state, 
+    update_state_data, 
+    get_user_name,
+    TestStates  # 👈 ДОБАВЛЕНО
+)
 from message_utils import safe_send_message
 
 # Импорты обработчиков этапов
