@@ -287,8 +287,8 @@ class TrainerMode(BaseMode):
             response = self._set_specific_task(question)
             self.last_tools_used.append("task")
         
-        # Сохраняем в историю
-        self.save_to_history(question, response, self.last_tools_used)
+        # Сохраняем в историю (исправлено - убран лишний аргумент)
+        self.save_to_history(question, response)
         
         # Создаём якорь, если нужно
         if "якорь" in question_lower or "заякорить" in question_lower:
@@ -301,6 +301,19 @@ class TrainerMode(BaseMode):
             text=response,
             suggestions=suggestions
         )
+    
+    def format_response(self, text: str, suggestions: List[str] = None) -> Dict[str, Any]:
+        """
+        Форматирует ответ для отправки пользователю
+        """
+        return {
+            "response": text,
+            "tools_used": self.last_tools_used,
+            "follow_up": False,  # тренер не спрашивает, а говорит
+            "suggestions": suggestions or [],
+            "hypnotic_suggestion": False,
+            "tale_suggested": False
+        }
     
     def _task_for_fear(self) -> str:
         """Задача для работы со страхом"""
@@ -337,7 +350,8 @@ class TrainerMode(BaseMode):
         tasks = [
             "Задание: изучи одну новую тему за час. Выпиши 5 тезисов.",
             "Твоя задача: найди 3 объяснения тому, что тебя беспокоит.",
-            "До завтра: прочитай 20 страниц по теме и сформулируй своё мнение."
+            "До завтра: прочитай 20 страниц по теме и сформулируй своё мнение.",
+            "Напиши пост о том, что узнал сегодня."
         ]
         return random.choice(tasks)
     
