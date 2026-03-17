@@ -6,13 +6,14 @@
 
 import asyncio
 import logging
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 
 from bot_instance import bot
 from message_utils import safe_send_message
 from state import user_data, user_contexts, user_names
-from formatters import bold  # 👈 ДОБАВЛЕНО
+from formatters import bold
 
 logger = logging.getLogger(__name__)
 
@@ -22,33 +23,48 @@ class TaskScheduler:
     def __init__(self):
         self.tasks = {}
         self.running = False
-        self.morning_sent_today = set()  # 👈 ДОБАВЛЕНО: чтобы не отправлять дважды
-        self.last_check_date = None  # 👈 ДОБАВЛЕНО
+        self.morning_sent_today = set()
+        self.last_check_date = None
+        self._thread = None
+        self._loop = None
     
     def start(self):
-        """Запускает планировщик"""
+        """Запускает планировщик в отдельном потоке"""
         if not self.running:
             self.running = True
-            asyncio.create_task(self._run_scheduler())
-            logger.info("✅ Планировщик задач запущен")
+            self._thread = threading.Thread(target=self._run_scheduler_thread, daemon=True)
+            self._thread.start()
+            logger.info("✅ Планировщик задач запущен в отдельном потоке")
+    
+    def _run_scheduler_thread(self):
+        """Запускает цикл событий в отдельном потоке"""
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_until_complete(self._run_scheduler())
+        self._loop.close()
     
     async def _run_scheduler(self):
         """Основной цикл планировщика"""
+        logger.info("🔄 Цикл планировщика запущен")
         while self.running:
-            now = datetime.now()
-            
-            # Обновляем дату для сброса morning_sent_today
-            if self.last_check_date != now.date():
-                self.last_check_date = now.date()
-                self.morning_sent_today.clear()
-                logger.info(f"📅 Новая дата: {now.date()}, сброс утренних отправок")
-            
-            # Проверяем задачи каждый час
-            if now.minute == 0:
-                await self._check_morning_messages()
-                await self._check_reminders()  # 👈 ДОБАВЛЕНО
-            
-            await asyncio.sleep(60)  # Проверка каждую минуту
+            try:
+                now = datetime.now()
+                
+                # Обновляем дату для сброса morning_sent_today
+                if self.last_check_date != now.date():
+                    self.last_check_date = now.date()
+                    self.morning_sent_today.clear()
+                    logger.info(f"📅 Новая дата: {now.date()}, сброс утренних отправок")
+                
+                # Проверяем задачи каждый час
+                if now.minute == 0:
+                    await self._check_morning_messages()
+                    await self._check_reminders()
+                
+                await asyncio.sleep(60)  # Проверка каждую минуту
+            except Exception as e:
+                logger.error(f"❌ Ошибка в цикле планировщика: {e}")
+                await asyncio.sleep(60)
     
     async def _check_morning_messages(self):
         """Проверяет и отправляет утренние сообщения"""
@@ -77,7 +93,7 @@ class TaskScheduler:
             user_name = user_names.get(user_id, "друг")
             
             # Обновляем погоду
-            await context.update_weather()
+            context.update_weather()
             
             day_context = context.get_day_context()
             
@@ -87,7 +103,7 @@ class TaskScheduler:
                 weather = context.weather_cache
                 text += f"{weather['icon']} {weather['description']}, {weather['temp']}°C\n"
             
-            text += f"\n{day_context['greeting']}\n\n"
+            text += f"\n{day_context.get('greeting', 'Хорошего дня!')}\n\n"
             text += f"👇 {bold('Чем займемся сегодня?')}"
             
             await safe_send_message(user_id, text)
