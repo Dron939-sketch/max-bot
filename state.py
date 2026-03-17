@@ -1,75 +1,72 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Модуль для управления состояниями пользователей и FSM
+Модуль состояний и глобальных хранилищ для MAX
 """
 
+import logging
 from typing import Dict, Any, Optional
+from models import UserContext
+
+logger = logging.getLogger(__name__)
 
 # ============================================
 # ГЛОБАЛЬНЫЕ ХРАНИЛИЩА
 # ============================================
 
-# Данные пользователей
+# Основные данные пользователей (результаты тестов, профили)
 user_data: Dict[int, Dict[str, Any]] = {}
 
-# Имена пользователей
+# Имена пользователей (для быстрого доступа)
 user_names: Dict[int, str] = {}
 
-# Состояния пользователей
-user_states: Dict[int, str] = {}
+# Контексты пользователей (город, пол, возраст, погода)
+user_contexts: Dict[int, UserContext] = {}
 
-# Дополнительные данные состояний
+# Данные состояний (для FSM)
 user_state_data: Dict[int, Dict[str, Any]] = {}
 
-# Контексты пользователей
-user_contexts: Dict[int, Any] = {}
-
-# Маршруты пользователей
-user_routes: Dict[int, Dict[str, Any]] = {}
+# Текущие состояния пользователей
+user_states: Dict[int, str] = {}
 
 
 # ============================================
-# FSM СОСТОЯНИЯ
+# КЛАСС СОСТОЯНИЙ
 # ============================================
 
 class TestStates:
-    """Состояния для FSM тестирования и взаимодействия"""
+    """Класс-контейнер для состояний (как Enum)"""
     
-    # Этапы тестирования
+    # Основные состояния
     stage_1 = "stage_1"
     stage_2 = "stage_2"
     stage_3 = "stage_3"
     stage_4 = "stage_4"
     stage_5 = "stage_5"
-    
-    # Результаты и вопросы
     results = "results"
     awaiting_question = "awaiting_question"
     pretest_question = "pretest_question"
-    
-    # Контекст и режимы
     awaiting_context = "awaiting_context"
     mode_selection = "mode_selection"
     
-    # Коррекция профиля
+    # Состояния коррекции
     profile_confirmation = "profile_confirmation"
     clarifying_selection = "clarifying_selection"
     clarifying_test = "clarifying_test"
     alternative_test = "alternative_test"
     
-    # Модели и интервенции
+    # Состояния для работы с моделью
     viewing_confinement = "viewing_confinement"
     viewing_intervention = "viewing_intervention"
     
-    # Профиль и цели
+    # Состояния профиля и целей
     profile_generated = "profile_generated"
     destination_selection = "destination_selection"
     route_generation = "route_generation"
     route_active = "route_active"
     route_step_active = "route_step_active"
     
-    # Проверка реальности
+    # Состояния для проверки реальности
     collecting_life_context = "collecting_life_context"
     collecting_goal_context = "collecting_goal_context"
     theoretical_path_shown = "theoretical_path_shown"
@@ -78,31 +75,18 @@ class TestStates:
 
 
 # ============================================
-# ФУНКЦИИ ДЛЯ РАБОТЫ С СОСТОЯНИЯМИ
+# ФУНКЦИИ УПРАВЛЕНИЯ СОСТОЯНИЯМИ
 # ============================================
-
-def get_state(user_id: int) -> str:
-    """Получает состояние пользователя"""
-    return user_states.get(user_id, "")
-
 
 def set_state(user_id: int, state: str):
     """Устанавливает состояние пользователя"""
     user_states[user_id] = state
+    logger.debug(f"🔄 User {user_id} state set to: {state}")
 
 
-def get_state_data(user_id: int) -> Dict[str, Any]:
-    """Получает данные состояния пользователя"""
-    if user_id not in user_state_data:
-        user_state_data[user_id] = {}
-    return user_state_data[user_id]
-
-
-def update_state_data(user_id: int, **kwargs):
-    """Обновляет данные состояния"""
-    if user_id not in user_state_data:
-        user_state_data[user_id] = {}
-    user_state_data[user_id].update(kwargs)
+def get_state(user_id: int) -> Optional[str]:
+    """Возвращает текущее состояние пользователя"""
+    return user_states.get(user_id)
 
 
 def clear_state(user_id: int):
@@ -111,35 +95,70 @@ def clear_state(user_id: int):
         del user_states[user_id]
     if user_id in user_state_data:
         del user_state_data[user_id]
+    logger.debug(f"🧹 User {user_id} state cleared")
+
+
+# ============================================
+# ФУНКЦИИ УПРАВЛЕНИЯ ДАННЫМИ СОСТОЯНИЙ
+# ============================================
+
+def get_state_data(user_id: int) -> Dict[str, Any]:
+    """Возвращает данные состояния пользователя"""
+    if user_id not in user_state_data:
+        user_state_data[user_id] = {}
+    return user_state_data[user_id]
+
+
+def update_state_data(user_id: int, **kwargs):
+    """Обновляет данные состояния пользователя"""
+    if user_id not in user_state_data:
+        user_state_data[user_id] = {}
+    user_state_data[user_id].update(kwargs)
+    logger.debug(f"📝 User {user_id} state data updated: {list(kwargs.keys())}")
 
 
 # ============================================
 # ФУНКЦИИ ДЛЯ РАБОТЫ С КОНТЕКСТОМ
 # ============================================
 
-def get_user_context(user_id: int):
-    """Получает контекст пользователя"""
-    global user_contexts
-    
-    if user_id not in user_contexts:
-        from models import UserContext
-        user_contexts[user_id] = UserContext(user_id)
-    return user_contexts[user_id]
+def get_user_context(user_id: int) -> Optional[UserContext]:
+    """Возвращает контекст пользователя"""
+    return user_contexts.get(user_id)
 
 
 def get_user_context_dict(user_id: int) -> Dict[str, Any]:
-    """Получает контекст пользователя в виде словаря"""
-    context = get_user_context(user_id)
+    """Возвращает контекст пользователя в виде словаря"""
+    context = user_contexts.get(user_id)
     if context:
         return {
-            'name': context.name,
             'city': context.city,
             'gender': context.gender,
             'age': context.age,
+            'name': context.name,
             'communication_mode': context.communication_mode,
             'weather_cache': context.weather_cache
         }
     return {}
+
+
+# ============================================
+# ФУНКЦИИ ДЛЯ ПОЛУЧЕНИЯ ДАННЫХ ПОЛЬЗОВАТЕЛЯ
+# ============================================
+
+def get_user_name(user_id: int) -> str:
+    """
+    Получает имя пользователя по ID
+    """
+    return user_names.get(user_id, "друг")
+
+
+def get_user_data(user_id: int) -> Dict[str, Any]:
+    """
+    Получает данные пользователя
+    """
+    if user_id not in user_data:
+        user_data[user_id] = {}
+    return user_data[user_id]
 
 
 # ============================================
@@ -151,21 +170,26 @@ __all__ = [
     'user_data',
     'user_names',
     'user_contexts',
-    'user_routes',
-    'user_states',
     'user_state_data',
+    'user_states',
     
-    # Состояния
+    # Класс состояний
     'TestStates',
     
-    # Функции для работы с состояниями
-    'get_state',
+    # Функции управления состояниями
     'set_state',
+    'get_state',
+    'clear_state',
+    
+    # Функции управления данными состояний
     'get_state_data',
     'update_state_data',
-    'clear_state',
     
     # Функции для работы с контекстом
     'get_user_context',
-    'get_user_context_dict'
+    'get_user_context_dict',
+    
+    # Функции для получения данных пользователя
+    'get_user_name',      # ✅ ДОБАВЛЕНО
+    'get_user_data',      # ✅ ДОБАВЛЕНО
 ]
