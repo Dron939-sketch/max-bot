@@ -123,44 +123,52 @@ async def call_deepseek(prompt: str, system_prompt: str = None, max_tokens: int 
                     elapsed = (datetime.now() - start_time).total_seconds()
                     logger.info(f"⏱️ Время ответа: {elapsed:.2f} сек, статус: {response.status}")
                     
+                    # ПОЛУЧАЕМ ТЕКСТ ОТВЕТА
+                    response_text = await response.text()
+                    logger.info(f"📄 Получен ответ, длина: {len(response_text)} символов")
+                    logger.info(f"📄 Первые 200 символов ответа: {response_text[:200]}")
+                    
                     if response.status == 200:
-                        data = await response.json()
-                        logger.info(f"✅ Получен ответ от DeepSeek, структура: {list(data.keys())}")
-                        
-                        # Проверяем структуру ответа
-                        if 'choices' in data and len(data['choices']) > 0:
-                            if 'message' in data['choices'][0] and 'content' in data['choices'][0]['message']:
-                                content = data['choices'][0]['message']['content'].strip()
-                                logger.info(f"✅ DeepSeek ответил, длина ответа: {len(content)} символов")
-                                logger.info(f"📝 Первые 200 символов ответа: {content[:200]}")
+                        try:
+                            data = json.loads(response_text)
+                            logger.info(f"✅ JSON распарсен, структура: {list(data.keys())}")
+                            
+                            # Проверяем структуру ответа
+                            if 'choices' in data and len(data['choices']) > 0:
+                                logger.info(f"✅ Найдены choices, количество: {len(data['choices'])}")
                                 
-                                # Проверяем, что ответ не пустой
-                                if content:
-                                    return content
+                                if 'message' in data['choices'][0]:
+                                    logger.info(f"✅ Найден message в первом choice")
+                                    
+                                    if 'content' in data['choices'][0]['message']:
+                                        content = data['choices'][0]['message']['content'].strip()
+                                        logger.info(f"✅ Найден content, длина: {len(content)} символов")
+                                        logger.info(f"📝 Первые 200 символов content: {content[:200]}")
+                                        
+                                        if content:
+                                            logger.info(f"✅ Возвращаем ответ пользователю")
+                                            return content
+                                        else:
+                                            logger.error("❌ Content пустой")
+                                    else:
+                                        logger.error(f"❌ Нет content в message: {data['choices'][0]['message'].keys()}")
                                 else:
-                                    logger.error("❌ DeepSeek вернул пустой ответ")
+                                    logger.error(f"❌ Нет message в choices[0]: {data['choices'][0].keys()}")
                             else:
-                                logger.error(f"❌ Неверная структура message в ответе: {data['choices'][0].keys()}")
-                        else:
-                            logger.error(f"❌ Нет choices в ответе: {data.keys()}")
-                        
-                        # Если дошли сюда, что-то пошло не так
-                        if attempt < retry_count:
-                            wait_time = 2 ** attempt
-                            logger.info(f"🔄 Повторная попытка {attempt + 1}/{retry_count} через {wait_time}с...")
-                            await asyncio.sleep(wait_time)
-                            continue
-                        return None
+                                logger.error(f"❌ Нет choices в ответе: {data.keys()}")
+                        except json.JSONDecodeError as e:
+                            logger.error(f"❌ Ошибка парсинга JSON: {e}")
+                            logger.error(f"❌ Текст ответа: {response_text[:500]}")
                     else:
-                        error_text = await response.text()
-                        logger.error(f"❌ DeepSeek API error {response.status}: {error_text[:500]}")
-                        
-                        if attempt < retry_count:
-                            wait_time = 2 ** attempt
-                            logger.info(f"🔄 Повторная попытка {attempt + 1}/{retry_count} через {wait_time}с...")
-                            await asyncio.sleep(wait_time)
-                            continue
-                        return None
+                        logger.error(f"❌ DeepSeek API error {response.status}: {response_text[:500]}")
+                    
+                    # Если дошли сюда, что-то пошло не так
+                    if attempt < retry_count:
+                        wait_time = 2 ** attempt
+                        logger.info(f"🔄 Повторная попытка {attempt + 1}/{retry_count} через {wait_time}с...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    return None
                         
         except asyncio.TimeoutError:
             logger.error(f"❌ DeepSeek API timeout (попытка {attempt + 1}/{retry_count + 1})")
