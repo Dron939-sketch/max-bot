@@ -25,7 +25,8 @@ from message_utils import safe_send_message
 from state import (
     user_data, user_names, user_contexts, 
     get_user_context, get_user_context_dict,
-    clear_state, set_state, get_state, TestStates
+    clear_state, set_state, get_state, TestStates,
+    get_user_name  # ✅ ДОБАВЛЕНО для show_intro
 )
 
 logger = logging.getLogger(__name__)
@@ -50,8 +51,8 @@ def get_user_profile(user_id: int) -> dict:
     data = user_data.get(user_id, {})
     return data.get("profile_data", {})
 
-def get_user_name(user_id: int) -> str:
-    """Получает имя пользователя"""
+def get_user_name_local(user_id: int) -> str:
+    """Получает имя пользователя (локальная версия)"""
     return user_names.get(user_id, "Пользователь")
 
 # ============================================
@@ -75,7 +76,7 @@ stats = Stats()
 # ============================================
 
 @bot.message_handler(commands=['start'])
-def cmd_start(message: types.Message):
+def cmd_start(message: Message):
     """Обработчик команды /start"""
     user_id = message.from_user.id
     user_name = message.from_user.first_name or "Пользователь"
@@ -169,7 +170,7 @@ def cmd_start(message: types.Message):
 
 
 @bot.message_handler(commands=['menu'])
-def cmd_menu(message: types.Message):
+def cmd_menu(message: Message):
     """Обработчик команды /menu"""
     user_id = message.from_user.id
     
@@ -186,20 +187,20 @@ def cmd_menu(message: types.Message):
 # ============================================
 
 @bot.callback_query_handler(func=lambda call: call.data == 'start_context')
-def callback_start_context(call: types.CallbackQuery):
+def callback_start_context(call: CallbackQuery):
     """Начать заполнение контекста"""
     from handlers.context import start_context
     start_context(call.message)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'why_details')
-def callback_why_details(call: types.CallbackQuery):
+def callback_why_details(call: CallbackQuery):
     """Показать детальную информацию о боте"""
     show_why_details(call)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'restart_test')
-def callback_restart_test(call: types.CallbackQuery):
+def callback_restart_test(call: CallbackQuery):
     """Перезапустить тест"""
     user_id = call.from_user.id
     
@@ -239,26 +240,26 @@ def callback_restart_test(call: types.CallbackQuery):
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'show_profile')
-def callback_show_profile(call: types.CallbackQuery):
+def callback_show_profile(call: CallbackQuery):
     """Показать профиль"""
     from handlers.profile import show_profile
     show_profile(call.message, call.from_user.id)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'show_modes')
-def callback_show_modes(call: types.CallbackQuery):
+def callback_show_modes(call: CallbackQuery):
     """Показать выбор режимов"""
     from handlers.modes import show_mode_selection
     show_mode_selection(call.message)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'back_to_start')
-def callback_back_to_start(call: types.CallbackQuery):
+def callback_back_to_start(call: CallbackQuery):
     """Вернуться к начальному экрану"""
     # Создаем фейковое сообщение для cmd_start
     class FakeMessage:
         def __init__(self, user_id, chat_id, text):
-            self.from_user = type('obj', (), {'id': user_id, 'first_name': get_user_name(user_id)})
+            self.from_user = type('obj', (), {'id': user_id, 'first_name': get_user_name_local(user_id)})
             self.chat = type('obj', (), {'id': chat_id})
             self.text = text
             self.message_id = call.message.message_id
@@ -276,7 +277,7 @@ def callback_back_to_start(call: types.CallbackQuery):
 # ОСНОВНЫЕ ФУНКЦИИ
 # ============================================
 
-def show_why_details(call: types.CallbackQuery):
+def show_why_details(call: CallbackQuery):
     """Показывает детальную информацию о боте (из Telegram)"""
     
     text = f"""
@@ -316,7 +317,38 @@ def show_why_details(call: types.CallbackQuery):
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
 
-def show_main_menu(message: types.Message, context: UserContext):
+# ============================================
+# ФУНКЦИЯ SHOW_INTRO (НОВАЯ - для кнопки НАЗАД)
+# ============================================
+
+def show_intro(message: Message):
+    """
+    Показывает начальный экран приветствия (для кнопки "НАЗАД")
+    """
+    user_id = message.from_user.id
+    user_name = get_user_name_local(user_id)
+    
+    text = f"""
+👋 {bold(f'Привет, {user_name}!')}
+
+👇 {bold('Выберите, с какой интонацией будем общаться:')}
+"""
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(
+        InlineKeyboardButton(text="🔴 ЖЕСТКИЙ", callback_data="mode_hard"),
+        InlineKeyboardButton(text="🟡 СРЕДНИЙ", callback_data="mode_medium"),
+        InlineKeyboardButton(text="🟢 МЯГКИЙ", callback_data="mode_soft")
+    )
+    keyboard.row(
+        InlineKeyboardButton(text="📖 ЧТО ДАЕТ ТЕСТ", callback_data="show_benefits"),
+        InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="ask_pretest")
+    )
+    
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+
+
+def show_main_menu(message: Message, context: UserContext):
     """Показывает главное меню до теста"""
     from keyboards import get_main_menu_keyboard
     
@@ -354,6 +386,7 @@ __all__ = [
     'cmd_start',
     'cmd_menu',
     'show_why_details',
+    'show_intro',  # ✅ ДОБАВЛЕНО
     'show_main_menu',
     'callback_start_context',
     'callback_why_details',
