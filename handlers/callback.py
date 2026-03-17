@@ -34,8 +34,8 @@ from handlers.modes import (
     set_mode_coach, set_mode_psychologist, set_mode_trainer
 )
 
-# Импорты обработчиков контекста
-from handlers.context import handle_context_callback, start_context
+# Импорты обработчиков контекста (исправлено - переименовали start_context)
+from handlers.context import handle_context_callback, start_context as start_context_handler
 
 # Импорты обработчиков reality check
 from handlers.reality import (
@@ -199,7 +199,7 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "start_context":
         logger.info(f"📝 start_context для пользователя {user_id}")
-        start_context(call.message)
+        start_context_handler(call.message)  # ✅ ИСПРАВЛЕНО
     
     # ============================================
     # ЭТАП 1
@@ -541,8 +541,7 @@ async def handle_sync_callback(call: CallbackQuery):
     # ✅ ДОБАВЛЕНО: обработка back_to_context (возврат к контексту из начала теста)
     elif data == "back_to_context":
         logger.info(f"◀️ back_to_context для пользователя {user_id}")
-        from handlers.context import start_context
-        start_context(call.message)
+        start_context_handler(call.message)  # ✅ ИСПРАВЛЕНО
     
     # ============================================
     # ИГНОРИРУЕМЫЕ CALLBACK'И
