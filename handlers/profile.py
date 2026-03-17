@@ -237,6 +237,9 @@ async def show_ai_profile_async(message: Message, user_id: int):
             )
             keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
             
+            # Сохраняем chat_id для последующих частей
+            chat_id = message.chat.id
+            
             # Отправляем все части
             for i, part in enumerate(formatted_parts):
                 try:
@@ -246,28 +249,31 @@ async def show_ai_profile_async(message: Message, user_id: int):
 
 👇 {bold('Что дальше?')}
 """
+                        # Для последней части используем message и клавиатуру
                         result = safe_send_message(
-                            message if i == 0 else None,
+                            message,  # передаем оригинальное сообщение
                             text,
                             reply_markup=keyboard,
                             parse_mode='HTML',
-                            delete_previous=(i == 0)
+                            delete_previous=(i == 0)  # удаляем предыдущие только для первой части
                         )
                         if result:
                             logger.info(f"✅ Отправлена последняя часть {i+1} с кнопками")
                     else:
                         part_text = f"{part}\n\n<code>✉️ Часть {i+1}/{len(formatted_parts)}</code>"
                         
+                        # Для промежуточных частей передаем chat_id отдельно
                         result = safe_send_message(
-                            message if i == 0 else None,
+                            None,  # message=None
                             part_text,
                             parse_mode='HTML',
-                            delete_previous=(i == 0)
+                            delete_previous=False,
+                            chat_id=chat_id  # передаем chat_id отдельно
                         )
                         if result:
                             logger.info(f"✅ Отправлена часть {i+1}/{len(formatted_parts)}")
                     
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(1)  # пауза между сообщениями
                     
                 except Exception as e:
                     logger.error(f"❌ Ошибка при отправке части {i+1}: {e}")
@@ -391,6 +397,9 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
             keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
             keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
             
+            # Сохраняем chat_id для последующих частей
+            chat_id = message.chat.id
+            
             for i, part in enumerate(formatted_parts):
                 try:
                     if i == len(formatted_parts) - 1:
@@ -402,7 +411,7 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
 👇 {bold('Что дальше?')}
 """
                         result = safe_send_message(
-                            message if i == 0 else None,
+                            message,
                             text,
                             reply_markup=keyboard,
                             parse_mode='HTML',
@@ -419,10 +428,11 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
 <code>✉️ Продолжение следует...</code>
 """
                         result = safe_send_message(
-                            message if i == 0 else None,
+                            None,
                             part_text,
                             parse_mode='HTML',
-                            delete_previous=(i == 0)
+                            delete_previous=False,
+                            chat_id=chat_id
                         )
                         if result:
                             logger.info(f"✅ Отправлена часть мысли {i+1}/{len(formatted_parts)}")
