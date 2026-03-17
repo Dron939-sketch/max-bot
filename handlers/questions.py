@@ -3,6 +3,7 @@
 """
 ОБЪЕДИНЕННЫЙ ФАЙЛ: Обработчики вопросов тестирования И умных вопросов
 Версия для MAX - ПОЛНАЯ с голосовой поддержкой
+ИСПРАВЛЕНО: убраны HTML-теги, используется Markdown
 """
 
 import logging
@@ -205,16 +206,16 @@ def calculate_profile_final(user_data_dict: dict) -> dict:
 def show_stage_1_intro(message, user_id: int, state_data: dict):
     """Показывает введение в этап 1"""
     text = f"""
-🧠 {bold('ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ')}
+🧠 **ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ**
 
 Восприятие — это линза, через которую вы смотрите на мир.
 
-🔍 {bold('Что мы исследуем:')}
+🔍 **Что мы исследуем:**
 • Куда направлено ваше внимание — вовне или внутрь
 • Какая тревога доминирует — страх отвержения или страх потери контроля
 
-📊 {bold('Вопросов:')} 8
-⏱ {bold('Время:')} ~3 минуты
+📊 **Вопросов:** 8
+⏱ **Время:** ~3 минуты
 
 Отвечайте честно — это поможет мне лучше понять вас.
 """
@@ -222,7 +223,7 @@ def show_stage_1_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_1"))
     
-    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
 def start_stage_1(message, user_id: int, state_data: dict):
@@ -252,7 +253,7 @@ def ask_stage_1_question(message, user_id: int):
     progress = calculate_progress(current + 1, total)
     
     question_text = f"""
-🧠 {bold('ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ')}
+🧠 **ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ**
 
 {question['text']}
 
@@ -266,7 +267,7 @@ def ask_stage_1_question(message, user_id: int):
             callback_data=f"stage1_{current}_{option_id}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
 def handle_stage_1_answer(call: CallbackQuery, user_id: int, state_data: dict):
@@ -347,12 +348,12 @@ def finish_stage_1(message, user_id: int):
     # Очищаем от форматирования
     result_text = clean_text_for_safe_display(result_text)
     
-    text = f"{result_text}\n\n▶️ {bold('Перейти к этапу 2')}"
+    text = f"{result_text}\n\n▶️ **Перейти к этапу 2**"
     
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 2", callback_data="show_stage_2_intro"))
     
-    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
     set_state(user_id, TestStates.stage_2)
 
 
@@ -366,15 +367,15 @@ def show_stage_2_intro(message, user_id: int, state_data: dict):
     total_questions = get_stage2_total(perception_type)
     
     text = f"""
-🧠 {bold('ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ')}
+🧠 **ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ**
 
 Восприятие определяет, что вы видите. Мышление — как вы это понимаете.
 
-🎯 {bold('Самое важное:')}
+🎯 **Самое важное:**
 Конфигурация мышления — это траектория с чётким пунктом назначения: результат, к которому вы придёте.
 
-📊 {bold('Вопросов:')} {total_questions}
-⏱ {bold('Время:')} ~3-4 минуты
+📊 **Вопросов:** {total_questions}
+⏱ **Время:** ~3-4 минуты
 
 Продолжим исследование?
 """
@@ -382,7 +383,7 @@ def show_stage_2_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_2"))
     
-    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
 def start_stage_2(message, user_id: int, state_data: dict):
@@ -419,7 +420,7 @@ def ask_stage_2_question(message, user_id: int):
     progress = calculate_progress(current + 1, total_questions)
     
     question_text = f"""
-🧠 {bold('ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ')}
+🧠 **ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ**
 
 {question['text']}
 
@@ -433,7 +434,7 @@ def ask_stage_2_question(message, user_id: int):
             callback_data=f"stage2_{current}_{level_num}_{measures}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
 def handle_stage_2_answer(call: CallbackQuery, user_id: int, state_data: dict):
@@ -536,12 +537,12 @@ def finish_stage_2(message, user_id: int):
     # Очищаем от форматирования
     result_text = clean_text_for_safe_display(result_text)
     
-    text = f"{result_text}\n\n▶️ {bold('Перейти к этапу 3')}"
+    text = f"{result_text}\n\n▶️ **Перейти к этапу 3**"
     
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 3", callback_data="show_stage_3_intro"))
     
-    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
     set_state(user_id, TestStates.stage_3)
 
 
@@ -552,19 +553,19 @@ def finish_stage_2(message, user_id: int):
 def show_stage_3_intro(message, user_id: int, state_data: dict):
     """Показывает введение в этап 3"""
     text = f"""
-🧠 {bold('ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ')}
+🧠 **ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ**
 
 Восприятие определяет, что вы видите.
 Мышление — как вы это понимаете.
 
 Конфигурация поведения — это то, как вы на это реагируете.
 
-🔍 {bold('Здесь мы исследуем:')}
+🔍 **Здесь мы исследуем:**
 • Ваши автоматические реакции
 • Как вы действуете в разных ситуациях
 
-📊 {bold('Вопросов:')} 8
-⏱ {bold('Время:')} ~3 минуты
+📊 **Вопросов:** 8
+⏱ **Время:** ~3 минуты
 
 Продолжим?
 """
@@ -572,7 +573,7 @@ def show_stage_3_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_3"))
     
-    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
 def start_stage_3(message, user_id: int, state_data: dict):
@@ -604,7 +605,7 @@ def ask_stage_3_question(message, user_id: int):
     progress = calculate_progress(current + 1, total)
     
     question_text = f"""
-🧠 {bold('ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ')}
+🧠 **ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ**
 
 {question['text']}
 
@@ -618,7 +619,7 @@ def ask_stage_3_question(message, user_id: int):
             callback_data=f"stage3_{current}_{option_id}_{strategy}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
 def handle_stage_3_answer(call: CallbackQuery, user_id: int, state_data: dict):
@@ -725,12 +726,12 @@ def finish_stage_3(message, user_id: int):
     # Очищаем от форматирования
     result_text = clean_text_for_safe_display(result_text)
     
-    text = f"{result_text}\n\n▶️ {bold('Перейти к этапу 4')}"
+    text = f"{result_text}\n\n▶️ **Перейти к этапу 4**"
     
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Перейти к этапу 4", callback_data="show_stage_4_intro"))
     
-    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
     set_state(user_id, TestStates.stage_4)
 
 
@@ -741,16 +742,16 @@ def finish_stage_3(message, user_id: int):
 def show_stage_4_intro(message, user_id: int, state_data: dict):
     """Показывает введение в этап 4"""
     text = f"""
-🧠 {bold('ЭТАП 4: ТОЧКА РОСТА')}
+🧠 **ЭТАП 4: ТОЧКА РОСТА**
 
 Восприятие — что вы видите.
 Мышление — как понимаете.
 Поведение — как реагируете.
 
-🔍 {bold('Здесь мы найдём:')} где именно находится рычаг — место, где минимальное усилие даёт максимальные изменения.
+🔍 **Здесь мы найдём:** где именно находится рычаг — место, где минимальное усилие даёт максимальные изменения.
 
-📊 {bold('Вопросов:')} 8
-⏱ {bold('Время:')} ~3 минуты
+📊 **Вопросов:** 8
+⏱ **Время:** ~3 минуты
 
 Готовы найти свою точку роста?
 """
@@ -758,7 +759,7 @@ def show_stage_4_intro(message, user_id: int, state_data: dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_4"))
     
-    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
 def start_stage_4(message, user_id: int, state_data: dict):
@@ -788,7 +789,7 @@ def ask_stage_4_question(message, user_id: int):
     progress = calculate_progress(current + 1, total)
     
     question_text = f"""
-🧠 {bold('ЭТАП 4: ТОЧКА РОСТА')}
+🧠 **ЭТАП 4: ТОЧКА РОСТА**
 
 {question['text']}
 
@@ -802,7 +803,7 @@ def ask_stage_4_question(message, user_id: int):
             callback_data=f"stage4_{current}_{option_id}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
 def handle_stage_4_answer(call: CallbackQuery, user_id: int, state_data: dict):
@@ -894,26 +895,26 @@ def finish_stage_4(message, user_id: int):
 def show_stage_5_intro(message, user_id: int, state_data: dict):
     """Показывает введение в этап 5"""
     text = f"""
-🧠 {bold('ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ')}
+🧠 **ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ**
 
 Мы узнали, как вы воспринимаете мир, мыслите и действуете.
 Теперь пришло время заглянуть глубже — в то, что сформировало вас.
 
-🔍 {bold('Здесь мы исследуем:')}
+🔍 **Здесь мы исследуем:**
 • Какой у вас тип привязанности
 • Какие защитные механизмы вы используете
 • Какие глубинные убеждения управляют вами
 
-📊 {bold('Вопросов:')} 10
-⏱ {bold('Время:')} ~5 минут
+📊 **Вопросов:** 10
+⏱ **Время:** ~5 минут
 
-👇 {bold('Готовы заглянуть вглубь себя?')}
+👇 **Готовы заглянуть вглубь себя?**
 """
     
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("▶️ Начать исследование", callback_data="start_stage_5"))
     
-    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
 def start_stage_5(message, user_id: int, state_data: dict):
@@ -942,7 +943,7 @@ def ask_stage_5_question(message, user_id: int):
     progress = calculate_progress(current + 1, total)
     
     question_text = f"""
-🧠 {bold('ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ')}
+🧠 **ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ**
 
 {question['text']}
 
@@ -956,7 +957,7 @@ def ask_stage_5_question(message, user_id: int):
             callback_data=f"stage5_{current}_{option_id}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
 def handle_stage_5_answer(call: CallbackQuery, user_id: int, state_data: dict):
@@ -1047,7 +1048,7 @@ def ask_clarifying_question(message, user_id: int):
     question = questions[current]
     
     question_text = f"""
-🔍 {bold(f'УТОЧНЯЮЩИЙ ВОПРОС {current + 1}/{len(questions)}')}
+🔍 **{f'УТОЧНЯЮЩИЙ ВОПРОС {current + 1}/{len(questions)}'}**
 
 {question['text']}
 """
@@ -1060,7 +1061,7 @@ def ask_clarifying_question(message, user_id: int):
             callback_data=f"clarify_answer_{current}_{opt_key}"
         ))
     
-    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(message, question_text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
 def handle_clarifying_answer(call: CallbackQuery, user_id: int, state_data: dict):
@@ -1198,7 +1199,7 @@ def show_smart_questions(call: CallbackQuery):
     # Проверяем, завершен ли тест
     if not is_test_completed_check(user_data_dict):
         text = f"""
-🧠 <b>ФРЕДИ: СНАЧАЛА ПРОЙДИ ТЕСТ</b>
+🧠 **ФРЕДИ: СНАЧАЛА ПРОЙДИ ТЕСТ**
 
 Чтобы я мог задавать точные вопросы, нужно знать твой профиль.
 
@@ -1208,7 +1209,7 @@ def show_smart_questions(call: CallbackQuery):
         keyboard.row(InlineKeyboardButton("🚀 ПРОЙТИ ТЕСТ", callback_data="show_stage_1_intro"))
         keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="main_menu"))
         
-        safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+        safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
         return
     
     # Получаем scores
@@ -1225,18 +1226,18 @@ def show_smart_questions(call: CallbackQuery):
     
     # Разные заголовки для разных режимов
     if mode == "coach":
-        header = f"{mode_config['emoji']} <b>ЗАДАЙТЕ ВОПРОС (КОУЧ)</b>\n\n"
+        header = f"{mode_config['emoji']} **ЗАДАЙТЕ ВОПРОС (КОУЧ)**\n\n"
         header += "Я буду задавать открытые вопросы, помогая вам найти ответы внутри себя.\n\n"
     elif mode == "psychologist":
-        header = f"{mode_config['emoji']} <b>РАССКАЖИТЕ МНЕ (ПСИХОЛОГ)</b>\n\n"
+        header = f"{mode_config['emoji']} **РАССКАЖИТЕ МНЕ (ПСИХОЛОГ)**\n\n"
         header += "Я здесь, чтобы помочь исследовать глубинные паттерны.\n\n"
     elif mode == "trainer":
-        header = f"{mode_config['emoji']} <b>ПОСТАВЬТЕ ЗАДАЧУ (ТРЕНЕР)</b>\n\n"
+        header = f"{mode_config['emoji']} **ПОСТАВЬТЕ ЗАДАЧУ (ТРЕНЕР)**\n\n"
         header += "Чётко сформулируйте, что хотите решить. Я дам конкретные шаги.\n\n"
     else:
-        header = f"❓ <b>ЗАДАЙТЕ ВОПРОС</b>\n\n"
+        header = f"❓ **ЗАДАЙТЕ ВОПРОС**\n\n"
     
-    text = header + "👇 <b>Выберите вопрос или напишите свой:</b>"
+    text = header + "👇 **Выберите вопрос или напишите свой:**"
     
     # Строим клавиатуру
     keyboard = InlineKeyboardMarkup()
@@ -1265,7 +1266,7 @@ def show_smart_questions(call: CallbackQuery):
     keyboard.row(InlineKeyboardButton("✏️ Написать самому", callback_data="ask_question"))
     keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="show_results"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
 def handle_smart_question(call: CallbackQuery, question_num: int):
@@ -1289,6 +1290,7 @@ def handle_smart_question(call: CallbackQuery, question_num: int):
     status_msg = safe_send_message(
         call.message,
         "🤔 Думаю над ответом...\n\nЭто займёт около 10-15 секунд",
+        parse_mode=None,
         delete_previous=True
     )
     
@@ -1308,7 +1310,7 @@ def handle_smart_question(call: CallbackQuery, question_num: int):
         user_data_dict["history"] = []
     user_data_dict["history"] = mode.history
     
-    # Очищаем ответ от форматирования
+    # Очищаем ответ от форматирования для отображения
     clean_response = clean_text_for_safe_display(response)
     
     keyboard = InlineKeyboardMarkup()
@@ -1332,9 +1334,9 @@ def handle_smart_question(call: CallbackQuery, question_num: int):
     
     safe_send_message(
         call.message,
-        f"❓ <b>{question}</b>\n\n{clean_response}{suggestions_text}",
+        f"❓ **{question}**\n\n{clean_response}{suggestions_text}",
         reply_markup=keyboard,
-        parse_mode='HTML',
+        parse_mode=None,
         delete_previous=True
     )
     
@@ -1398,23 +1400,23 @@ def show_question_input(call: CallbackQuery):
     examples_text = "\n".join([f"• {ex}" for ex in mode_examples])
     
     text = f"""
-🧠 <b>ФРЕДИ: ЗАДАЙТЕ ВОПРОС</b>
+🧠 **ФРЕДИ: ЗАДАЙТЕ ВОПРОС**
 
-{user_name}, <b>задавай вопрос.</b> Я отвечу с учётом твоего профиля и выбранного режима.
+{user_name}, **задавай вопрос.** Я отвечу с учётом твоего профиля и выбранного режима.
 
-<b>Твой профиль:</b> {profile_code}
-<b>Режим:</b> {mode_config['emoji']} {mode_config['name']}
+**Твой профиль:** {profile_code}
+**Режим:** {mode_config['emoji']} {mode_config['name']}
 
-📝 <b>Напиши вопрос текстом</b> или отправь голосовое сообщение.
+📝 **Напиши вопрос текстом** или отправь голосовое сообщение.
 
-👇 <b>Примеры:</b>
+👇 **Примеры:**
 {examples_text}
 """
     
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_mode_selected"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
     
     # Устанавливаем состояние ожидания вопроса
     set_state(user_id, TestStates.awaiting_question)
@@ -1507,9 +1509,9 @@ async def process_text_question_async(message: Message, user_id: int, text: str)
     # ✅ ОТПРАВЛЯЕМ ТЕКСТОВЫЙ ОТВЕТ
     await safe_send_message(
         message,
-        f"💭 <b>Ответ</b>\n\n{clean_response}",
+        f"💭 **Ответ**\n\n{clean_response}",
         reply_markup=keyboard,
-        parse_mode='HTML',
+        parse_mode=None,
         delete_previous=True
     )
     
@@ -1581,7 +1583,7 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
         # ✅ Отправляем текст, что распознали
         await safe_send_message(
             message,
-            f"📝 <b>Вы сказали:</b>\n{recognized_text}",
+            f"📝 **Вы сказали:**\n{recognized_text}",
             delete_previous=True
         )
         
