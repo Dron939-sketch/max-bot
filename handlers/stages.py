@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики этапов тестирования (1-5) для MAX
+Версия 2.0 - ПОЛНАЯ с исправленными функциями
 """
 
 import time
@@ -37,7 +38,13 @@ from profiles import (
 )
 from models import ConfinementModel9
 from services import generate_ai_profile
-from state import get_state_data, update_state_data, user_data, user_contexts
+
+# Импорты из state.py
+from state import (
+    user_data, user_contexts, user_state_data,
+    get_state, set_state, get_state_data, update_state_data,
+    clear_state, TestStates
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,39 +69,6 @@ def clean_text_for_safe_display(text: str) -> str:
     text = re.sub(r'\s+', ' ', text)
     text = re.sub(r'\n\s*\n', '\n\n', text)
     return text.strip()
-
-# ============================================
-# КЛАСС СОСТОЯНИЙ (ВЫНЕСЕН В ОТДЕЛЬНУЮ ПЕРЕМЕННУЮ)
-# ============================================
-
-class TestStates:
-    """Состояния для FSM"""
-    stage_1 = "stage_1"
-    stage_2 = "stage_2"
-    stage_3 = "stage_3"
-    stage_4 = "stage_4"
-    stage_5 = "stage_5"
-    results = "results"
-    awaiting_question = "awaiting_question"
-    pretest_question = "pretest_question"
-    awaiting_context = "awaiting_context"
-    mode_selection = "mode_selection"
-    profile_confirmation = "profile_confirmation"
-    clarifying_selection = "clarifying_selection"
-    clarifying_test = "clarifying_test"
-    alternative_test = "alternative_test"
-    viewing_confinement = "viewing_confinement"
-    viewing_intervention = "viewing_intervention"
-    profile_generated = "profile_generated"
-    destination_selection = "destination_selection"
-    route_generation = "route_generation"
-    route_active = "route_active"
-    route_step_active = "route_step_active"
-    collecting_life_context = "collecting_life_context"
-    collecting_goal_context = "collecting_goal_context"
-    theoretical_path_shown = "theoretical_path_shown"
-    reality_check_active = "reality_check_active"
-    feasibility_result = "feasibility_result"
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -1050,7 +1024,7 @@ def handle_stage_4_answer(call, user_id: int, state_data: dict):
         state_data["processing"] = False
 
 def finish_stage_4(message, user_id: int, state_data: dict):
-    """Завершение ЭТАПА 4"""
+    """Завершение ЭТАПА 4 (ИСПРАВЛЕНО)"""
     logger.info(f"🏁 finish_stage_4 для user {user_id}")
     
     dilts_counts = state_data.get("dilts_counts", {})
@@ -1078,13 +1052,15 @@ def finish_stage_4(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 4 complete, profile={profile_data.get('display_name', 'unknown')}")
     
-    show_preliminary_profile(message, user_id, state_data)
+    # ✅ ИСПРАВЛЕНО: убран state_data
+    show_preliminary_profile(message, user_id)
+
 
 # ============================================
-# ПРЕДВАРИТЕЛЬНЫЙ ПРОФИЛЬ И ПОДТВЕРЖДЕНИЕ
+# ПРЕДВАРИТЕЛЬНЫЙ ПРОФИЛЬ И ПОДТВЕРЖДЕНИЕ (ИСПРАВЛЕНО)
 # ============================================
 
-def show_preliminary_profile(message, user_id: int, state_data: dict):
+def show_preliminary_profile(message, user_id: int):
     """Показывает предварительный портрет после 4 этапа"""
     logger.info(f"📢 show_preliminary_profile для user {user_id}")
     
@@ -1133,8 +1109,11 @@ def show_preliminary_profile(message, user_id: int, state_data: dict):
     keyboard.row(InlineKeyboardButton("🔄 НЕТ", callback_data="profile_reject"))
     
     safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True, keep_last=1)
-    state_data["stage"] = "profile_confirmation"
+    
+    from state import set_state
+    set_state(user_id, TestStates.profile_confirmation)
     logger.info(f"✅ Предварительный профиль показан")
+
 
 def profile_confirm(call):
     """Пользователь подтвердил профиль"""
@@ -1358,7 +1337,7 @@ def handle_clarifying_answer(call):
     ask_clarifying_question(call.message, user_id)
 
 def update_profile_with_clarifications(message, user_id: int):
-    """Обновляет профиль с учётом уточнений"""
+    """Обновляет профиль с учётом уточнений (ИСПРАВЛЕНО)"""
     logger.info(f"🔄 update_profile_with_clarifications для пользователя {user_id}")
     
     data = get_state_data(user_id)
@@ -1366,7 +1345,9 @@ def update_profile_with_clarifications(message, user_id: int):
     iteration = data.get("clarification_iteration", 0) + 1
     update_state_data(user_id, clarification_iteration=iteration)
     
-    show_preliminary_profile(message, user_id, data)
+    # ✅ ИСПРАВЛЕНО: убран data
+    show_preliminary_profile(message, user_id)
+
 
 # ============================================
 # ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ
@@ -1523,6 +1504,7 @@ def finish_stage_5(message, user_id: int, state_data: dict):
             keep_last=1
         )
 
+
 # ============================================
 # ЭКСПОРТ
 # ============================================
@@ -1556,9 +1538,6 @@ __all__ = [
     'ask_whats_wrong', 'handle_discrepancy', 'clarify_next',
     'ask_clarifying_question', 'handle_clarifying_answer',
     'update_profile_with_clarifications',
-    
-    # Состояния
-    'TestStates',
     
     # Вспомогательные
     'cleanup_old_state_files', 'clean_text_for_safe_display'
