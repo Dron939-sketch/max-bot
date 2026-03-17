@@ -118,7 +118,7 @@ from handlers.help import show_help, show_tale, show_benefits
 from handlers.goals import *
 from handlers.questions import *
 from handlers.admin import *
-from handlers.voice import handle_voice_message
+from handlers.voice import handle_voice_message, send_voice_to_max
 
 # Настройка логирования
 logging.basicConfig(
@@ -389,7 +389,7 @@ def cmd_context(message: types.Message):
     safe_send_message(message, "🔄 Давайте обновим ваш контекст")
     start_context(message)
 
-# 👇 НОВЫЕ КОМАНДЫ ДЛЯ АДМИНИСТРАТОРОВ
+# 👇 КОМАНДЫ ДЛЯ АДМИНИСТРАТОРОВ
 @bot.message_handler(commands=['test_yandex'])
 def cmd_test_yandex(message: types.Message):
     """Тестирование Yandex TTS"""
@@ -397,7 +397,6 @@ def cmd_test_yandex(message: types.Message):
         safe_send_message(message, "⛔ Доступ запрещен")
         return
     
-    # Создаем отдельный поток для асинхронной задачи
     def run_async():
         asyncio.run(test_yandex_async(message))
     
@@ -427,6 +426,19 @@ def cmd_test_voices(message: types.Message):
     
     threading.Thread(target=run_async, daemon=True).start()
 
+# 👇 НОВАЯ КОМАНДА ДЛЯ ТЕСТИРОВАНИЯ ОТПРАВКИ ГОЛОСА
+@bot.message_handler(commands=['test_voice_send'])
+def cmd_test_voice_send(message: types.Message):
+    """Тест отправки голосового сообщения"""
+    if message.from_user.id not in ADMIN_IDS:
+        safe_send_message(message, "⛔ Доступ запрещен")
+        return
+    
+    def run_async():
+        asyncio.run(test_voice_send_async(message))
+    
+    threading.Thread(target=run_async, daemon=True).start()
+
 @bot.message_handler(commands=['weekend'])
 def cmd_weekend(message: types.Message):
     """Команда /weekend - идеи на выходные"""
@@ -446,7 +458,10 @@ def cmd_weekend(message: types.Message):
     
     threading.Thread(target=run_async, daemon=True).start()
 
-# 👇 АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ ТЕСТИРОВАНИЯ
+# ============================================
+# АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ ТЕСТИРОВАНИЯ
+# ============================================
+
 async def test_yandex_async(message: types.Message):
     """Асинхронное тестирование Yandex TTS"""
     status_msg = await safe_send_message(
@@ -522,6 +537,37 @@ async def test_voices_async(message: types.Message):
     await safe_send_message(
         message,
         "🎙 Функция тестирования голосов в разработке",
+        delete_previous=True
+    )
+
+# 👇 НОВАЯ ФУНКЦИЯ ДЛЯ ТЕСТИРОВАНИЯ ОТПРАВКИ ГОЛОСА
+async def test_voice_send_async(message: types.Message):
+    """Асинхронное тестирование отправки голоса"""
+    status_msg = await safe_send_message(
+        message,
+        "🎧 Тестирую отправку голоса...",
+        delete_previous=True
+    )
+    
+    test_text = "Привет! Это тестовое голосовое сообщение."
+    results = []
+    
+    for mode in ["coach", "psychologist", "trainer"]:
+        audio = await text_to_speech(test_text, mode)
+        if audio:
+            success = await send_voice_to_max(message.chat.id, audio, f"Тест режима {mode}")
+            if success:
+                results.append(f"✅ {COMMUNICATION_MODES[mode]['display_name']} (отправлен)")
+            else:
+                results.append(f"⚠️ {COMMUNICATION_MODES[mode]['display_name']} (ошибка отправки)")
+        else:
+            results.append(f"❌ {COMMUNICATION_MODES[mode]['display_name']} (не сгенерирован)")
+        await asyncio.sleep(1)
+    
+    await safe_delete_message(message.chat.id, status_msg.message_id)
+    await safe_send_message(
+        message,
+        "📊 Результаты тестирования отправки голоса:\n" + "\n".join(results),
         delete_previous=True
     )
 
@@ -704,7 +750,7 @@ def handle_context_message_wrapper(message: types.Message):
         )
 
 # ============================================
-# 👇 НОВЫЕ ОБРАБОТЧИКИ ТЕКСТОВЫХ СООБЩЕНИЙ ПО СОСТОЯНИЯМ
+# ОБРАБОТЧИКИ ТЕКСТОВЫХ СООБЩЕНИЙ ПО СОСТОЯНИЯМ
 # ============================================
 
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_question)
@@ -753,7 +799,7 @@ def handle_pretest_question(message: types.Message):
 
 
 # ============================================
-# 👇 ОБРАБОТЧИК ГОЛОСОВЫХ СООБЩЕНИЙ
+# ОБРАБОТЧИК ГОЛОСОВЫХ СООБЩЕНИЙ
 # ============================================
 
 @bot.message_handler(content_types=['voice'])
@@ -789,7 +835,7 @@ def handle_unknown_message(message: types.Message):
 
 
 # ============================================
-# 👇 АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ ОБРАБОТКИ СООБЩЕНИЙ
+# АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ ОБРАБОТКИ СООБЩЕНИЙ
 # ============================================
 
 async def process_text_question_async(message: types.Message, user_id: int, text: str):
