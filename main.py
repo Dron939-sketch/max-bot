@@ -114,7 +114,7 @@ from models import (
 from services import (
     speech_to_text, text_to_speech, call_deepseek,
     generate_response_with_full_context, generate_ai_profile,
-    generate_psychologist_thought
+    generate_psychologist_thought, generate_route_ai
 )
 from reality_check import (
     get_theoretical_path,
@@ -244,7 +244,7 @@ anchoring = Anchoring()
 weekend_planner = get_weekend_planner()
 
 # ============================================
-# FSM СОСТОЯНИЯ (теперь в state.py)
+# FSM СОСТОЯНИЯ
 # ============================================
 
 class TestStates:
@@ -907,8 +907,81 @@ def calculate_profile_confidence(profile: dict) -> float:
 @bot.message_handler(commands=['start'])
 def cmd_start(message: types.Message):
     """Обработчик команды /start"""
-    from handlers.start import cmd_start
-    cmd_start(message)
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name or "Пользователь"
+    
+    user_names[user_id] = user_name
+    clear_state(user_id)
+    
+    if user_id not in user_contexts:
+        user_contexts[user_id] = UserContext(user_id)
+        user_contexts[user_id].name = user_name
+    
+    stats.register_start(user_id)
+    
+    context = user_contexts[user_id]
+    
+    # Проверяем, есть ли уже профиль
+    data = user_data.get(user_id, {})
+    if is_test_completed(data):
+        profile_code = data.get("profile_data", {}).get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
+        
+        text = f"""
+🧠 {bold('ФРЕДИ: ВИРТУАЛЬНЫЙ ПСИХОЛОГ')}
+
+👋 О, {user_name}, я вас помню!
+(У меня, в отличие от людей, с памятью всё отлично — спасибо базе данных)
+
+📊 {bold('ВАШ ПРОФИЛЬ:')} {profile_code}
+(Лежит у меня в архивах, пылится...)
+
+❓ {bold('ЧТО ДЕЛАЕМ?')}
+
+Вы можете:
+🔄 Пройти тест заново — вдруг вы изменились?
+
+⬇️ {bold('ВЫБИРАЙТЕ:')}
+"""
+        
+        keyboard = get_restart_keyboard()
+        safe_send_message(message, text, reply_markup=keyboard)
+        return
+    
+    # Проверяем, заполнен ли контекст
+    if not (context.city and context.gender and context.age):
+        welcome_text = f"""
+{user_name}, привет! Ну, здравствуйте, дорогой человек! 👋
+
+🧠 {bold('Я — Фреди, виртуальный психолог.')}
+Оцифрованная версия Андрея Мейстера, если хотите — его цифровой слепок.
+
+🎭 Короче, я — это он, только батарейка дольше держит и пожрать не прошу.
+
+🕒 Нам нужно познакомиться, потому что я пока не экстрасенс.
+
+🧐 Чтобы я понимал, с кем имею дело и чем могу быть полезен —
+давайте-ка пройдём небольшой тест.
+
+📊 {bold('Всего 5 этапов:')}
+
+1️⃣ Конфигурация восприятия — как вы фильтруете реальность
+2️⃣ Конфигурация мышления — как ваш мозг перерабатывает информацию
+3️⃣ Конфигурация поведения — что вы делаете на автопилоте
+4️⃣ Точка роста — куда двигаться, чтобы не топтаться на месте
+5️⃣ Глубинные паттерны — что сформировало вас как личность
+
+⏱ {bold('15 минут')} — и я буду знать о вас больше, чем вы думаете.
+
+🚀 Ну что, начнём наше знакомство?
+"""
+        
+        keyboard = get_start_context_keyboard()
+        safe_send_message(message, welcome_text, reply_markup=keyboard)
+        return
+    
+    # Если контекст уже заполнен, показываем меню
+    from handlers.modes import show_main_menu
+    show_main_menu(message, context)
 
 @bot.message_handler(commands=['menu'])
 def cmd_menu(message: types.Message):
@@ -916,7 +989,6 @@ def cmd_menu(message: types.Message):
     user_id = message.from_user.id
     
     if user_id in user_contexts:
-        from handlers.modes import show_main_menu_after_mode
         show_main_menu_after_mode(message, user_contexts[user_id])
     else:
         cmd_start(message)
@@ -929,7 +1001,6 @@ def cmd_mode(message: types.Message):
     if user_id not in user_contexts:
         user_contexts[user_id] = UserContext(user_id)
     
-    from handlers.modes import show_mode_selection
     show_mode_selection(message)
 
 @bot.message_handler(commands=['stats'])
@@ -976,7 +1047,6 @@ def cmd_context(message: types.Message):
     context.weather_cache = {}
     
     safe_send_message(message, "🔄 Давайте обновим ваш контекст")
-    from handlers.context import start_context
     start_context(message)
 
 # ============================================
@@ -2330,7 +2400,6 @@ def finish_stage_5(message: types.Message, user_id: int):
         if key in data:
             data.pop(key, None)
     
-    from handlers.profile import show_final_profile
     show_final_profile(message, user_id)
 
 # ============================================
@@ -2343,7 +2412,7 @@ def show_final_profile(message: types.Message, user_id: int):
     data = user_data.get(user_id, {})
     
     if data.get("ai_generated_profile"):
-        show_ai_generated_profile(message, user_id, data["ai_generated_profile"])
+        show_ai_profile(message, user_id, data["ai_generated_profile"])
         return
     
     status_msg = safe_send_message(
@@ -2356,15 +2425,46 @@ def show_final_profile(message: types.Message, user_id: int):
         keep_last=1
     )
     
-    ai_profile = generate_ai_profile(user_id, data)
+    # Создаем задачу для генерации профиля
+    import asyncio
+    from services import generate_ai_profile
     
-    if ai_profile:
-        user_data[user_id]["ai_generated_profile"] = ai_profile
-        show_ai_generated_profile(message, user_id, ai_profile, status_msg)
-    else:
-        show_old_final_profile(message, user_id, status_msg)
+    # Получаем данные пользователя
+    data = user_data.get(user_id, {})
+    
+    # Запускаем генерацию в отдельном потоке
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        ai_profile = loop.run_until_complete(generate_ai_profile(user_id, data))
+        loop.close()
+        
+        if ai_profile:
+            logger.info(f"✅ AI профиль успешно сгенерирован для пользователя {user_id}")
+            user_data[user_id]["ai_generated_profile"] = ai_profile
+            
+            # Удаляем статусное сообщение
+            if status_msg:
+                try:
+                    safe_delete_message(message.chat.id, status_msg.message_id)
+                except:
+                    pass
+            
+            # СРАЗУ ПОКАЗЫВАЕМ AI ПРОФИЛЬ
+            show_ai_profile(message, user_id, ai_profile, status_msg)
+            return
+        else:
+            logger.warning(f"⚠️ Не удалось сгенерировать AI профиль для пользователя {user_id}")
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка при генерации AI профиля в finish_stage_5: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Если не удалось сгенерировать, показываем старый профиль
+    show_old_final_profile(message, user_id, status_msg)
 
-def show_ai_generated_profile(message: types.Message, user_id: int, ai_profile: str, status_msg: types.Message = None):
+def show_ai_profile(message: types.Message, user_id: int, ai_profile: str, status_msg: types.Message = None):
     """Показывает профиль, сгенерированный ИИ"""
     
     formatted_profile = format_profile_text(ai_profile)
@@ -2381,7 +2481,7 @@ def show_ai_generated_profile(message: types.Message, user_id: int, ai_profile: 
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"))
     keyboard.row(
-        InlineKeyboardButton("🎤 ХОЧУ ВЫСКАЗАТЬСЯ", callback_data="ask_question"),
+        InlineKeyboardButton("🎤 ЗАДАТЬ ВОПРОС", callback_data="ask_question"),
         InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations")
     )
     keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
@@ -3179,12 +3279,21 @@ def skip_to_route(call: CallbackQuery):
     )
     
     # Здесь должен быть вызов generate_route_ai
-    route = generate_route_ai(call.from_user.id, user_data.get(call.from_user.id, {}), goal)
-    
-    if route:
-        update_state_data(call.from_user.id, current_route=route)
-        show_route_step(call, 1, route)
-    else:
+    try:
+        import asyncio
+        from services import generate_route_ai
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        route = loop.run_until_complete(generate_route_ai(call.from_user.id, user_data.get(call.from_user.id, {}), goal))
+        loop.close()
+        
+        if route:
+            update_state_data(call.from_user.id, current_route=route)
+            show_route_step(call, 1, route)
+        else:
+            show_fallback_route(call, goal)
+    except Exception as e:
+        logger.error(f"Ошибка при генерации маршрута: {e}")
         show_fallback_route(call, goal)
 
 def accept_feasibility_plan(call: CallbackQuery):
@@ -3207,12 +3316,21 @@ def accept_feasibility_plan(call: CallbackQuery):
     )
     
     # Здесь должен быть вызов generate_route_ai
-    route = generate_route_ai(call.from_user.id, user_data.get(call.from_user.id, {}), goal)
-    
-    if route:
-        update_state_data(call.from_user.id, current_route=route)
-        show_route_step(call, 1, route)
-    else:
+    try:
+        import asyncio
+        from services import generate_route_ai
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        route = loop.run_until_complete(generate_route_ai(call.from_user.id, user_data.get(call.from_user.id, {}), goal))
+        loop.close()
+        
+        if route:
+            update_state_data(call.from_user.id, current_route=route)
+            show_route_step(call, 1, route)
+        else:
+            show_fallback_route(call, goal)
+    except Exception as e:
+        logger.error(f"Ошибка при генерации маршрута: {e}")
         show_fallback_route(call, goal)
 
 def show_route_step(call: CallbackQuery, step: int, route: Dict):
