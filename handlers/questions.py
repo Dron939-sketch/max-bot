@@ -14,8 +14,9 @@ import tempfile
 import os
 from typing import Dict, Any, List, Optional
 
-from bot_instance import bot
-from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message, BufferedInputFile
+from maxibot import MaxiBot
+from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
+from maxibot.utils import BufferedInputFile
 
 # Наши модули
 from config import COMMUNICATION_MODES
