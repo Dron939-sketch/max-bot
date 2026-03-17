@@ -10,7 +10,7 @@ import asyncio
 import traceback
 from typing import Optional
 
-from maxibot.types import CallbackQuery
+from maxibot.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 # Импорты из наших модулей
 from state import get_state, get_state_data, user_contexts, user_data, clear_state, update_state_data, get_user_name
@@ -199,7 +199,7 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "start_context":
         logger.info(f"📝 start_context для пользователя {user_id}")
-        start_context_handler(call.message)  # ✅ ИСПРАВЛЕНО
+        start_context_handler(call.message)
     
     # ============================================
     # ЭТАП 1
@@ -461,7 +461,7 @@ async def handle_sync_callback(call: CallbackQuery):
         logger.info(f"📖 show_benefits для пользователя {user_id}")
         show_benefits(call)
     
-    elif data == "show_tale":
+    elif data == "show_tale" or data == "ask_tale":  # 👈 ОБЪЕДИНЯЕМ СКАЗКИ
         logger.info(f"📚 show_tale для пользователя {user_id}")
         show_tale(call)
     
@@ -473,13 +473,20 @@ async def handle_sync_callback(call: CallbackQuery):
         logger.info(f"🤔 smart_questions для пользователя {user_id}")
         show_smart_questions(call)
     
-    elif data.startswith("smart_q_"):
-        logger.info(f"❓ smart question ответ: {data} для пользователя {user_id}")
-        try:
-            question_num = int(data.replace("smart_q_", ""))
-            handle_smart_question(call, question_num)
-        except ValueError:
-            logger.error(f"❌ Неверный формат smart_q: {data}")
+    elif data.startswith("ask_"):
+        # Проверяем, что вторая часть - это число (для умных вопросов)
+        parts = data.split("_")
+        if len(parts) > 1 and parts[1].isdigit():
+            idx = int(parts[1]) - 1
+            state_data_local = get_state_data(user_id)
+            questions = state_data_local.get("smart_questions", [])
+            if 0 <= idx < len(questions):
+                logger.info(f"❓ smart question ответ: {data} для пользователя {user_id}")
+                handle_smart_question(call, questions[idx])
+        else:
+            # Обычный запрос на вопрос
+            logger.info(f"❓ ask_question для пользователя {user_id}")
+            show_question_input(call)
     
     elif data == "ask_pretest":
         logger.info(f"❓ ask_pretest для пользователя {user_id}")
@@ -506,6 +513,44 @@ async def handle_sync_callback(call: CallbackQuery):
         show_profile(call.message, user_id)
     
     # ============================================
+    # 👇 НОВЫЙ ОБРАБОТЧИК: ПРОФИЛЬ НЕ ГОТОВ
+    # ============================================
+    elif data == "profile_not_ready":
+        logger.info(f"📊 profile_not_ready для пользователя {user_id}")
+        
+        text = """
+📊 **ПРОФИЛЬ ПОКА НЕ СОЗДАН**
+
+Твой психологический портрет появится после прохождения теста.
+
+Тест состоит из 5 этапов и займёт всего 15 минут:
+1️⃣ Конфигурация восприятия
+2️⃣ Конфигурация мышления
+3️⃣ Конфигурация поведения
+4️⃣ Точка роста
+5️⃣ Глубинные паттерны
+
+После теста ты получишь:
+✅ Полный психологический портрет
+✅ Рекомендации по целям
+✅ Доступ ко всем функциям бота
+
+👇 **Хочешь пройти тест прямо сейчас?**
+"""
+        
+        keyboard = InlineKeyboardMarkup()
+        keyboard.row(InlineKeyboardButton("🚀 ПРОЙТИ ТЕСТ", callback_data="start_context"))
+        keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_mode_selected"))
+        
+        safe_send_message(
+            call.message,
+            text,
+            reply_markup=keyboard,
+            parse_mode=None,
+            delete_previous=True
+        )
+    
+    # ============================================
     # НАВИГАЦИЯ
     # ============================================
     elif data == "back_to_main":
@@ -523,7 +568,7 @@ async def handle_sync_callback(call: CallbackQuery):
         logger.info(f"◀️ back_to_intro для пользователя {user_id}")
         show_intro(call.message)
     
-    # ✅ ДОБАВЛЕНО: обработка back_to_start
+    # ДОБАВЛЕНО: обработка back_to_start
     elif data == "back_to_start":
         logger.info(f"◀️ back_to_start для пользователя {user_id}")
         from handlers.start import cmd_start
@@ -538,10 +583,10 @@ async def handle_sync_callback(call: CallbackQuery):
         fake_msg = FakeMessage(user_id, call.message.chat.id)
         cmd_start(fake_msg)
     
-    # ✅ ДОБАВЛЕНО: обработка back_to_context (возврат к контексту из начала теста)
+    # ДОБАВЛЕНО: обработка back_to_context (возврат к контексту из начала теста)
     elif data == "back_to_context":
         logger.info(f"◀️ back_to_context для пользователя {user_id}")
-        start_context_handler(call.message)  # ✅ ИСПРАВЛЕНО
+        start_context_handler(call.message)
     
     # ============================================
     # ИГНОРИРУЕМЫЕ CALLBACK'И
