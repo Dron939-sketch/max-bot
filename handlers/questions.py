@@ -51,6 +51,9 @@ from questions import (
 from services import call_deepseek, text_to_speech, speech_to_text
 from question_analyzer import create_analyzer_from_user_data
 
+# Импортируем функцию отправки голоса
+from handlers.voice import send_voice_to_max
+
 logger = logging.getLogger(__name__)
 
 # ============================================
@@ -1335,8 +1338,26 @@ def handle_smart_question(call: CallbackQuery, question_num: int):
         delete_previous=True
     )
     
-    # Голосовой ответ временно отключен из-за отсутствия BufferedInputFile
-    logger.info(f"🎙 Голосовой ответ сгенерирован для пользователя {user_id} (длина: {len(response)} символов)")
+    # ✅ Генерируем и отправляем голосовой ответ
+    try:
+        # Создаем асинхронную задачу для генерации и отправки голоса
+        async def send_voice():
+            audio_data = await text_to_speech(response, mode_name)
+            if audio_data:
+                success = await send_voice_to_max(call.message.chat.id, audio_data)
+                if success:
+                    logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
+                else:
+                    logger.warning(f"⚠️ Не удалось отправить голос пользователю {user_id}")
+            else:
+                logger.warning(f"⚠️ Не удалось сгенерировать голос для пользователя {user_id}")
+        
+        # Запускаем в текущем event loop
+        loop = asyncio.get_event_loop()
+        loop.create_task(send_voice())
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при отправке голоса: {e}")
 
 
 def show_question_input(call: CallbackQuery):
@@ -1415,7 +1436,7 @@ async def process_text_question_async(message: Message, user_id: int, text: str)
         return
     
     # Отправляем статусное сообщение
-    status_msg = safe_send_message(
+    status_msg = await safe_send_message(
         message,
         "🎙 Думаю над ответом...",
         delete_previous=True
@@ -1479,12 +1500,12 @@ async def process_text_question_async(message: Message, user_id: int, text: str)
     # Удаляем статусное сообщение
     if status_msg:
         try:
-            safe_delete_message(message.chat.id, status_msg.message_id)
+            await safe_delete_message(message.chat.id, status_msg.message_id)
         except:
             pass
     
     # ✅ ОТПРАВЛЯЕМ ТЕКСТОВЫЙ ОТВЕТ
-    safe_send_message(
+    await safe_send_message(
         message,
         f"💭 <b>Ответ</b>\n\n{clean_response}",
         reply_markup=keyboard,
@@ -1492,8 +1513,19 @@ async def process_text_question_async(message: Message, user_id: int, text: str)
         delete_previous=True
     )
     
-    # ✅ Голосовой ответ временно отключен из-за отсутствия BufferedInputFile
-    logger.info(f"🎙 Голосовой ответ сгенерирован для пользователя {user_id} (длина: {len(response)} символов)")
+    # ✅ Генерируем и отправляем голосовой ответ
+    try:
+        audio_data = await text_to_speech(response, mode_name)
+        if audio_data:
+            success = await send_voice_to_max(message.chat.id, audio_data)
+            if success:
+                logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
+            else:
+                logger.warning(f"⚠️ Не удалось отправить голос пользователю {user_id}")
+        else:
+            logger.warning(f"⚠️ Не удалось сгенерировать голос для пользователя {user_id}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при отправке голоса: {e}", exc_info=True)
     
     # Сбрасываем состояние
     set_state(user_id, TestStates.results)
@@ -1515,7 +1547,7 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
         return
     
     # Отправляем статусное сообщение
-    status_msg = safe_send_message(
+    status_msg = await safe_send_message(
         message,
         "🎤 Распознаю речь...",
         delete_previous=True
@@ -1528,7 +1560,7 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
         if not recognized_text:
             if status_msg:
                 try:
-                    safe_delete_message(message.chat.id, status_msg.message_id)
+                    await safe_delete_message(message.chat.id, status_msg.message_id)
                 except:
                     pass
             
@@ -1542,7 +1574,7 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
         # Удаляем статусное сообщение
         if status_msg:
             try:
-                safe_delete_message(message.chat.id, status_msg.message_id)
+                await safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
@@ -1561,7 +1593,7 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
         
         if status_msg:
             try:
-                safe_delete_message(message.chat.id, status_msg.message_id)
+                await safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
