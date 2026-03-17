@@ -4,7 +4,7 @@
 Модуль для форматирования текста для МАКС
 Использует Markdown-форматирование (**жирный**, *курсив*)
 
-ВЕРСИЯ 2.0 - ИСПРАВЛЕНА ПРОБЛЕМА С "УЗКИМИ" СООБЩЕНИЯМИ
+ВЕРСИЯ 2.3 - ИСПРАВЛЕНО РАЗБИЕНИЕ СООБЩЕНИЙ И ФОРМАТИРОВАНИЕ МЫСЛЕЙ ПСИХОЛОГА
 """
 
 import re
@@ -66,23 +66,30 @@ def clean_text_for_safe_display(text: str) -> str:
     
     # Удаляем множественные переводы строк
     text = re.sub(r'\n{3,}', '\n\n', text)
-    text = re.sub(r'^\s+', '', text, flags=re.MULTILINE)
-    text = re.sub(r'\s+$', '', text, flags=re.MULTILINE)
+    
+    # Убираем пробелы в начале и конце каждой строки
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        # Сохраняем пустые строки как есть
+        if not line.strip():
+            cleaned_lines.append('')
+        else:
+            # Убираем пробелы в начале и конце строки
+            cleaned_lines.append(line.strip())
+    
+    text = '\n'.join(cleaned_lines)
     
     return text.strip()
 
 
-def split_long_message(text: str, max_length: int = 4000) -> List[str]:
+def split_long_message(text: str, max_length: int = 3500) -> List[str]:
     """
-    Разбивает длинное сообщение на части по max_length символов,
-    стараясь не разрывать слова и абзацы.
-    
-    ВАЖНО: Функция автоматически удаляет лишние пробелы в начале каждой части,
-    чтобы MAX не интерпретировал их как цитату или код (что приводит к "узкому" отображению)
+    Разбивает длинное сообщение на части, стараясь не разрывать абзацы.
     
     Args:
         text: исходный текст
-        max_length: максимальная длина одной части (по умолчанию 4000)
+        max_length: максимальная длина одной части (по умолчанию 3500)
     
     Returns:
         список строк, каждая не длиннее max_length
@@ -90,6 +97,7 @@ def split_long_message(text: str, max_length: int = 4000) -> List[str]:
     if not text:
         return []
     
+    # Если текст короткий, возвращаем как есть
     if len(text) <= max_length:
         return [text]
     
@@ -100,85 +108,90 @@ def split_long_message(text: str, max_length: int = 4000) -> List[str]:
     paragraphs = text.split('\n\n')
     
     for para in paragraphs:
-        # Если абзац сам по себе слишком длинный
-        if len(para) > max_length:
-            # Разбиваем по предложениям
-            sentences = re.split(r'(?<=[.!?])\s+', para)
-            for sent in sentences:
-                if len(current_part) + len(sent) + 2 <= max_length:
-                    if current_part:
-                        current_part += "\n\n" + sent
-                    else:
-                        current_part = sent
-                else:
-                    if current_part:
-                        parts.append(current_part)
-                    # Если предложение слишком длинное, режем принудительно
-                    if len(sent) > max_length:
-                        # Режем по словам
-                        words = sent.split()
-                        temp = ""
-                        for word in words:
-                            if len(temp) + len(word) + 1 <= max_length:
-                                if temp:
-                                    temp += " " + word
-                                else:
-                                    temp = word
-                            else:
-                                parts.append(temp)
-                                temp = word
-                        if temp:
-                            current_part = temp
-                        else:
-                            current_part = ""
-                    else:
-                        current_part = sent
-        else:
-            if len(current_part) + len(para) + 2 <= max_length:
-                if current_part:
-                    current_part += "\n\n" + para
-                else:
-                    current_part = para
+        # Если абзац пустой, пропускаем
+        if not para.strip():
+            continue
+        
+        # Проверяем, влезет ли абзац в текущую часть
+        if len(current_part) + len(para) + 2 <= max_length:
+            if current_part:
+                current_part += "\n\n" + para
             else:
-                if current_part:
-                    parts.append(current_part)
+                current_part = para
+        else:
+            # Если текущая часть не пустая, сохраняем её
+            if current_part:
+                parts.append(current_part)
+            
+            # Если абзац сам по себе слишком длинный, разбиваем его
+            if len(para) > max_length:
+                # Разбиваем длинный абзац на предложения
+                sentences = re.split(r'(?<=[.!?])\s+', para)
+                temp_part = ""
+                
+                for sent in sentences:
+                    if len(temp_part) + len(sent) + 1 <= max_length:
+                        if temp_part:
+                            temp_part += " " + sent
+                        else:
+                            temp_part = sent
+                    else:
+                        if temp_part:
+                            parts.append(temp_part)
+                        # Если предложение слишком длинное, режем по словам
+                        if len(sent) > max_length:
+                            words = sent.split()
+                            word_part = ""
+                            for word in words:
+                                if len(word_part) + len(word) + 1 <= max_length:
+                                    if word_part:
+                                        word_part += " " + word
+                                    else:
+                                        word_part = word
+                                else:
+                                    parts.append(word_part)
+                                    word_part = word
+                            if word_part:
+                                temp_part = word_part
+                            else:
+                                temp_part = ""
+                        else:
+                            temp_part = sent
+                
+                if temp_part:
+                    current_part = temp_part
+                else:
+                    current_part = ""
+            else:
                 current_part = para
     
+    # Добавляем последнюю часть
     if current_part:
         parts.append(current_part)
     
-    # ✅ КРИТИЧЕСКИ ВАЖНО: Очищаем каждую часть от пробелов и табуляций в начале
-    # Это предотвращает интерпретацию сообщения как цитаты или кода в MAX
+    # ✅ ОЧИСТКА: Убираем пробелы в начале каждой части
     cleaned_parts = []
     for i, part in enumerate(parts):
-        # Убираем все пробелы и табуляции в начале строки
-        cleaned = re.sub(r'^\s+', '', part, flags=re.MULTILINE)
+        # Убираем пробелы в начале
+        cleaned = re.sub(r'^\s+', '', part)
         
-        # Также убираем пробелы в начале каждой строки внутри части
-        # (но оставляем отступы для списков)
+        # Убираем пробелы в начале каждой строки внутри части
         lines = cleaned.split('\n')
         cleaned_lines = []
         for line in lines:
-            # Если строка начинается с маркера списка, сохраняем отступ
+            # Если строка начинается с маркера списка, сохраняем один пробел
             if re.match(r'^[•\-*\d]', line.lstrip()):
-                # Сохраняем один пробел для маркера списка
-                cleaned_lines.append(line.lstrip())
+                cleaned_lines.append(' ' + line.lstrip())
             else:
                 # Для обычного текста убираем все ведущие пробелы
                 cleaned_lines.append(line.lstrip())
         
         cleaned = '\n'.join(cleaned_lines)
         
-        # Если после очистки строка пустая - пропускаем
-        if not cleaned:
-            continue
-        
         # Для всех частей, кроме первой, добавляем маркер начала обычного текста
-        # Это гарантированно сбросит любое форматирование от предыдущей части
         if i > 0:
-            # Используем символ-невидимку (U+2800) для сброса форматирования
-            # Этот символ не виден, но заставляет MAX начать с обычного текста
-            cleaned = "⠀" + cleaned
+            # Добавляем обычный текст в начале, чтобы сбросить форматирование
+            cleaned = "⠀" + cleaned  # Символ-невидимка
         
         cleaned_parts.append(cleaned)
     
@@ -213,7 +226,7 @@ def format_profile_text(text: str) -> str:
         pattern = rf'({re.escape(header)})\s*\n\s*{re.escape(clean_header)}'
         text = re.sub(pattern, r'\1', text, flags=re.IGNORECASE)
     
-    # ✅ Добавляем пустые строки между разделами
+    # Добавляем пустые строки между разделами
     sections = [
         'КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА',
         'СИЛЬНЫЕ СТОРОНЫ',
@@ -238,6 +251,13 @@ def format_profile_text(text: str) -> str:
     # Нормализуем пустые строки (не больше двух подряд)
     text = re.sub(r'\n{3,}', '\n\n', text)
     
+    # ✅ Убираем пробелы в начале каждой строки
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        cleaned_lines.append(line.lstrip())
+    text = '\n'.join(cleaned_lines)
+    
     return text.strip()
 
 
@@ -259,7 +279,7 @@ def format_psychologist_text(text: str, user_name: str = "") -> str:
         if first_word and first_word.lower() not in ['здравствуйте', 'привет', 'добрый']:
             text = f"{user_name}, " + text[0].lower() + text[1:] if text else text
     
-    # ✅ Убираем дублирование эмодзи
+    # Убираем дублирование эмодзи
     text = re.sub(r'🔐\s*🔐', '🔐', text)
     text = re.sub(r'🔄\s*🔄', '🔄', text)
     text = re.sub(r'🚪\s*🚪', '🚪', text)
@@ -277,7 +297,7 @@ def format_psychologist_text(text: str, user_name: str = "") -> str:
     for pattern, replacement in header_map:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     
-    # ✅ Добавляем пустые строки между разделами
+    # Добавляем пустые строки между разделами
     sections = [
         'КЛЮЧЕВОЙ ЭЛЕМЕНТ',
         'ПЕТЛЯ',
@@ -299,6 +319,19 @@ def format_psychologist_text(text: str, user_name: str = "") -> str:
     # Нормализуем пустые строки
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = re.sub(r'^\n+', '', text)
+    
+    # ✅ Убираем пробелы в начале каждой строки (ОЧЕНЬ ВАЖНО для ширины)
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        # Если строка пустая, оставляем как есть
+        if not line.strip():
+            cleaned_lines.append('')
+        else:
+            # Убираем пробелы в начале строки
+            cleaned_lines.append(line.lstrip())
+    
+    text = '\n'.join(cleaned_lines)
     
     return text.strip()
 
