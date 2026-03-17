@@ -440,7 +440,7 @@ def handle_context_message(message: Message) -> bool:
     return False
 
 # ============================================
-# ЗАВЕРШЕНИЕ СБОРА КОНТЕКСТА
+# ЗАВЕРШЕНИЕ СБОРА КОНТЕКСТА (ИСПРАВЛЕНО)
 # ============================================
 
 def show_context_complete(message: Message, context: UserContext):
@@ -474,10 +474,11 @@ def show_context_complete(message: Message, context: UserContext):
     summary += "Он определит ваш психологический профиль по 4 векторам и глубинным паттернам.\n\n"
     summary += f"👇 <b>Начинаем?</b>"
     
+    # ✅ ИСПРАВЛЕНО: убрана кнопка "❓ ЗАДАТЬ ВОПРОС"
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("🚀 НАЧАТЬ ТЕСТ", callback_data="show_stage_1_intro"))
     keyboard.row(InlineKeyboardButton("📖 ЧТО ДАЕТ ТЕСТ", callback_data="show_benefits"))
-    keyboard.row(InlineKeyboardButton("❓ ЗАДАТЬ ВОПРОС", callback_data="ask_pretest"))
+    # ❌ Кнопка "❓ ЗАДАТЬ ВОПРОС" удалена
     
     logger.info(f"📤 Отправляем итоговый экран...")
     safe_send_message(
