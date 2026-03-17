@@ -486,11 +486,10 @@ async def show_dynamic_destinations(call: CallbackQuery, state_data: Dict):
 👇 {bold('Куда двинемся?')}
 """
     
-    # Строим клавиатуру
-    keyboard = []
-    row = []
+    # ✅ ИСПРАВЛЕНО: создаем клавиатуру без inline_keyboard параметра
+    keyboard = InlineKeyboardMarkup()
     
-    for i, dest in enumerate(destinations):
+    for dest in destinations:
         # Определяем эмодзи сложности
         difficulty_emoji = {
             "easy": "🟢",
@@ -500,28 +499,25 @@ async def show_dynamic_destinations(call: CallbackQuery, state_data: Dict):
         
         button_text = f"{difficulty_emoji} {dest['name']}"
         
-        row.append(InlineKeyboardButton(
+        keyboard.add(InlineKeyboardButton(
             text=button_text,
             callback_data=f"dynamic_dest_{dest['id']}"
         ))
-        
-        if len(row) == 2 or i == len(destinations) - 1:
-            keyboard.append(row)
-            row = []
     
-    keyboard.append([InlineKeyboardButton(
+    # Добавляем дополнительные кнопки
+    keyboard.add(InlineKeyboardButton(
         text="✏️ Сформулирую сам", 
         callback_data="custom_destination"
-    )])
-    keyboard.append([InlineKeyboardButton(
+    ))
+    keyboard.add(InlineKeyboardButton(
         text="◀️ НАЗАД", 
         callback_data="back_to_mode_selected"
-    )])
+    ))
     
     await safe_send_message(
         call.message,
         text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+        reply_markup=keyboard,  # ✅ теперь просто keyboard, без inline_keyboard
         parse_mode='HTML',
         delete_previous=True
     )
@@ -565,11 +561,11 @@ async def show_theoretical_path(call: CallbackQuery, state_data: Dict, goal_info
 👇 Хочешь проверить, насколько это реально для тебя?
 """
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔍 ПРОВЕРИТЬ РЕАЛЬНОСТЬ", callback_data="check_reality")],
-        [InlineKeyboardButton(text="🔄 ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations")],
-        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="back_to_mode_selected")]
-    ])
+    # ✅ ИСПРАВЛЕНО: создаем клавиатуру правильно
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="🔍 ПРОВЕРИТЬ РЕАЛЬНОСТЬ", callback_data="check_reality"))
+    keyboard.add(InlineKeyboardButton(text="🔄 ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
+    keyboard.add(InlineKeyboardButton(text="◀️ НАЗАД", callback_data="back_to_mode_selected"))
     
     await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     set_state(user_id, TestStates.theoretical_path_shown)
@@ -618,9 +614,9 @@ async def custom_destination(call: CallbackQuery, state_data: Dict):
 👇 {bold('Напиши свою цель:')}
 """
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="show_dynamic_destinations")]
-    ])
+    # ✅ ИСПРАВЛЕНО: создаем клавиатуру правильно
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="◀️ НАЗАД", callback_data="show_dynamic_destinations"))
     
     await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     
@@ -649,10 +645,11 @@ async def show_reality_check(call: CallbackQuery, state_data: Dict):
 
 👇 Сначала выбери цель:
 """
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations")],
-            [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="back_to_mode_selected")]
-        ])
+        # ✅ ИСПРАВЛЕНО: создаем клавиатуру правильно
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton(text="🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
+        keyboard.add(InlineKeyboardButton(text="◀️ НАЗАД", callback_data="back_to_mode_selected"))
+        
         await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
         return
     
@@ -687,9 +684,9 @@ async def start_life_context_collection(call: CallbackQuery, state_data: Dict, g
 👇 {bold('Напиши ответы одним сообщением или отправь голосовое сообщение 🎤')}
 """
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⏭ ПРОПУСТИТЬ (будет неточно)", callback_data="skip_life_context")]
-    ])
+    # ✅ ИСПРАВЛЕНО: создаем клавиатуру правильно
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="⏭ ПРОПУСТИТЬ (будет неточно)", callback_data="skip_life_context"))
     
     await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     set_state(user_id, TestStates.collecting_life_context)
@@ -724,9 +721,9 @@ async def ask_goal_specific_questions(call: CallbackQuery, state_data: Dict, goa
 👇 {bold('Напиши ответы (можно по порядку) или отправь голосовое сообщение 🎤')}
 """
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⏭ ПРОПУСТИТЬ (общий план)", callback_data="skip_goal_questions")]
-    ])
+    # ✅ ИСПРАВЛЕНО: создаем клавиатуру правильно
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="⏭ ПРОПУСТИТЬ (общий план)", callback_data="skip_goal_questions"))
     
     await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     set_state(user_id, TestStates.collecting_goal_context)
@@ -791,12 +788,12 @@ async def calculate_and_show_feasibility(call: CallbackQuery, state_data: Dict):
 👇 {bold(f'Что делаем, {user_name}?')}
 """
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ ПРИНЯТЬ ПЛАН", callback_data="accept_feasibility_plan")],
-        [InlineKeyboardButton(text="🔄 ИЗМЕНИТЬ СРОК", callback_data="adjust_timeline")],
-        [InlineKeyboardButton(text="📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal")],
-        [InlineKeyboardButton(text="◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations")]
-    ])
+    # ✅ ИСПРАВЛЕНО: создаем клавиатуру правильно
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="✅ ПРИНЯТЬ ПЛАН", callback_data="accept_feasibility_plan"))
+    keyboard.add(InlineKeyboardButton(text="🔄 ИЗМЕНИТЬ СРОК", callback_data="adjust_timeline"))
+    keyboard.add(InlineKeyboardButton(text="📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal"))
+    keyboard.add(InlineKeyboardButton(text="◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
     await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     set_state(call.from_user.id, TestStates.feasibility_result)
@@ -816,11 +813,11 @@ async def skip_life_context(call: CallbackQuery, state_data: Dict):
 Хочешь продолжить?
 """
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ ДА, ПОКАЖИ ПЛАН", callback_data="skip_to_route")],
-        [InlineKeyboardButton(text="🔄 ВСЁ-ТАКИ ОТВЕТИТЬ", callback_data="check_reality")],
-        [InlineKeyboardButton(text="◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations")]
-    ])
+    # ✅ ИСПРАВЛЕНО: создаем клавиатуру правильно
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="✅ ДА, ПОКАЖИ ПЛАН", callback_data="skip_to_route"))
+    keyboard.add(InlineKeyboardButton(text="🔄 ВСЁ-ТАКИ ОТВЕТИТЬ", callback_data="check_reality"))
+    keyboard.add(InlineKeyboardButton(text="◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
     await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
@@ -883,11 +880,11 @@ async def adjust_timeline(call: CallbackQuery, state_data: Dict):
 👇 Что выбираешь?
 """
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ УВЕЛИЧИТЬ СРОК", callback_data="apply_extended_timeline")],
-        [InlineKeyboardButton(text="🔄 ОСТАВИТЬ КАК ЕСТЬ", callback_data="accept_feasibility_plan")],
-        [InlineKeyboardButton(text="📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal")]
-    ])
+    # ✅ ИСПРАВЛЕНО: создаем клавиатуру правильно
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="✅ УВЕЛИЧИТЬ СРОК", callback_data="apply_extended_timeline"))
+    keyboard.add(InlineKeyboardButton(text="🔄 ОСТАВИТЬ КАК ЕСТЬ", callback_data="accept_feasibility_plan"))
+    keyboard.add(InlineKeyboardButton(text="📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal"))
     
     await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
@@ -907,12 +904,12 @@ async def reduce_goal(call: CallbackQuery, state_data: Dict):
 👇 Что выбираешь?
 """
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📈 +50% (6 мес)", callback_data="select_goal_50")],
-        [InlineKeyboardButton(text="📈 +30% (4 мес)", callback_data="select_goal_30")],
-        [InlineKeyboardButton(text="🧠 ПРОРАБОТКА БЛОКОВ", callback_data="select_goal_blocks")],
-        [InlineKeyboardButton(text="◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations")]
-    ])
+    # ✅ ИСПРАВЛЕНО: создаем клавиатуру правильно
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="📈 +50% (6 мес)", callback_data="select_goal_50"))
+    keyboard.add(InlineKeyboardButton(text="📈 +30% (4 мес)", callback_data="select_goal_30"))
+    keyboard.add(InlineKeyboardButton(text="🧠 ПРОРАБОТКА БЛОКОВ", callback_data="select_goal_blocks"))
+    keyboard.add(InlineKeyboardButton(text="◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
     await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
@@ -993,7 +990,6 @@ async def build_route(call: CallbackQuery, state_data: Dict, goal_id: str):
         return
     
     # Отправляем статусное сообщение
-    # ✅ ИСПРАВЛЕНО: убран await
     status_msg = safe_send_message(
         call.message,
         f"🧠 Строю маршрут к цели: {bold(goal_info.get('name'))}...\n\nЭто займёт несколько секунд.",
@@ -1038,11 +1034,11 @@ async def show_route_step(call: CallbackQuery, state_data: Dict, step: int, rout
 👇 {bold('Отмечай выполнение, когда готов(а)')}
 """
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ ВЫПОЛНИЛ ЭТАП", callback_data="route_step_done")],
-        [InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions")],
-        [InlineKeyboardButton(text="◀️ К ЦЕЛЯМ", callback_data="show_dynamic_destinations")]
-    ])
+    # ✅ ИСПРАВЛЕНО: создаем клавиатуру правильно
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="✅ ВЫПОЛНИЛ ЭТАП", callback_data="route_step_done"))
+    keyboard.add(InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions"))
+    keyboard.add(InlineKeyboardButton(text="◀️ К ЦЕЛЯМ", callback_data="show_dynamic_destinations"))
     
     # Удаляем статусное сообщение, если оно есть
     if status_msg:
@@ -1092,10 +1088,10 @@ async def show_fallback_route(call: CallbackQuery, state_data: Dict, destination
 👇 {bold('Начинаем?')}
 """
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ НАЧАТЬ", callback_data="route_step_done")],
-        [InlineKeyboardButton(text="◀️ К ЦЕЛЯМ", callback_data="show_dynamic_destinations")]
-    ])
+    # ✅ ИСПРАВЛЕНО: создаем клавиатуру правильно
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="✅ НАЧАТЬ", callback_data="route_step_done"))
+    keyboard.add(InlineKeyboardButton(text="◀️ К ЦЕЛЯМ", callback_data="show_dynamic_destinations"))
     
     # Удаляем статусное сообщение, если оно есть
     if status_msg:
@@ -1158,13 +1154,11 @@ async def complete_route(call: CallbackQuery, state_data: Dict):
 👇 {bold('Выбери действие:')}
 """
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🎯 НОВАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"),
-            InlineKeyboardButton(text="🧠 К ПОРТРЕТУ", callback_data="show_results")
-        ],
-        [InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions")]
-    ])
+    # ✅ ИСПРАВЛЕНО: создаем клавиатуру правильно
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="🎯 НОВАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
+    keyboard.add(InlineKeyboardButton(text="🧠 К ПОРТРЕТУ", callback_data="show_results"))
+    keyboard.add(InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions"))
     
     await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     
