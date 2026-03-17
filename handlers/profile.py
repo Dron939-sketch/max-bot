@@ -203,7 +203,7 @@ def show_ai_profile(message: Message, user_id: int):
                         future = asyncio.run_coroutine_threadsafe(
                             generate_ai_profile(user_id, data), loop
                         )
-                        ai_profile = future.result(timeout=30)
+                        ai_profile = future.result(timeout=60)
                     else:
                         # Цикл не запущен, используем run_until_complete
                         ai_profile = loop.run_until_complete(generate_ai_profile(user_id, data))
@@ -333,7 +333,7 @@ def show_psychologist_thought(message: Message, user_id: int):
                     future = asyncio.run_coroutine_threadsafe(
                         generate_psychologist_thought(user_id, data), loop
                     )
-                    thought = future.result(timeout=30)
+                    thought = future.result(timeout=60)
                 else:
                     thought = loop.run_until_complete(generate_psychologist_thought(user_id, data))
             except RuntimeError:
@@ -446,7 +446,7 @@ def show_final_profile(message: Message, user_id: int):
                 future = asyncio.run_coroutine_threadsafe(
                     generate_ai_profile(user_id, data), loop
                 )
-                ai_profile = future.result(timeout=30)
+                ai_profile = future.result(timeout=60)
             else:
                 ai_profile = loop.run_until_complete(generate_ai_profile(user_id, data))
         except RuntimeError:
