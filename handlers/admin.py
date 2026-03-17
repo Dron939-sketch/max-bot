@@ -23,9 +23,18 @@ from state import (
     user_data, user_contexts, user_names, user_state_data, user_states,
     get_state, set_state, get_state_data, update_state_data, clear_state
 )
-from main import stats  # stats оставляем, так как это менеджер, а не данные
+
+# ✅ ИСПРАВЛЕНО: Импортируем Statistics из models, а не из main
+from models import Statistics
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# СОЗДАЕМ ЭКЗЕМПЛЯР STATISTICS
+# ============================================
+
+# Создаем экземпляр статистики
+stats = Statistics()
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (теперь используют state)
@@ -100,7 +109,6 @@ def cmd_stats(message: Message):
     if not check_admin_access(message):
         return
     
-    from main import stats
     stats_text = stats.get_stats_text()
     
     safe_send_message(
@@ -182,8 +190,6 @@ def show_admin_panel(message_or_call):
     """
     if not check_admin_access(message_or_call):
         return
-    
-    from main import stats
     
     # Собираем статистику
     total_users = len(user_data)
@@ -276,7 +282,6 @@ def show_admin_stats(call: CallbackQuery):
     if not check_admin_access(call):
         return
     
-    from main import stats
     stats_text = stats.get_stats_text()
     
     keyboard = get_back_keyboard("admin_panel")
