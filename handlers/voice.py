@@ -2,18 +2,18 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики голосовых сообщений для MAX
-Версия 2.0 - ПОЛНАЯ асинхронная с поддержкой всех состояний
+Версия 2.2 - ПОЛНАЯ с поддержкой отправки голоса
 """
 
 import os
 import tempfile
 import logging
 import asyncio
+import aiohttp
+import json
 from typing import Optional
 
 from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-# ❌ Удаляем импорт BufferedInputFile
-# from maxibot.utils import BufferedInputFile
 
 from bot_instance import bot
 from message_utils import safe_send_message, safe_delete_message
@@ -25,9 +25,127 @@ from state import (
 )
 from modes import get_mode
 from formatters import bold, clean_text_for_safe_display
-from config import COMMUNICATION_MODES
+from config import COMMUNICATION_MODES, MAX_TOKEN
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ФУНКЦИЯ ДЛЯ ОТПРАВКИ ГОЛОСОВЫХ СООБЩЕНИЙ В MAX
+# ============================================
+
+async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None) -> bool:
+    """
+    Отправляет голосовое сообщение в MAX (3-шаговый процесс)
+    
+    Args:
+        chat_id: ID чата (не используется напрямую, но нужен для совместимости)
+        audio_data: Аудиоданные в формате OGG
+        caption: Подпись к сообщению (опционально)
+    
+    Returns:
+        True если успешно, False если ошибка
+    """
+    if not audio_data:
+        logger.error("❌ Нет аудиоданных для отправки")
+        return False
+    
+    if not MAX_TOKEN:
+        logger.error("❌ MAX_TOKEN не настроен")
+        return False
+    
+    temp_path = None
+    try:
+        # ШАГ 1: Получаем URL для загрузки
+        async with aiohttp.ClientSession() as session:
+            # Запрос на получение upload URL
+            upload_response = await session.post(
+                "https://platform-api.max.ru/uploads?type=audio",
+                headers={"Authorization": f"Bearer {MAX_TOKEN}"}
+            )
+            
+            if upload_response.status != 200:
+                error_text = await upload_response.text()
+                logger.error(f"❌ Не удалось получить upload URL: {upload_response.status} - {error_text}")
+                return False
+            
+            upload_data = await upload_response.json()
+            upload_url = upload_data.get("upload_url")
+            token = upload_data.get("token")
+            
+            if not upload_url or not token:
+                logger.error(f"❌ Нет upload_url или token в ответе: {upload_data}")
+                return False
+            
+            logger.info(f"✅ Получен upload URL: {upload_url[:50]}...")
+            
+            # ШАГ 2: Загружаем аудиофайл
+            # Создаем временный файл
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg', mode='wb') as tmp:
+                tmp.write(audio_data)
+                temp_path = tmp.name
+            
+            logger.info(f"📝 Создан временный файл: {temp_path} ({len(audio_data)} байт)")
+            
+            # Загружаем файл
+            with open(temp_path, 'rb') as f:
+                form_data = aiohttp.FormData()
+                form_data.add_field('file', f, filename='voice.ogg', content_type='audio/ogg')
+                
+                upload_file_response = await session.post(
+                    upload_url,
+                    data=form_data
+                )
+            
+            if upload_file_response.status not in [200, 201, 204]:
+                error_text = await upload_file_response.text()
+                logger.error(f"❌ Ошибка загрузки файла: {upload_file_response.status} - {error_text}")
+                return False
+            
+            logger.info("✅ Файл успешно загружен")
+            
+            # ШАГ 3: Отправляем сообщение с аттачем
+            message_data = {
+                "text": caption or "🎙 Голосовое сообщение",
+                "attachments": [
+                    {
+                        "type": "audio",
+                        "payload": {
+                            "token": token
+                        }
+                    }
+                ]
+            }
+            
+            message_response = await session.post(
+                "https://platform-api.max.ru/messages",
+                headers={
+                    "Authorization": f"Bearer {MAX_TOKEN}",
+                    "Content-Type": "application/json"
+                },
+                json=message_data
+            )
+            
+            if message_response.status in [200, 201]:
+                logger.info("✅ Голосовое сообщение успешно отправлено")
+                return True
+            else:
+                error_text = await message_response.text()
+                logger.error(f"❌ Ошибка отправки сообщения: {message_response.status} - {error_text}")
+                return False
+                
+    except Exception as e:
+        logger.error(f"❌ Ошибка при отправке голоса: {e}", exc_info=True)
+        return False
+    
+    finally:
+        # Удаляем временный файл
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+                logger.info(f"🗑️ Временный файл удален: {temp_path}")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось удалить временный файл: {e}")
+
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -43,6 +161,7 @@ def is_test_completed(user_data_dict: dict) -> bool:
     if all(field in user_data_dict for field in required_minimal):
         return True
     return False
+
 
 # ============================================
 # ОСНОВНОЙ ОБРАБОТЧИК ГОЛОСОВЫХ СООБЩЕНИЙ
@@ -218,12 +337,15 @@ async def test_voice_message(message: Message, text: str = "Привет! Это
     for mode in ["coach", "psychologist", "trainer"]:
         audio = await text_to_speech(text, mode)
         if audio:
-            # ❌ Отключаем отправку голоса, только логируем
-            logger.info(f"🎙 Тестовый голос для режима {mode} сгенерирован (длина: {len(audio)} байт)")
-            results.append(f"✅ {COMMUNICATION_MODES[mode]['display_name']} (голос сгенерирован)")
+            # ✅ Отправляем голос
+            success = await send_voice_to_max(message.chat.id, audio, f"Тест режима {mode}")
+            if success:
+                results.append(f"✅ {COMMUNICATION_MODES[mode]['display_name']} (отправлен)")
+            else:
+                results.append(f"⚠️ {COMMUNICATION_MODES[mode]['display_name']} (сгенерирован, но не отправлен)")
         else:
-            results.append(f"❌ {COMMUNICATION_MODES[mode]['display_name']}")
-        await asyncio.sleep(0.5)
+            results.append(f"❌ {COMMUNICATION_MODES[mode]['display_name']} (не сгенерирован)")
+        await asyncio.sleep(1)
     
     await safe_delete_message(message.chat.id, status_msg.message_id)
     await safe_send_message(
@@ -239,5 +361,6 @@ async def test_voice_message(message: Message, text: str = "Привет! Это
 
 __all__ = [
     'handle_voice_message',
-    'test_voice_message'
+    'test_voice_message',
+    'send_voice_to_max'  # ✅ Добавлено
 ]
