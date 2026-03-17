@@ -1,6 +1,7 @@
 """
 Конфигурация и константы бота для MAX
 Ключи API загружаются из переменных окружения (на Render)
+ИСПРАВЛЕНО: добавлена проверка MAX_TOKEN для голосовых сообщений
 """
 import os
 from dotenv import load_dotenv
@@ -310,22 +311,48 @@ DESTINATIONS = {
 
 
 # ============================================
-# ПРОВЕРКА НАЛИЧИЯ КЛЮЧЕЙ (опционально)
+# ПРОВЕРКА НАЛИЧИЯ КЛЮЧЕЙ
 # ============================================
 
 def check_config():
     """Проверяет, что все необходимые ключи загружены"""
     missing = []
+    warnings = []
     
     if not MAX_TOKEN:
         missing.append("MAX_TOKEN")
+    elif MAX_TOKEN == "ВАШ_ТОКЕН_ЗДЕСЬ":
+        warnings.append("MAX_TOKEN не заменен на реальный токен (стоит заглушка)")
+    
     if not DEEPSEEK_API_KEY:
         missing.append("DEEPSEEK_API_KEY")
     
+    if not DEEPGRAM_API_KEY:
+        warnings.append("DEEPGRAM_API_KEY отсутствует - голосовой ввод не будет работать")
+    
+    if not YANDEX_API_KEY:
+        warnings.append("YANDEX_API_KEY отсутствует - голосовой вывод не будет работать")
+    
+    if not OPENWEATHER_API_KEY:
+        warnings.append("OPENWEATHER_API_KEY отсутствует - погода не будет работать")
+    
     if missing:
-        print(f"⚠️ ВНИМАНИЕ: Отсутствуют ключи: {', '.join(missing)}")
-        print("Убедитесь, что они заданы в переменных окружения Render")
+        print(f"❌ КРИТИЧЕСКИ: Отсутствуют обязательные ключи: {', '.join(missing)}")
         return False
+    
+    if warnings:
+        print(f"⚠️ ПРЕДУПРЕЖДЕНИЯ:")
+        for w in warnings:
+            print(f"  • {w}")
+    
+    # Детальный статус
+    print("\n🔑 СТАТУС КЛЮЧЕЙ API:")
+    print(f"  • MAX_TOKEN: {'✅' if MAX_TOKEN and MAX_TOKEN != 'ВАШ_ТОКЕН_ЗДЕСЬ' else '❌'}")
+    print(f"  • DEEPSEEK_API_KEY: {'✅' if DEEPSEEK_API_KEY else '❌'}")
+    print(f"  • DEEPGRAM_API_KEY: {'✅' if DEEPGRAM_API_KEY else '❌'} (распознавание)")
+    print(f"  • YANDEX_API_KEY: {'✅' if YANDEX_API_KEY else '❌'} (синтез)")
+    print(f"  • OPENWEATHER_API_KEY: {'✅' if OPENWEATHER_API_KEY else '❌'} (погода)")
+    
     return True
 
 # Автоматическая проверка при импорте
