@@ -188,7 +188,7 @@ async def ask_goal_specific_questions(call: CallbackQuery, goal: Dict, state_dat
 # ОБРАБОТЧИКИ ОТВЕТОВ
 # ============================================
 
-def process_life_context(message: Message, user_id: int, text: str):
+async def process_life_context(message: Message, user_id: int, text: str):
     """Обрабатывает ответы на вопросы о жизненном контексте"""
     context = get_user_context(user_id)
     if not context:
@@ -235,13 +235,13 @@ def process_life_context(message: Message, user_id: int, text: str):
             chat_instance=""
         )
         # Запускаем асинхронную функцию
-        asyncio.create_task(ask_goal_specific_questions(fake_call, goal))
+        await ask_goal_specific_questions(fake_call, goal)
     else:
         # Если цели нет, показываем меню
         from handlers.modes import show_main_menu_after_mode
-        show_main_menu_after_mode(message, context)
+        await show_main_menu_after_mode(message, context)
 
-def process_goal_context(message: Message, user_id: int, text: str):
+async def process_goal_context(message: Message, user_id: int, text: str):
     """Обрабатывает ответы на вопросы о целевом контексте"""
     state_data = get_user_state_data(user_id)
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
@@ -277,7 +277,7 @@ def process_goal_context(message: Message, user_id: int, text: str):
         chat_instance=""
     )
     # Запускаем асинхронную функцию
-    asyncio.create_task(calculate_and_show_feasibility(fake_call, user_id))
+    await calculate_and_show_feasibility(fake_call, user_id)
 
 # ============================================
 # РАСЧЁТ ДОСТИЖИМОСТИ
@@ -474,7 +474,7 @@ async def accept_feasibility_plan(call: CallbackQuery, state_data: Dict = None):
         from handlers.goals import show_fallback_route
         await show_fallback_route(call, goal, status_msg)
 
-def adjust_timeline(call: CallbackQuery, state_data: Dict = None):
+async def adjust_timeline(call: CallbackQuery, state_data: Dict = None):
     """
     Предлагает скорректировать сроки
     """
@@ -503,9 +503,9 @@ def adjust_timeline(call: CallbackQuery, state_data: Dict = None):
     keyboard.row(InlineKeyboardButton("📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal"))
     keyboard.row(InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
-def reduce_goal(call: CallbackQuery, state_data: Dict = None):
+async def reduce_goal(call: CallbackQuery, state_data: Dict = None):
     """
     Предлагает снизить планку цели
     """
@@ -526,7 +526,7 @@ def reduce_goal(call: CallbackQuery, state_data: Dict = None):
     keyboard.row(InlineKeyboardButton("🧠 ПРОРАБОТКА БЛОКОВ", callback_data="select_goal_blocks"))
     keyboard.row(InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 async def apply_extended_timeline(call: CallbackQuery, state_data: Dict = None):
     """
@@ -535,7 +535,7 @@ async def apply_extended_timeline(call: CallbackQuery, state_data: Dict = None):
     # Пока просто принимаем план
     await accept_feasibility_plan(call, state_data)
 
-def select_goal_50(call: CallbackQuery, state_data: Dict = None):
+async def select_goal_50(call: CallbackQuery, state_data: Dict = None):
     """
     Выбирает цель +50%
     """
@@ -556,9 +556,9 @@ def select_goal_50(call: CallbackQuery, state_data: Dict = None):
     
     # Показываем теоретический путь
     from handlers.goals import show_theoretical_path
-    show_theoretical_path(call, new_goal)
+    await show_theoretical_path(call, new_goal)
 
-def select_goal_30(call: CallbackQuery, state_data: Dict = None):
+async def select_goal_30(call: CallbackQuery, state_data: Dict = None):
     """
     Выбирает цель +30%
     """
@@ -577,9 +577,9 @@ def select_goal_30(call: CallbackQuery, state_data: Dict = None):
     update_user_state_data(user_id, current_destination=new_goal)
     
     from handlers.goals import show_theoretical_path
-    show_theoretical_path(call, new_goal)
+    await show_theoretical_path(call, new_goal)
 
-def select_goal_blocks(call: CallbackQuery, state_data: Dict = None):
+async def select_goal_blocks(call: CallbackQuery, state_data: Dict = None):
     """
     Выбирает работу с блоками
     """
@@ -598,7 +598,7 @@ def select_goal_blocks(call: CallbackQuery, state_data: Dict = None):
     update_user_state_data(user_id, current_destination=new_goal)
     
     from handlers.goals import show_theoretical_path
-    show_theoretical_path(call, new_goal)
+    await show_theoretical_path(call, new_goal)
 
 
 # ============================================
