@@ -3,7 +3,7 @@
 """
 Обработчики проверки реальности для MAX
 Восстановлено из оригинального bot3.py и адаптировано
-ИСПРАВЛЕНО: все функции, вызываемые с await, сделаны асинхронными
+ИСПРАВЛЕНО: удален дублирующийся обработчик callback'ов, все функции асинхронные
 """
 
 import logging
@@ -65,49 +65,6 @@ def get_user_name(user_id: int) -> str:
 def set_user_state(user_id: int, state: str):
     """Устанавливает состояние пользователя"""
     user_states[user_id] = state
-
-# ============================================
-# ЕДИНЫЙ ОБРАБОТЧИК CALLBACK'ОВ
-# ============================================
-
-def handle_reality_callback(call: CallbackQuery):
-    """
-    Единый обработчик для всех callback'ов проверки реальности
-    """
-    user_id = call.from_user.id
-    data = call.data
-    
-    logger.info(f"🔍 handle_reality_callback: {data} для пользователя {user_id}")
-    
-    if data == "check_reality":
-        show_reality_check(call)
-    elif data == "skip_life_context":
-        skip_life_context(call)
-    elif data == "skip_goal_questions":
-        skip_goal_questions(call)
-    elif data == "skip_to_route":
-        skip_to_route(call)
-    elif data == "accept_feasibility_plan":
-        accept_feasibility_plan(call)
-    elif data == "adjust_timeline":
-        adjust_timeline(call)
-    elif data == "reduce_goal":
-        reduce_goal(call)
-    elif data == "apply_extended_timeline":
-        apply_extended_timeline(call)
-    elif data == "select_goal_50":
-        select_goal_50(call)
-    elif data == "select_goal_30":
-        select_goal_30(call)
-    elif data == "select_goal_blocks":
-        select_goal_blocks(call)
-    else:
-        logger.warning(f"⚠️ Неизвестный reality callback: {data}")
-        safe_send_message(
-            call.message,
-            "❓ Неизвестная команда проверки реальности",
-            delete_previous=True
-        )
 
 # ============================================
 # ОСНОВНЫЕ ФУНКЦИИ ПРОВЕРКИ РЕАЛЬНОСТИ
@@ -649,7 +606,6 @@ def select_goal_blocks(call: CallbackQuery, state_data: Dict = None):
 # ============================================
 
 __all__ = [
-    'handle_reality_callback',
     'show_reality_check',
     'start_life_context_collection',
     'ask_goal_specific_questions',
