@@ -49,15 +49,13 @@ from handlers.questions import (
 # Импорты обработчиков помощи
 from handlers.help import show_help, show_benefits, show_tale
 
-# Импорты обработчиков профиля (теперь импортируем все функции)
+# Импорты обработчиков профиля
 from handlers.profile import (
     show_profile, 
     show_ai_profile, 
     show_psychologist_thought,
-    # Добавляем асинхронные версии, если они нужны для прямого вызова
     show_ai_profile_async,
-    show_psychologist_thought_async,
-    show_final_profile_async
+    show_psychologist_thought_async
 )
 
 # Импорты обработчиков старта
@@ -366,15 +364,15 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "show_help":
         logger.info(f"❓ show_help для пользователя {user_id}")
-        show_help(call.message)
+        show_help(call)  # ✅ ИСПРАВЛЕНО: передаем call, а не call.message
     
     elif data == "show_benefits":
         logger.info(f"📖 show_benefits для пользователя {user_id}")
-        show_benefits(call.message)
+        show_benefits(call)  # ✅ ИСПРАВЛЕНО: передаем call, а не call.message
     
     elif data == "show_tale":
         logger.info(f"📚 show_tale для пользователя {user_id}")
-        show_tale(call.message)
+        show_tale(call)  # ✅ ИСПРАВЛЕНО: передаем call, а не call.message
     
     elif data == "smart_questions":
         logger.info(f"🤔 smart_questions для пользователя {user_id}")
@@ -386,11 +384,11 @@ async def handle_sync_callback(call: CallbackQuery):
     
     elif data == "ask_pretest":
         logger.info(f"❓ ask_pretest для пользователя {user_id}")
-        show_question_input(call.message, "pretest")
+        show_question_input(call)  # ✅ ИСПРАВЛЕНО: передаем только call
     
     elif data == "ask_question":
         logger.info(f"❓ ask_question для пользователя {user_id}")
-        show_question_input(call.message, "general")
+        show_question_input(call)  # ✅ ИСПРАВЛЕНО: передаем только call
     
     # ============================================
     # ПРОФИЛЬ (синхронные версии для обратной совместимости)
