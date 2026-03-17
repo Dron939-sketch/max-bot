@@ -794,7 +794,7 @@ def main():
     
     logger.info("🚀 Бот для MAX запущен!")
     
-    # Запускаем планировщик (он сам создаст свои задачи)
+    # Запускаем планировщик (теперь он запускается в отдельном потоке)
     scheduler.start()
     
     # Запускаем асинхронные задачи в отдельном потоке
@@ -822,18 +822,5 @@ def main():
                     time.sleep(delay)
                 else:
                     logger.error("❌ Превышено количество попыток")
-    finally:
-        cleanup_resources()
-
-if __name__ == "__main__":
-    os.makedirs("stats", exist_ok=True)
-    os.makedirs("/tmp/user_states", exist_ok=True)
-    
-    try:
-        main()
-    except KeyboardInterrupt:
-        logger.info("👋 Бот остановлен")
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка: {e}")
     finally:
         cleanup_resources()
