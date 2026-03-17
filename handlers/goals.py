@@ -2,27 +2,39 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики целей и маршрутов для MAX
+Версия 2.0 - ПОЛНАЯ с проверкой реальности
 """
 
 import logging
 import time
+import asyncio
 from typing import Dict, Any, List, Optional
 
-from bot_instance import bot
-from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 
 # Наши модули
-from config import COMMUNICATION_MODES, DESTINATIONS
+from config import COMMUNICATION_MODES
 from message_utils import safe_send_message
-from keyboards import get_back_keyboard
+from keyboards import get_back_keyboard, get_main_menu_after_mode_keyboard
 from services import generate_route_ai
-from reality_check import get_theoretical_path
+from reality_check import (
+    get_theoretical_path,
+    generate_life_context_questions,
+    generate_goal_context_questions,
+    calculate_feasibility,
+    parse_life_context_answers,
+    parse_goal_context_answers
+)
 
 # Импорты из state.py
 from state import (
     user_data, user_contexts, user_state_data, user_states,
-    get_state, set_state, get_state_data, update_state_data, TestStates, user_names
+    get_state, set_state, get_state_data, update_state_data, 
+    TestStates, user_names, clear_state
 )
+
+# Импорты из formatters.py
+from formatters import bold, italic, clean_text_for_safe_display
 
 logger = logging.getLogger(__name__)
 
@@ -57,242 +69,10 @@ def get_user_name(user_id: int) -> str:
     return user_names.get(user_id, "друг")
 
 # ============================================
-# ОСНОВНЫЕ ФУНКЦИИ ДЛЯ ЦЕЛЕЙ
-# ============================================
-
-def show_goals_categories(message, user_id: int):
-    """Показывает категории целей"""
-    user_data_dict = get_user_data_dict(user_id)
-    context = get_user_context_obj(user_id)
-    user_name = context.name if context and context.name else "друг"
-    
-    mode = user_data_dict.get("communication_mode", "coach")
-    mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
-    
-    profile_data = user_data_dict.get("profile_data", {})
-    profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
-    
-    text = f"""
-🧠 <b>ФРЕДИ: КАТЕГОРИИ ЦЕЛЕЙ</b>
-
-{user_name}, выбери категорию, которая сейчас актуальна.
-
-<b>Твой профиль:</b> {profile_code}
-<b>Режим:</b> {mode_config['emoji']} {mode_config['name']}
-
-👇 <b>Куда двинемся?</b>
-"""
-    
-    # Строим клавиатуру с основными категориями
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(
-        InlineKeyboardButton("🗣 Отношения", callback_data="goal_cat_relations"),
-        InlineKeyboardButton("💰 Деньги", callback_data="goal_cat_money")
-    )
-    keyboard.row(
-        InlineKeyboardButton("🧠 Самоощущение", callback_data="goal_cat_self"),
-        InlineKeyboardButton("📚 Развитие", callback_data="goal_cat_knowledge")
-    )
-    keyboard.row(
-        InlineKeyboardButton("💪 Здоровье", callback_data="goal_cat_health"),
-        InlineKeyboardButton("🎨 Творчество", callback_data="goal_cat_creative")
-    )
-    keyboard.row(
-        InlineKeyboardButton("🎯 ДИНАМИЧЕСКИЙ ПОДБОР", callback_data="show_dynamic_destinations")
-    )
-    keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_mode_selected"))
-    
-    safe_send_message(message, text, reply_markup=keyboard, delete_previous=True)
-
-def show_goals_for_category(call: CallbackQuery, category: str):
-    """Показывает цели для выбранной категории"""
-    user_id = call.from_user.id
-    user_data_dict = get_user_data_dict(user_id)
-    context = get_user_context_obj(user_id)
-    user_name = context.name if context and context.name else "друг"
-    
-    mode = user_data_dict.get("communication_mode", "coach")
-    
-    # Определяем цели для категории
-    category_goals = {
-        "relations": [
-            {"id": "improve_relations", "name": "Улучшить отношения с близкими", "time": "4-6 недель", "difficulty": "medium", "description": "Построй гармоничные отношения с семьей и друзьями"},
-            {"id": "find_partner", "name": "Найти партнёра", "time": "3-5 месяцев", "difficulty": "hard", "description": "Встретить человека для серьёзных отношений"},
-            {"id": "boundaries", "name": "Научиться защищать границы", "time": "2-3 недели", "difficulty": "medium", "description": "Освой искусство говорить 'нет'"}
-        ],
-        "money": [
-            {"id": "income_growth", "name": "Увеличить доход", "time": "4-6 недель", "difficulty": "hard", "description": "Создай стратегию для роста дохода"},
-            {"id": "financial_plan", "name": "Создать финансовый план", "time": "2-3 недели", "difficulty": "easy", "description": "Составь личный финансовый план"},
-            {"id": "money_blocks", "name": "Проработать денежные блоки", "time": "3-4 недели", "difficulty": "medium", "description": "Выяви и устрани препятствия"}
-        ],
-        "self": [
-            {"id": "self_esteem", "name": "Повысить самооценку", "time": "4-5 недель", "difficulty": "medium", "description": "Научись ценить себя"},
-            {"id": "anxiety", "name": "Справиться с тревогой", "time": "3-4 недели", "difficulty": "medium", "description": "Обрети внутреннее спокойствие"},
-            {"id": "purpose", "name": "Найти предназначение", "time": "5-7 недель", "difficulty": "hard", "description": "Ответь на вопрос 'зачем я здесь?'"}
-        ],
-        "knowledge": [
-            {"id": "new_skill", "name": "Освоить новый навык", "time": "4-6 недель", "difficulty": "medium", "description": "Научись чему-то новому"},
-            {"id": "reading", "name": "Читать по книге в неделю", "time": "8 недель", "difficulty": "easy", "description": "Сформируй привычку читать"},
-            {"id": "course", "name": "Пройти онлайн-курс", "time": "6-8 недель", "difficulty": "medium", "description": "Получи новые знания"}
-        ],
-        "health": [
-            {"id": "sport", "name": "Начать заниматься спортом", "time": "4 недели", "difficulty": "medium", "description": "Внедри регулярные тренировки"},
-            {"id": "sleep", "name": "Наладить сон", "time": "3-4 недели", "difficulty": "easy", "description": "Улучши качество сна"},
-            {"id": "energy", "name": "Повысить уровень энергии", "time": "4 недели", "difficulty": "medium", "description": "Чувствуй себя бодрее"}
-        ],
-        "creative": [
-            {"id": "start_creative", "name": "Начать творить", "time": "3-4 недели", "difficulty": "easy", "description": "Найди своё творческое выражение"},
-            {"id": "overcome_block", "name": "Преодолеть творческий блок", "time": "2-3 недели", "difficulty": "medium", "description": "Верни вдохновение"},
-            {"id": "project", "name": "Завершить творческий проект", "time": "6-8 недель", "difficulty": "hard", "description": "Доведи дело до конца"}
-        ]
-    }
-    
-    goals = category_goals.get(category, [])
-    
-    if not goals:
-        safe_send_message(
-            call.message,
-            "❌ В этой категории пока нет целей",
-            reply_markup=get_back_keyboard("show_goals"),
-            delete_previous=True
-        )
-        return
-    
-    # Названия категорий
-    category_names = {
-        "relations": "🗣 Отношения",
-        "money": "💰 Деньги",
-        "self": "🧠 Самоощущение",
-        "knowledge": "📚 Развитие",
-        "health": "💪 Здоровье",
-        "creative": "🎨 Творчество"
-    }
-    
-    category_name = category_names.get(category, category)
-    
-    text = f"""
-🧠 <b>{category_name}</b>
-
-👇 <b>Выбери конкретную цель:</b>
-"""
-    
-    # Строим клавиатуру с целями
-    keyboard = InlineKeyboardMarkup()
-    for goal in goals:
-        # Определяем эмодзи сложности
-        difficulty_emoji = {
-            "easy": "🟢",
-            "medium": "🟡", 
-            "hard": "🔴"
-        }.get(goal.get("difficulty", "medium"), "⚪")
-        
-        button_text = f"{difficulty_emoji} {goal['name']} ({goal['time']})"
-        keyboard.add(InlineKeyboardButton(
-            text=button_text,
-            callback_data=f"select_goal_{goal['id']}"
-        ))
-    
-    keyboard.add(InlineKeyboardButton(
-        text="◀️ НАЗАД", 
-        callback_data="show_goals"
-    ))
-    
-    safe_send_message(call.message, text, reply_markup=keyboard, delete_previous=True)
-
-def select_goal(call: CallbackQuery, goal_id: str):
-    """Выбирает конкретную цель и показывает её детали"""
-    user_id = call.from_user.id
-    user_data_dict = get_user_data_dict(user_id)
-    context = get_user_context_obj(user_id)
-    user_name = context.name if context and context.name else "друг"
-    
-    mode = user_data_dict.get("communication_mode", "coach")
-    
-    # Ищем цель по ID во всех категориях
-    goal_info = find_goal_by_id(goal_id, mode)
-    
-    if not goal_info:
-        safe_send_message(
-            call.message,
-            "❌ Цель не найдена",
-            reply_markup=get_back_keyboard("show_goals"),
-            delete_previous=True
-        )
-        return
-    
-    # Сохраняем выбранную цель
-    update_user_state_data(user_id, current_goal=goal_info)
-    
-    text = f"""
-🧠 <b>ВЫБРАННАЯ ЦЕЛЬ</b>
-
-{user_name}, ты выбрал: <b>{goal_info['name']}</b>
-
-📊 <b>Сложность:</b> {goal_info.get('difficulty', 'medium')}
-⏱ <b>Ориентировочное время:</b> {goal_info.get('time', 'не указано')}
-
-{goal_info.get('description', '')}
-
-👇 <b>Что дальше?</b>
-"""
-    
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(
-        InlineKeyboardButton("🚀 ПОСТРОИТЬ МАРШРУТ", callback_data=f"build_route_{goal_id}"),
-        InlineKeyboardButton("🔍 ПРОВЕРИТЬ РЕАЛЬНОСТЬ", callback_data=f"check_reality_{goal_id}")
-    )
-    keyboard.row(
-        InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_goals")
-    )
-    
-    safe_send_message(call.message, text, reply_markup=keyboard, delete_previous=True)
-
-def find_goal_by_id(goal_id: str, mode: str) -> Optional[Dict]:
-    """Ищет цель по ID во всех категориях"""
-    # Сначала проверяем в динамических целях
-    try:
-        from config import DESTINATIONS
-        destinations = DESTINATIONS.get(mode, DESTINATIONS["coach"])
-        
-        for category_key, category in destinations.items():
-            if isinstance(category, dict) and "destinations" in category:
-                for goal in category.get("destinations", []):
-                    if goal.get("id") == goal_id:
-                        if "description" not in goal:
-                            goal["description"] = category.get("description", "")
-                        return goal
-    except:
-        pass
-    
-    # Затем проверяем в статических категориях
-    all_goals = {
-        "improve_relations": {"name": "Улучшить отношения с близкими", "time": "4-6 недель", "difficulty": "medium", "description": "Построй гармоничные отношения с семьей и друзьями"},
-        "find_partner": {"name": "Найти партнёра", "time": "3-5 месяцев", "difficulty": "hard", "description": "Встретить человека для серьёзных отношений"},
-        "boundaries": {"name": "Научиться защищать границы", "time": "2-3 недели", "difficulty": "medium", "description": "Освой искусство говорить 'нет'"},
-        "income_growth": {"name": "Увеличить доход", "time": "4-6 недель", "difficulty": "hard", "description": "Создай стратегию для роста дохода"},
-        "financial_plan": {"name": "Создать финансовый план", "time": "2-3 недели", "difficulty": "easy", "description": "Составь личный финансовый план"},
-        "money_blocks": {"name": "Проработать денежные блоки", "time": "3-4 недели", "difficulty": "medium", "description": "Выяви и устрани препятствия"},
-        "self_esteem": {"name": "Повысить самооценку", "time": "4-5 недель", "difficulty": "medium", "description": "Научись ценить себя"},
-        "anxiety": {"name": "Справиться с тревогой", "time": "3-4 недели", "difficulty": "medium", "description": "Обрети внутреннее спокойствие"},
-        "purpose": {"name": "Найти предназначение", "time": "5-7 недель", "difficulty": "hard", "description": "Ответь на вопрос 'зачем я здесь?'"},
-        "new_skill": {"name": "Освоить новый навык", "time": "4-6 недель", "difficulty": "medium", "description": "Научись чему-то новому"},
-        "reading": {"name": "Читать по книге в неделю", "time": "8 недель", "difficulty": "easy", "description": "Сформируй привычку читать"},
-        "course": {"name": "Пройти онлайн-курс", "time": "6-8 недель", "difficulty": "medium", "description": "Получи новые знания"},
-        "sport": {"name": "Начать заниматься спортом", "time": "4 недели", "difficulty": "medium", "description": "Внедри регулярные тренировки"},
-        "sleep": {"name": "Наладить сон", "time": "3-4 недели", "difficulty": "easy", "description": "Улучши качество сна"},
-        "energy": {"name": "Повысить уровень энергии", "time": "4 недели", "difficulty": "medium", "description": "Чувствуй себя бодрее"},
-        "start_creative": {"name": "Начать творить", "time": "3-4 недели", "difficulty": "easy", "description": "Найди своё творческое выражение"},
-        "overcome_block": {"name": "Преодолеть творческий блок", "time": "2-3 недели", "difficulty": "medium", "description": "Верни вдохновение"},
-        "project": {"name": "Завершить творческий проект", "time": "6-8 недель", "difficulty": "hard", "description": "Доведи дело до конца"}
-    }
-    
-    return all_goals.get(goal_id)
-
-# ============================================
 # ДИНАМИЧЕСКИЙ ПОДБОР ЦЕЛЕЙ
 # ============================================
 
-def get_dynamic_destinations(profile_code: str, mode: str) -> List[Dict]:
+async def get_dynamic_destinations(profile_code: str, mode: str) -> List[Dict]:
     """Динамически подбирает цели под профиль и режим"""
     
     # Парсим профиль (СБ-4_ТФ-4_УБ-4_ЧВ-4)
@@ -483,81 +263,137 @@ def get_dynamic_destinations(profile_code: str, mode: str) -> List[Dict]:
     
     return unique_destinations[:9]  # Не больше 9 целей
 
-def show_dynamic_destinations(call: CallbackQuery):
+
+async def show_dynamic_destinations(call: CallbackQuery, state: FSMContext):
     """Показывает динамически подобранные цели"""
     
     user_id = call.from_user.id
-    user_data_dict = get_user_data_dict(user_id)
+    data = await state.get_data()
     context = get_user_context_obj(user_id)
-    user_name = context.name if context and context.name else "друг"
+    user_name = get_user_name(user_id)
     
-    mode = user_data_dict.get("communication_mode", "coach")
+    mode = data.get("communication_mode", "coach")
     mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
     
-    profile_data = user_data_dict.get("profile_data", {})
+    profile_data = data.get("profile_data", {})
     profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
     
     # Получаем динамические цели
-    destinations = get_dynamic_destinations(profile_code, mode)
+    destinations = await get_dynamic_destinations(profile_code, mode)
     
     text = f"""
-🧠 <b>ФРЕДИ: ЦЕЛИ ПО ТВОЕМУ ПРОФИЛЮ</b>
+🧠 {bold('ФРЕДИ: ЦЕЛИ ПО ТВОЕМУ ПРОФИЛЮ')}
 
 {user_name}, я проанализировал твой профиль и подобрал цели, которые сейчас наиболее актуальны.
 
-<b>Твой профиль:</b> {profile_code}
-<b>Режим:</b> {mode_config['emoji']} {mode_config['name']}
+{bold('Твой профиль:')} {profile_code}
+{bold('Режим:')} {mode_config['emoji']} {mode_config['name']}
 
-👇 <b>Куда двинемся?</b>
+👇 {bold('Куда двинемся?')}
 """
     
     # Строим клавиатуру
-    keyboard = InlineKeyboardMarkup()
+    keyboard = []
+    row = []
     
-    for dest in destinations:
+    for i, dest in enumerate(destinations):
         # Определяем эмодзи сложности
         difficulty_emoji = {
             "easy": "🟢",
             "medium": "🟡",
             "hard": "🔴"
-        }.get(dest["difficulty"], "⚪")
+        }.get(dest.get("difficulty", "medium"), "⚪")
         
         button_text = f"{difficulty_emoji} {dest['name']}"
-        keyboard.add(InlineKeyboardButton(
+        
+        row.append(InlineKeyboardButton(
             text=button_text,
             callback_data=f"dynamic_dest_{dest['id']}"
         ))
+        
+        if len(row) == 2 or i == len(destinations) - 1:
+            keyboard.append(row)
+            row = []
     
-    keyboard.add(InlineKeyboardButton(
+    keyboard.append([InlineKeyboardButton(
         text="✏️ Сформулирую сам", 
         callback_data="custom_destination"
-    ))
-    keyboard.add(InlineKeyboardButton(
+    )])
+    keyboard.append([InlineKeyboardButton(
         text="◀️ НАЗАД", 
         callback_data="back_to_mode_selected"
-    ))
+    )])
     
-    safe_send_message(
+    await safe_send_message(
         call.message,
         text,
-        reply_markup=keyboard,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
         parse_mode='HTML',
         delete_previous=True
     )
-    set_state(user_id, TestStates.destination_selection)
+    await state.set_state(TestStates.destination_selection)
 
-def handle_dynamic_destination(call: CallbackQuery):
+
+async def show_theoretical_path(call: CallbackQuery, state: FSMContext, goal_info: Dict):
+    """
+    Показывает теоретический путь к цели после её выбора
+    """
+    
+    user_id = call.from_user.id
+    data = await state.get_data()
+    context = get_user_context_obj(user_id)
+    user_name = get_user_name(user_id)
+    
+    goal_id = goal_info.get("id", "income_growth")
+    mode = data.get("communication_mode", "coach")
+    
+    # Получаем теоретический путь из reality_check
+    path = get_theoretical_path(goal_id, mode)
+    
+    # Сохраняем путь в state
+    await state.update_data(theoretical_path=path, current_destination=goal_info)
+    
+    # Форматируем текст пути для отображения
+    path_text = path.get('formatted_text', 'Маршрут строится...')
+    
+    text = f"""
+🧠 {bold('ФРЕДИ: ТВОЯ ЦЕЛЬ')}
+
+{user_name}, ты выбрал: {bold(goal_info.get('name', 'цель'))}
+Режим: {bold(COMMUNICATION_MODES.get(mode, {}).get('name', 'КОУЧ'))}
+
+👇 {bold('ТЕОРЕТИЧЕСКИЙ МАРШРУТ:')}
+
+Чтобы достичь этой цели, в идеальном мире нужно:
+{path_text}
+
+⚠️ Это в идеале. В реальности всё зависит от твоих условий.
+
+👇 Хочешь проверить, насколько это реально для тебя?
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔍 ПРОВЕРИТЬ РЕАЛЬНОСТЬ", callback_data="check_reality")],
+        [InlineKeyboardButton(text="🔄 ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations")],
+        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="back_to_mode_selected")]
+    ])
+    
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    await state.set_state(TestStates.theoretical_path_shown)
+
+
+async def handle_dynamic_destination(call: CallbackQuery, state: FSMContext):
     """Обрабатывает выбор динамической цели"""
     
     dest_id = call.data.replace("dynamic_dest_", "")
     
     user_id = call.from_user.id
-    user_data_dict = get_user_data_dict(user_id)
-    mode = user_data_dict.get("communication_mode", "coach")
-    profile_code = user_data_dict.get("profile_data", {}).get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
+    data = await state.get_data()
+    mode = data.get("communication_mode", "coach")
+    profile_code = data.get("profile_data", {}).get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
     
     # Получаем все цели
-    all_destinations = get_dynamic_destinations(profile_code, mode)
+    all_destinations = await get_dynamic_destinations(profile_code, mode)
     
     # Находим выбранную
     dest_info = None
@@ -567,291 +403,629 @@ def handle_dynamic_destination(call: CallbackQuery):
             break
     
     if not dest_info:
-        safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
+        await call.answer("❌ Цель не найдена")
         return
     
-    # Сохраняем выбранную цель
-    update_user_state_data(user_id,
-        current_destination=dest_info,
-        route_step=1,
-        route_progress=[]
-    )
-    
-    # Показываем теоретический путь
-    show_theoretical_path(call, dest_info)
+    # ПОКАЗЫВАЕМ ТЕОРЕТИЧЕСКИЙ ПУТЬ
+    await show_theoretical_path(call, state, dest_info)
 
-def custom_destination(call: CallbackQuery):
+
+async def custom_destination(call: CallbackQuery, state: FSMContext):
     """Пользователь хочет сформулировать цель самостоятельно"""
     user_id = call.from_user.id
-    context = get_user_context_obj(user_id)
-    user_name = context.name if context and context.name else "друг"
+    user_name = get_user_name(user_id)
     
     text = f"""
-🧠 <b>ФРЕДИ: СФОРМУЛИРУЙ ЦЕЛЬ</b>
+🧠 {bold('ФРЕДИ: СФОРМУЛИРУЙ ЦЕЛЬ')}
 
 {user_name}, расскажи своими словами, чего ты хочешь достичь.
 
 Напиши мне сообщение с описанием цели, и я помогу построить маршрут.
 
-👇 <b>Напиши свою цель:</b>
+👇 {bold('Напиши свою цель:')}
 """
     
-    keyboard = get_back_keyboard("show_dynamic_destinations")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="show_dynamic_destinations")]
+    ])
     
-    safe_send_message(call.message, text, reply_markup=keyboard, delete_previous=True)
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     
     # Устанавливаем состояние ожидания цели
-    set_state(user_id, "awaiting_custom_goal")
+    await state.set_state("awaiting_custom_goal")
+
+
+# ============================================
+# ПРОВЕРКА РЕАЛЬНОСТИ
+# ============================================
+
+async def show_reality_check(call: CallbackQuery, state: FSMContext):
+    """
+    Запускает проверку реальности для выбранной цели
+    """
+    user_id = call.from_user.id
+    data = await state.get_data()
+    context = get_user_context_obj(user_id)
+    
+    # Проверяем, есть ли цель
+    goal = data.get("current_destination")
+    if not goal:
+        text = f"""
+🧠 {bold('ФРЕДИ: СНАЧАЛА ВЫБЕРИ ЦЕЛЬ')}
+
+Чтобы проверить реальность, нужно знать, к чему мы стремимся.
+
+👇 Сначала выбери цель:
+"""
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations")],
+            [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="back_to_mode_selected")]
+        ])
+        await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+        return
+    
+    # Проверяем, есть ли базовый контекст
+    if not (context and context.life_context_complete):
+        # Если нет — собираем
+        await start_life_context_collection(call, state, goal)
+    else:
+        # Если есть — задаём целевые вопросы
+        await ask_goal_specific_questions(call, state, goal)
+
+
+async def start_life_context_collection(call: CallbackQuery, state: FSMContext, goal: Dict):
+    """
+    Сбор базового контекста жизни (1 раз)
+    """
+    
+    user_id = call.from_user.id
+    user_name = get_user_name(user_id)
+    
+    questions = generate_life_context_questions()
+    
+    text = f"""
+🧠 {bold('ФРЕДИ: ДАВАЙ ПОЗНАКОМИМСЯ С ТВОЕЙ РЕАЛЬНОСТЬЮ')}
+
+{user_name}, чтобы понять, что потребуется для твоей цели "{bold(goal.get('name', 'цель'))}", мне нужно знать твои условия.
+
+Это вопросы на 2 минуты. Ответь коротко (можно одним сообщением все сразу):
+
+{questions}
+
+👇 {bold('Напиши ответы одним сообщением или отправь голосовое сообщение 🎤')}
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏭ ПРОПУСТИТЬ (будет неточно)", callback_data="skip_life_context")]
+    ])
+    
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    await state.set_state(TestStates.collecting_life_context)
+    await state.update_data(pending_goal=goal)
+
+
+async def ask_goal_specific_questions(call: CallbackQuery, state: FSMContext, goal: Dict):
+    """
+    Задаёт вопросы, специфичные для цели
+    """
+    
+    user_id = call.from_user.id
+    data = await state.get_data()
+    context = get_user_context_obj(user_id)
+    user_name = get_user_name(user_id)
+    
+    goal_id = goal.get("id", "income_growth")
+    goal_name = goal.get("name", "цель")
+    mode = data.get("communication_mode", "coach")
+    profile = data.get("profile_data", {})
+    
+    questions = generate_goal_context_questions(goal_id, profile, mode, goal_name)
+    
+    text = f"""
+🧠 {bold('ФРЕДИ: УТОЧНЯЮ ПОД ТВОЮ ЦЕЛЬ')}
+
+{user_name}, твоя цель: {bold(goal_name)}
+
+Чтобы точно рассчитать маршрут с учётом твоих условий, ответь на несколько вопросов:
+
+{questions}
+
+👇 {bold('Напиши ответы (можно по порядку) или отправь голосовое сообщение 🎤')}
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏭ ПРОПУСТИТЬ (общий план)", callback_data="skip_goal_questions")]
+    ])
+    
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    await state.set_state(TestStates.collecting_goal_context)
+    await state.update_data(pending_goal=goal)
+
+
+async def calculate_and_show_feasibility(call: CallbackQuery, state: FSMContext):
+    """
+    Рассчитывает достижимость и показывает результат
+    """
+    
+    data = await state.get_data()
+    context = get_user_context_obj(call.from_user.id)
+    user_name = get_user_name(call.from_user.id)
+    
+    goal = data.get("current_destination") or data.get("pending_goal")
+    if not goal:
+        await call.answer("❌ Цель не найдена")
+        return
+    
+    goal_id = goal.get("id", "income_growth")
+    mode = data.get("communication_mode", "coach")
+    
+    # Получаем теоретический путь
+    path = get_theoretical_path(goal_id, mode)
+    
+    # Собираем контекст
+    life_context = {}
+    if context:
+        life_context = {
+            "time_per_week": 0,
+            "energy_level": getattr(context, 'energy_level', 5),
+            "has_private_space": getattr(context, 'has_private_space', False),
+            "support_people": getattr(context, 'support_people', None)
+        }
+    
+    goal_context = data.get("goal_context", {})
+    profile = data.get("profile_data", {})
+    
+    # Рассчитываем
+    result = calculate_feasibility(path, life_context, goal_context, profile)
+    
+    # Сохраняем результат
+    await state.update_data(feasibility_result=result)
+    
+    text = f"""
+🧠 {bold('ФРЕДИ: РЕАЛЬНОСТЬ ЦЕЛИ')}
+
+{result['status']} {bold(result['status_text'])}
+
+Твоя цель: {bold(goal.get('name', 'цель'))}
+
+👇 {bold('ЧТО ПОТРЕБУЕТСЯ:')}
+{result['requirements_text']}
+
+👇 {bold('ЧТО У ТЕБЯ ЕСТЬ:')}
+{result['available_text']}
+
+📊 {bold('ДЕФИЦИТ РЕСУРСОВ:')} {result['deficit']}%
+
+{result['recommendation']}
+
+👇 {bold(f'Что делаем, {user_name}?')}
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ ПРИНЯТЬ ПЛАН", callback_data="accept_feasibility_plan")],
+        [InlineKeyboardButton(text="🔄 ИЗМЕНИТЬ СРОК", callback_data="adjust_timeline")],
+        [InlineKeyboardButton(text="📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal")],
+        [InlineKeyboardButton(text="◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations")]
+    ])
+    
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    await state.set_state(TestStates.feasibility_result)
+
+
+async def skip_life_context(call: CallbackQuery, state: FSMContext):
+    """
+    Пропускает сбор жизненного контекста
+    """
+    data = await state.get_data()
+    goal = data.get("pending_goal") or data.get("current_destination")
+    
+    text = f"""
+🧠 {bold('ФРЕДИ: БУДЕТ НЕТОЧНО')}
+
+Ок, пропускаем. Маршрут построю без учёта твоих условий — он будет общим.
+
+Хочешь продолжить?
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ ДА, ПОКАЖИ ПЛАН", callback_data="skip_to_route")],
+        [InlineKeyboardButton(text="🔄 ВСЁ-ТАКИ ОТВЕТИТЬ", callback_data="check_reality")],
+        [InlineKeyboardButton(text="◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations")]
+    ])
+    
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+
+
+async def skip_goal_questions(call: CallbackQuery, state: FSMContext):
+    """
+    Пропускает целевые вопросы
+    """
+    data = await state.get_data()
+    goal = data.get("pending_goal") or data.get("current_destination")
+    
+    # Используем данные по умолчанию
+    await state.update_data(goal_context={"time_per_week": 5, "budget": 0})
+    
+    await calculate_and_show_feasibility(call, state)
+
+
+async def skip_to_route(call: CallbackQuery, state: FSMContext):
+    """
+    Пропускает проверку и сразу строит маршрут
+    """
+    data = await state.get_data()
+    goal = data.get("pending_goal") or data.get("current_destination")
+    
+    if not goal:
+        await call.answer("❌ Цель не найдена")
+        return
+    
+    await build_route(call, state, goal.get('id'))
+
+
+async def accept_feasibility_plan(call: CallbackQuery, state: FSMContext):
+    """
+    Принимает план и переходит к построению маршрута
+    """
+    data = await state.get_data()
+    goal = data.get("current_destination")
+    
+    if not goal:
+        await call.answer("❌ Цель не найдена")
+        return
+    
+    await build_route(call, state, goal.get('id'))
+
+
+async def adjust_timeline(call: CallbackQuery, state: FSMContext):
+    """
+    Предлагает скорректировать сроки
+    """
+    data = await state.get_data()
+    goal = data.get("current_destination")
+    
+    text = f"""
+🧠 {bold('ФРЕДИ: КОРРЕКТИРОВКА СРОКОВ')}
+
+Текущий срок: 6 месяцев
+
+Если увеличить срок до 12 месяцев, нагрузка снизится:
+• Время: с 13 ч/нед до 6-7 ч/нед
+• Энергия: с 7/10 до 5-6/10
+
+Это сделает цель более реалистичной в твоих условиях.
+
+👇 Что выбираешь?
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ УВЕЛИЧИТЬ СРОК", callback_data="apply_extended_timeline")],
+        [InlineKeyboardButton(text="🔄 ОСТАВИТЬ КАК ЕСТЬ", callback_data="accept_feasibility_plan")],
+        [InlineKeyboardButton(text="📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal")]
+    ])
+    
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+
+
+async def reduce_goal(call: CallbackQuery, state: FSMContext):
+    """
+    Предлагает снизить планку цели
+    """
+    text = f"""
+🧠 {bold('ФРЕДИ: СНИЖЕНИЕ ПЛАНКИ')}
+
+Вместо "увеличить доход в 2 раза" можно выбрать:
+• Увеличить на 50% (реалистично за 6 месяцев)
+• Увеличить на 30% (легко за 3-4 месяца)
+• Проработать денежные блоки (подготовка)
+
+👇 Что выбираешь?
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📈 +50% (6 мес)", callback_data="select_goal_50")],
+        [InlineKeyboardButton(text="📈 +30% (4 мес)", callback_data="select_goal_30")],
+        [InlineKeyboardButton(text="🧠 ПРОРАБОТКА БЛОКОВ", callback_data="select_goal_blocks")],
+        [InlineKeyboardButton(text="◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations")]
+    ])
+    
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+
+
+async def apply_extended_timeline(call: CallbackQuery, state: FSMContext):
+    """
+    Применяет увеличенный срок и пересчитывает
+    """
+    await accept_feasibility_plan(call, state)
+
+
+async def select_goal_50(call: CallbackQuery, state: FSMContext):
+    """
+    Выбирает цель +50%
+    """
+    data = await state.get_data()
+    
+    # Создаём новую цель с меньшей амбициозностью
+    new_goal = {
+        "id": "income_growth_50",
+        "name": "Увеличить доход на 50%",
+        "time": "6 месяцев",
+        "difficulty": "medium",
+        "description": "Реалистичный рост дохода за полгода"
+    }
+    
+    await state.update_data(current_destination=new_goal)
+    await show_theoretical_path(call, state, new_goal)
+
+
+async def select_goal_30(call: CallbackQuery, state: FSMContext):
+    """
+    Выбирает цель +30%
+    """
+    data = await state.get_data()
+    
+    new_goal = {
+        "id": "income_growth_30",
+        "name": "Увеличить доход на 30%",
+        "time": "4 месяца",
+        "difficulty": "easy",
+        "description": "Комфортный рост дохода"
+    }
+    
+    await state.update_data(current_destination=new_goal)
+    await show_theoretical_path(call, state, new_goal)
+
+
+async def select_goal_blocks(call: CallbackQuery, state: FSMContext):
+    """
+    Выбирает работу с блоками
+    """
+    data = await state.get_data()
+    
+    new_goal = {
+        "id": "money_blocks",
+        "name": "Проработать денежные блоки",
+        "time": "3-4 недели",
+        "difficulty": "medium",
+        "description": "Выяви и устрани препятствия на пути к финансовому благополучию"
+    }
+    
+    await state.update_data(current_destination=new_goal)
+    await show_theoretical_path(call, state, new_goal)
+
 
 # ============================================
 # МАРШРУТЫ К ЦЕЛЯМ
 # ============================================
 
-def show_theoretical_path(call: CallbackQuery, goal_info: Dict):
-    """
-    Показывает теоретический путь к цели после её выбора
-    """
-    
-    user_id = call.from_user.id
-    user_data_dict = get_user_data_dict(user_id)
-    context = get_user_context_obj(user_id)
-    user_name = context.name if context and context.name else "друг"
-    
-    goal_id = goal_info.get("id", "income_growth")
-    mode = user_data_dict.get("communication_mode", "coach")
-    
-    # Получаем теоретический путь
-    path = get_theoretical_path(goal_id, mode)
-    
-    # Сохраняем путь в состоянии
-    update_user_state_data(user_id, theoretical_path=path)
-    
-    text = f"""
-🧠 <b>ФРЕДИ: ТВОЯ ЦЕЛЬ</b>
-
-{user_name}, ты выбрал: <b>{goal_info.get('name', 'цель')}</b>
-Режим: <b>{COMMUNICATION_MODES.get(mode, {}).get('name', 'КОУЧ')}</b>
-
-👇 <b>ТЕОРЕТИЧЕСКИЙ МАРШРУТ:</b>
-
-Чтобы достичь этой цели, в идеальном мире нужно:
-{path['formatted_text']}
-
-⚠️ Это в идеале. В реальности всё зависит от твоих условий.
-
-👇 Хочешь проверить, насколько это реально для тебя?
-"""
-    
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton("🔍 ПРОВЕРИТЬ РЕАЛЬНОСТЬ", callback_data="check_reality"))
-    keyboard.row(InlineKeyboardButton("🔄 ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
-    keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_mode_selected"))
-    
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
-    set_state(user_id, TestStates.theoretical_path_shown)
-
-def build_route(call: CallbackQuery, goal_id: str):
+async def build_route(call: CallbackQuery, state: FSMContext, goal_id: str):
     """Строит маршрут к цели (после проверки реальности или сразу)"""
     user_id = call.from_user.id
-    state_data = get_user_state_data_dict(user_id)
-    user_data_dict = get_user_data_dict(user_id)
+    data = await state.get_data()
     
     # Получаем информацию о цели
-    mode = user_data_dict.get("communication_mode", "coach")
+    mode = data.get("communication_mode", "coach")
     goal_info = find_goal_by_id(goal_id, mode)
     
     if not goal_info:
-        goal_info = state_data.get("current_destination")
+        goal_info = data.get("current_destination")
     
     if not goal_info:
-        safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
+        await safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
         return
     
     # Отправляем статусное сообщение
-    status_msg = safe_send_message(
+    status_msg = await safe_send_message(
         call.message,
-        f"🧠 Строю маршрут к цели: <b>{goal_info.get('name')}</b>...\n\nЭто займёт несколько секунд.",
+        f"🧠 Строю маршрут к цели: {bold(goal_info.get('name'))}...\n\nЭто займёт несколько секунд.",
         delete_previous=True
     )
     
     # Генерируем маршрут через ИИ
-    import asyncio
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Если цикл уже запущен, создаем задачу
-            future = asyncio.run_coroutine_threadsafe(
-                generate_route_ai(user_id, user_data_dict, goal_info), loop
-            )
-            route = future.result(timeout=30)
-        else:
-            route = loop.run_until_complete(generate_route_ai(user_id, user_data_dict, goal_info))
-    except RuntimeError:
-        route = asyncio.run(generate_route_ai(user_id, user_data_dict, goal_info))
+        route = await generate_route_ai(user_id, data, goal_info)
     except Exception as e:
         logger.error(f"❌ Ошибка при генерации маршрута: {e}")
         route = None
     
     if route:
-        update_user_state_data(user_id, current_route=route)
-        show_route_step(call, 1, route, status_msg)
+        await state.update_data(current_route=route)
+        await show_route_step(call, state, 1, route, status_msg)
     else:
         # Если ИИ не сработал, показываем резервный маршрут
-        show_fallback_route(call, goal_info, status_msg)
+        await show_fallback_route(call, state, goal_info, status_msg)
 
-def show_route_step(call: CallbackQuery, step: int, route: Dict, status_msg=None):
+
+async def show_route_step(call: CallbackQuery, state: FSMContext, step: int, route: Dict, status_msg=None):
     """Показывает текущий шаг маршрута"""
     user_id = call.from_user.id
-    state_data = get_user_state_data_dict(user_id)
-    user_data_dict = get_user_data_dict(user_id)
+    data = await state.get_data()
     
-    destination = state_data.get("current_destination", {})
-    mode = user_data_dict.get("communication_mode", "coach")
+    destination = data.get("current_destination", {})
+    mode = data.get("communication_mode", "coach")
     mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
     
     route_text = route.get('full_text', 'Маршрут строится...')
+    # Очищаем от Markdown
+    route_text = clean_text_for_safe_display(route_text)
     
     text = f"""
-{mode_config['emoji']} <b>МАРШРУТ К ЦЕЛИ</b>
+{mode_config['emoji']} {bold('МАРШРУТ К ЦЕЛИ')}
 
-🎯 <b>Точка назначения:</b> {destination.get('name', 'цель')}
-⏱ <b>Ориентировочное время:</b> {destination.get('time', 'не указано')}
+🎯 {bold('Точка назначения:')} {destination.get('name', 'цель')}
+⏱ {bold('Ориентировочное время:')} {destination.get('time', 'не указано')}
 
 {route_text}
 
-👇 <b>Отмечай выполнение, когда готов(а)</b>
+👇 {bold('Отмечай выполнение, когда готов(а)')}
 """
     
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton("✅ ВЫПОЛНИЛ ЭТАП", callback_data="route_step_done"))
-    keyboard.row(InlineKeyboardButton("❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions"))
-    keyboard.row(InlineKeyboardButton("◀️ К ЦЕЛЯМ", callback_data="show_dynamic_destinations"))
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ ВЫПОЛНИЛ ЭТАП", callback_data="route_step_done")],
+        [InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions")],
+        [InlineKeyboardButton(text="◀️ К ЦЕЛЯМ", callback_data="show_dynamic_destinations")]
+    ])
     
     # Удаляем статусное сообщение, если оно есть
     if status_msg:
         try:
             from message_utils import safe_delete_message
-            safe_delete_message(call.message.chat.id, status_msg.message_id)
+            await safe_delete_message(call.message.chat.id, status_msg.message_id)
         except:
             pass
     
-    safe_send_message(
+    await safe_send_message(
         call.message,
         text,
         reply_markup=keyboard,
         parse_mode='HTML',
         delete_previous=True
     )
-    set_state(user_id, TestStates.route_active)
+    await state.set_state(TestStates.route_active)
 
-def show_fallback_route(call: CallbackQuery, destination: dict, status_msg=None):
+
+async def show_fallback_route(call: CallbackQuery, state: FSMContext, destination: dict, status_msg=None):
     """Резервный маршрут, если ИИ не отвечает"""
     user_id = call.from_user.id
-    user_data_dict = get_user_data_dict(user_id)
-    mode = user_data_dict.get("communication_mode", "coach")
+    data = await state.get_data()
+    mode = data.get("communication_mode", "coach")
     mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
     
     text = f"""
-{mode_config['emoji']} <b>МАРШРУТ К ЦЕЛИ</b>
+{mode_config['emoji']} {bold('МАРШРУТ К ЦЕЛИ')}
 
-🎯 <b>Точка назначения:</b> {destination.get('name', 'цель')}
-⏱ <b>Ориентировочное время:</b> {destination.get('time', 'не указано')}
+🎯 {bold('Точка назначения:')} {destination.get('name', 'цель')}
+⏱ {bold('Ориентировочное время:')} {destination.get('time', 'не указано')}
 
-📍 <b>ЭТАП 1: ДИАГНОСТИКА</b>
-   • <b>Что делаем:</b> анализируем текущую ситуацию
-   • <b>📝 Домашнее задание:</b> записываем всё, что связано с целью
-   • <b>✅ Критерий:</b> есть список наблюдений
+📍 {bold('ЭТАП 1: ДИАГНОСТИКА')}
+   • {bold('Что делаем:')} анализируем текущую ситуацию
+   • {bold('📝 Домашнее задание:')} записываем всё, что связано с целью
+   • {bold('✅ Критерий:')} есть список наблюдений
 
-📍 <b>ЭТАП 2: ПЛАНИРОВАНИЕ</b>
-   • <b>Что делаем:</b> составляем пошаговый план
-   • <b>📝 Домашнее задание:</b> разбиваем цель на микро-шаги
-   • <b>✅ Критерий:</b> есть конкретный план
+📍 {bold('ЭТАП 2: ПЛАНИРОВАНИЕ')}
+   • {bold('Что делаем:')} составляем пошаговый план
+   • {bold('📝 Домашнее задание:')} разбиваем цель на микро-шаги
+   • {bold('✅ Критерий:')} есть конкретный план
 
-📍 <b>ЭТАП 3: ДЕЙСТВИЕ</b>
-   • <b>Что делаем:</b> начинаем с первого микро-шага
-   • <b>📝 Домашнее задание:</b> каждый день делать хотя бы одно действие
-   • <b>✅ Критерий:</b> первый шаг сделан
+📍 {bold('ЭТАП 3: ДЕЙСТВИЕ')}
+   • {bold('Что делаем:')} начинаем с первого микро-шага
+   • {bold('📝 Домашнее задание:')} каждый день делать хотя бы одно действие
+   • {bold('✅ Критерий:')} первый шаг сделан
 
-👇 <b>Начинаем?</b>
+👇 {bold('Начинаем?')}
 """
     
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton("✅ НАЧАТЬ", callback_data="route_step_done"))
-    keyboard.row(InlineKeyboardButton("◀️ К ЦЕЛЯМ", callback_data="show_dynamic_destinations"))
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ НАЧАТЬ", callback_data="route_step_done")],
+        [InlineKeyboardButton(text="◀️ К ЦЕЛЯМ", callback_data="show_dynamic_destinations")]
+    ])
     
     # Удаляем статусное сообщение, если оно есть
     if status_msg:
         try:
             from message_utils import safe_delete_message
-            safe_delete_message(call.message.chat.id, status_msg.message_id)
+            await safe_delete_message(call.message.chat.id, status_msg.message_id)
         except:
             pass
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
-    set_state(user_id, TestStates.route_active)
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    await state.set_state(TestStates.route_active)
 
-def route_step_done(call: CallbackQuery):
+
+async def route_step_done(call: CallbackQuery, state: FSMContext):
     """Отмечает выполнение этапа маршрута"""
     user_id = call.from_user.id
-    state_data = get_user_state_data_dict(user_id)
+    data = await state.get_data()
     
-    step = state_data.get("route_step", 1)
-    route_progress = state_data.get("route_progress", [])
+    step = data.get("route_step", 1)
+    route_progress = data.get("route_progress", [])
     
     route_progress.append(step)
     next_step = step + 1
     
-    update_user_state_data(user_id,
+    await state.update_data(
         route_step=next_step,
         route_progress=route_progress
     )
     
     if next_step > 3:
-        complete_route(call)
+        await complete_route(call, state)
     else:
-        safe_send_message(
+        await safe_send_message(
             call.message,
-            f"✅ <b>Этап {step} выполнен!</b>\n\nПереходим к этапу {next_step}...",
+            f"✅ {bold(f'Этап {step} выполнен!')}\n\nПереходим к этапу {next_step}...",
             parse_mode='HTML',
             delete_previous=True
         )
-        time.sleep(1)
+        await asyncio.sleep(1)
         
-        route = state_data.get("current_route", {})
-        show_route_step(call, next_step, route, None)
+        route = data.get("current_route", {})
+        await show_route_step(call, state, next_step, route, None)
 
-def complete_route(call: CallbackQuery):
+
+async def complete_route(call: CallbackQuery, state: FSMContext):
     """Показывает завершение маршрута"""
     user_id = call.from_user.id
-    state_data = get_user_state_data_dict(user_id)
-    context = get_user_context_obj(user_id)
-    user_name = context.name if context and context.name else "друг"
+    data = await state.get_data()
+    user_name = get_user_name(user_id)
     
-    destination = state_data.get("current_destination", {})
+    destination = data.get("current_destination", {})
     
     text = f"""
-🎉 <b>МАРШРУТ ЗАВЕРШЕН!</b>
+🎉 {bold('МАРШРУТ ЗАВЕРШЕН!')}
 
-Поздравляю, {user_name}! Ты достиг цели: <b>{destination.get('name', 'цель')}</b>
+Поздравляю, {user_name}! Ты достиг цели: {bold(destination.get('name', 'цель'))}
 
-💪 <b>ГОРДИСЬ СОБОЙ!</b>
+💪 {bold('ГОРДИСЬ СОБОЙ!')}
 
 Хочешь выбрать новую цель или закрепить результат?
 
-👇 <b>Выбери действие:</b>
+👇 {bold('Выбери действие:')}
 """
     
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(
-        InlineKeyboardButton("🎯 НОВАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"),
-        InlineKeyboardButton("🧠 К ПОРТРЕТУ", callback_data="show_results")
-    )
-    keyboard.row(InlineKeyboardButton("❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions"))
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎯 НОВАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"),
+            InlineKeyboardButton(text="🧠 К ПОРТРЕТУ", callback_data="show_results")
+        ],
+        [InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions")]
+    ])
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     
     # Очищаем данные маршрута
-    update_user_state_data(user_id, route_step=None, current_destination=None, current_route=None)
+    await state.update_data(route_step=None, current_destination=None, current_route=None)
+
+
+# ============================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ПОИСКА ЦЕЛЕЙ
+# ============================================
+
+def find_goal_by_id(goal_id: str, mode: str) -> Optional[Dict]:
+    """Ищет цель по ID во всех категориях"""
+    # Сначала проверяем в динамических целях (используем заглушку)
+    all_goals = {
+        "improve_relations": {"name": "Улучшить отношения с близкими", "time": "4-6 недель", "difficulty": "medium", "description": "Построй гармоничные отношения с семьей и друзьями"},
+        "find_partner": {"name": "Найти партнёра", "time": "3-5 месяцев", "difficulty": "hard", "description": "Встретить человека для серьёзных отношений"},
+        "boundaries": {"name": "Научиться защищать границы", "time": "2-3 недели", "difficulty": "medium", "description": "Освой искусство говорить 'нет'"},
+        "income_growth": {"name": "Увеличить доход", "time": "4-6 недель", "difficulty": "hard", "description": "Создай стратегию для роста дохода"},
+        "financial_plan": {"name": "Создать финансовый план", "time": "2-3 недели", "difficulty": "easy", "description": "Составь личный финансовый план"},
+        "money_blocks": {"name": "Проработать денежные блоки", "time": "3-4 недели", "difficulty": "medium", "description": "Выяви и устрани препятствия"},
+        "self_esteem": {"name": "Повысить самооценку", "time": "4-5 недель", "difficulty": "medium", "description": "Научись ценить себя"},
+        "anxiety": {"name": "Справиться с тревогой", "time": "3-4 недели", "difficulty": "medium", "description": "Обрети внутреннее спокойствие"},
+        "purpose": {"name": "Найти предназначение", "time": "5-7 недель", "difficulty": "hard", "description": "Ответь на вопрос 'зачем я здесь?'"},
+        "new_skill": {"name": "Освоить новый навык", "time": "4-6 недель", "difficulty": "medium", "description": "Научись чему-то новому"},
+        "reading": {"name": "Читать по книге в неделю", "time": "8 недель", "difficulty": "easy", "description": "Сформируй привычку читать"},
+        "course": {"name": "Пройти онлайн-курс", "time": "6-8 недель", "difficulty": "medium", "description": "Получи новые знания"},
+        "sport": {"name": "Начать заниматься спортом", "time": "4 недели", "difficulty": "medium", "description": "Внедри регулярные тренировки"},
+        "sleep": {"name": "Наладить сон", "time": "3-4 недели", "difficulty": "easy", "description": "Улучши качество сна"},
+        "energy": {"name": "Повысить уровень энергии", "time": "4 недели", "difficulty": "medium", "description": "Чувствуй себя бодрее"},
+        "start_creative": {"name": "Начать творить", "time": "3-4 недели", "difficulty": "easy", "description": "Найди своё творческое выражение"},
+        "overcome_block": {"name": "Преодолеть творческий блок", "time": "2-3 недели", "difficulty": "medium", "description": "Верни вдохновение"},
+        "project": {"name": "Завершить творческий проект", "time": "6-8 недель", "difficulty": "hard", "description": "Доведи дело до конца"}
+    }
+    
+    return all_goals.get(goal_id)
 
 
 # ============================================
@@ -859,15 +1033,29 @@ def complete_route(call: CallbackQuery):
 # ============================================
 
 __all__ = [
-    'show_goals_categories',
-    'show_goals_for_category',
-    'select_goal',
+    'get_dynamic_destinations',
     'show_dynamic_destinations',
+    'show_theoretical_path',
     'handle_dynamic_destination',
     'custom_destination',
+    'show_reality_check',
+    'start_life_context_collection',
+    'ask_goal_specific_questions',
+    'calculate_and_show_feasibility',
+    'skip_life_context',
+    'skip_goal_questions',
+    'skip_to_route',
+    'accept_feasibility_plan',
+    'adjust_timeline',
+    'reduce_goal',
+    'apply_extended_timeline',
+    'select_goal_50',
+    'select_goal_30',
+    'select_goal_blocks',
     'build_route',
     'show_route_step',
     'show_fallback_route',
     'route_step_done',
-    'complete_route'
+    'complete_route',
+    'find_goal_by_id'
 ]
