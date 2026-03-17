@@ -703,7 +703,59 @@ def handle_context_message_wrapper(message: types.Message):
             keep_last=1
         )
 
-# 👇 НОВЫЙ ОБРАБОТЧИК ГОЛОСОВЫХ СООБЩЕНИЙ
+# ============================================
+# 👇 НОВЫЕ ОБРАБОТЧИКИ ТЕКСТОВЫХ СООБЩЕНИЙ ПО СОСТОЯНИЯМ
+# ============================================
+
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_question)
+def handle_question_message(message: types.Message):
+    """Обрабатывает текстовые сообщения в состоянии ожидания вопроса"""
+    user_id = message.from_user.id
+    text = message.text
+    
+    logger.info(f"❓ Получен вопрос от пользователя {user_id} в состоянии awaiting_question: {text[:50]}...")
+    
+    def run_async():
+        asyncio.run(process_text_question_async(message, user_id, text))
+    
+    threading.Thread(target=run_async, daemon=True).start()
+
+
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_custom_goal)
+def handle_custom_goal_message(message: types.Message):
+    """Обрабатывает пользовательскую цель"""
+    user_id = message.from_user.id
+    text = message.text
+    
+    logger.info(f"🎯 Получена пользовательская цель от пользователя {user_id}: {text[:50]}...")
+    
+    def run_async():
+        asyncio.run(process_custom_goal_async(message, user_id, text))
+    
+    threading.Thread(target=run_async, daemon=True).start()
+
+
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.pretest_question)
+def handle_pretest_question(message: types.Message):
+    """Обрабатывает вопросы до теста"""
+    user_id = message.from_user.id
+    text = message.text
+    
+    logger.info(f"❓ Получен вопрос до теста от пользователя {user_id}")
+    
+    safe_send_message(
+        message,
+        "Спасибо за вопрос. Чтобы ответить точнее, мне нужно знать ваш профиль. "
+        "Пройдите тест — это займёт 15 минут.",
+        delete_previous=True
+    )
+    clear_state(user_id)
+
+
+# ============================================
+# 👇 ОБРАБОТЧИК ГОЛОСОВЫХ СООБЩЕНИЙ
+# ============================================
+
 @bot.message_handler(content_types=['voice'])
 def handle_voice_wrapper(message: types.Message):
     """Обработчик голосовых сообщений"""
@@ -711,6 +763,7 @@ def handle_voice_wrapper(message: types.Message):
         asyncio.run(handle_voice_message(message))
     
     threading.Thread(target=run_async, daemon=True).start()
+
 
 @bot.message_handler(func=lambda message: True)
 def handle_unknown_message(message: types.Message):
@@ -733,6 +786,43 @@ def handle_unknown_message(message: types.Message):
         reply_markup=keyboard,
         keep_last=1
     )
+
+
+# ============================================
+# 👇 АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ ОБРАБОТКИ СООБЩЕНИЙ
+# ============================================
+
+async def process_text_question_async(message: types.Message, user_id: int, text: str):
+    """Асинхронная обработка текстового вопроса"""
+    try:
+        from handlers.questions import process_text_question_async as process_question
+        await process_question(message, user_id, text)
+    except Exception as e:
+        logger.error(f"❌ Ошибка при обработке вопроса: {e}")
+        import traceback
+        traceback.print_exc()
+        await safe_send_message(
+            message,
+            "❌ Произошла ошибка при обработке вопроса. Пожалуйста, попробуйте еще раз.",
+            delete_previous=True
+        )
+
+
+async def process_custom_goal_async(message: types.Message, user_id: int, text: str):
+    """Асинхронная обработка пользовательской цели"""
+    try:
+        from handlers.goals import process_custom_goal_async as process_goal
+        await process_goal(message, user_id, text)
+    except Exception as e:
+        logger.error(f"❌ Ошибка при обработке пользовательской цели: {e}")
+        import traceback
+        traceback.print_exc()
+        await safe_send_message(
+            message,
+            "❌ Произошла ошибка при обработке цели. Пожалуйста, попробуйте еще раз.",
+            delete_previous=True
+        )
+
 
 # ============================================
 # ЗАПУСК БОТА
@@ -824,3 +914,6 @@ def main():
                     logger.error("❌ Превышено количество попыток")
     finally:
         cleanup_resources()
+
+if __name__ == "__main__":
+    main()
