@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Базовый класс для всех режимов общения.
-Интегрирован с конфайнмент-моделью и гипнотическими техниками.
+Базовый класс для всех режимов общения в MAX
+Интегрирован с конфайнмент-моделью и гипнотическими техниками
 """
+
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 import logging
 from datetime import datetime
-import random
 
-# Импорты остаются теми же
-from models import ConfinementModel9, UserContext
+from models import ConfinementModel9, UserContext, level
 from hypno_module import HypnoOrchestrator, TherapeuticTales, Anchoring
 from profiles import VECTORS, LEVEL_PROFILES, DILTS_LEVELS
 
@@ -39,17 +38,12 @@ class BaseMode(ABC):
         # История диалога
         self.history = user_data.get("history", [])
         
-        # Для отслеживания использованных инструментов
-        self.last_tools_used = []
-        
         # === ИНИЦИАЛИЗАЦИЯ КЛЮЧЕВЫХ СИСТЕМ ===
         
         # 1. Конфайнмент-модель (ограничивающие убеждения)
         self.confinement_model = None
         if "confinement_model" in user_data:
-            confinement_data = user_data["confinement_model"]
-            if isinstance(confinement_data, dict):
-                self.confinement_model = ConfinementModel9.from_dict(confinement_data)
+            self.confinement_model = ConfinementModel9.from_dict(user_data["confinement_model"])
         
         # 2. Гипнотический оркестратор (для трансовых техник)
         self.hypno = HypnoOrchestrator()
@@ -76,6 +70,9 @@ class BaseMode(ABC):
             self.weakest_vector = "СБ"
             self.weakest_level = 3
             self.weakest_profile = {}
+        
+        # Последние использованные инструменты
+        self.last_tools_used = []
     
     def _level(self, score: float) -> int:
         """Дробный балл 1..4 → целый уровень 1..6"""
@@ -112,8 +109,7 @@ class BaseMode(ABC):
             "follow_up": bool,         # нужно ли уточнение
             "suggestions": List[str],  # предложения для продолжения
             "hypnotic_suggestion": bool, # было ли гипнотическое внушение
-            "tale_suggested": bool,    # была ли предложена сказка
-            "should_save": bool        # нужно ли сохранять в историю
+            "tale_suggested": bool     # была ли предложена сказка
         }
         """
         pass
@@ -129,34 +125,33 @@ class BaseMode(ABC):
             "weakest_level": self.weakest_level,
             "weakest_description": self.weakest_profile.get('quote', ''),
             "key_confinement": self._get_key_confinement_info(),
-            "loops": self._get_loops_info(),
-            "vector_scores": self.scores
+            "loops": self._get_loops_info()
         }
         return analysis
     
     def _get_key_confinement_info(self) -> Optional[Dict]:
         """Возвращает информацию о ключевом ограничении"""
-        if self.confinement_model and self.confinement_model.key_confinement:
-            elem = self.confinement_model.key_confinement.get('element')
+        if self.confinement_model and hasattr(self.confinement_model, 'key_confinement'):
+            elem = self.confinement_model.key_confinement
             if elem:
                 return {
-                    'id': elem.id,
-                    'name': elem.name,
-                    'description': elem.description,
-                    'type': elem.element_type,
-                    'vector': elem.vector,
-                    'strength': elem.strength
+                    'id': elem.get('id', 0),
+                    'name': elem.get('element', {}).get('name', 'неизвестно'),
+                    'description': elem.get('element', {}).get('description', ''),
+                    'type': elem.get('element', {}).get('element_type', ''),
+                    'vector': elem.get('element', {}).get('vector', ''),
+                    'strength': elem.get('element', {}).get('strength', 0)
                 }
         return None
     
     def _get_loops_info(self) -> List[Dict]:
         """Возвращает информацию о циклах"""
-        if self.confinement_model and self.confinement_model.loops:
+        if self.confinement_model and hasattr(self.confinement_model, 'loops'):
             return [
                 {
-                    'type': loop['type'],
-                    'description': loop['description'],
-                    'strength': loop['strength']
+                    'type': loop.get('type', ''),
+                    'description': loop.get('description', ''),
+                    'strength': loop.get('strength', 0)
                 }
                 for loop in self.confinement_model.loops
             ]
@@ -183,15 +178,18 @@ class BaseMode(ABC):
         
         # Из самого слабого вектора
         if self.weakest_profile:
-            points.extend(self.weakest_profile.get('pain_costs', []))
+            costs = self.weakest_profile.get('pain_costs', [])
+            if isinstance(costs, list):
+                points.extend(costs[:2])
         
         # Из глубинных паттернов
         if self.deep_patterns:
             fears = self.deep_patterns.get('fears', [])
-            points.extend(fears[:2])
+            if isinstance(fears, list):
+                points.extend(fears[:2])
             
             defenses = self.deep_patterns.get('defenses', [])
-            if defenses:
+            if defenses and len(defenses) > 0:
                 points.append(f"защита: {defenses[0]}")
         
         return [p for p in points if p][:3]  # максимум 3 пункта
@@ -200,8 +198,11 @@ class BaseMode(ABC):
         """Определяет зону роста из DILTS_LEVELS"""
         dilts_counts = self.user_data.get("dilts_counts", {})
         if dilts_counts:
-            dominant = max(dilts_counts.items(), key=lambda x: x[1])[0]
-            return DILTS_LEVELS.get(dominant, "Поведение")
+            try:
+                dominant = max(dilts_counts.items(), key=lambda x: x[1])[0]
+                return DILTS_LEVELS.get(dominant, "Поведение")
+            except (ValueError, KeyError):
+                return "Поведение"
         return "Поведение"
     
     def get_context_string(self) -> str:
@@ -209,61 +210,39 @@ class BaseMode(ABC):
         lines = []
         
         if self.context:
-            if self.context.gender:
-                lines.append(f"Пол пользователя: {'мужской' if self.context.gender == 'male' else 'женский'}")
-            if self.context.age:
+            if hasattr(self.context, 'gender') and self.context.gender:
+                gender_text = "мужской" if self.context.gender == "male" else "женский" if self.context.gender == "female" else "другой"
+                lines.append(f"Пол пользователя: {gender_text}")
+            
+            if hasattr(self.context, 'age') and self.context.age:
                 lines.append(f"Возраст: {self.context.age}")
-            if self.context.city:
+            
+            if hasattr(self.context, 'city') and self.context.city:
                 lines.append(f"Город: {self.context.city}")
             
-            day = self.context.get_day_context()
-            lines.append(f"Время: {day['time_str']}, {day['weekday']}")
+            if hasattr(self.context, 'get_day_context'):
+                day = self.context.get_day_context()
+                lines.append(f"Время: {day.get('time_str', 'неизвестно')}, {day.get('weekday', '')}")
             
-            if self.context.weather_cache:
+            if hasattr(self.context, 'weather_cache') and self.context.weather_cache:
                 w = self.context.weather_cache
-                lines.append(f"Погода: {w['icon']} {w['description']}, {w['temp']}°C")
+                lines.append(f"Погода: {w.get('icon', '🌍')} {w.get('description', '')}, {w.get('temp', '?')}°C")
         
         return "\n".join(lines)
     
-    def get_context_dict(self) -> Dict[str, Any]:
-        """Возвращает контекст в виде словаря для JSON"""
-        if not self.context:
-            return {}
-        
-        day = self.context.get_day_context()
-        result = {
-            "gender": self.context.gender,
-            "age": self.context.age,
-            "city": self.context.city,
-            "time": day['time_str'],
-            "weekday": day['weekday'],
-            "is_weekend": day['is_weekend']
-        }
-        
-        if self.context.weather_cache:
-            w = self.context.weather_cache
-            result["weather"] = {
-                "icon": w['icon'],
-                "description": w['description'],
-                "temp": w['temp']
-            }
-        
-        return result
-    
-    def save_to_history(self, question: str, response: str, tools_used: List[str] = None):
+    def save_to_history(self, question: str, response: str):
         """Сохраняет диалог в историю"""
         self.history.append({
             "role": "user",
             "text": question,
             "timestamp": datetime.now().isoformat()
         })
-        
         self.history.append({
             "role": "assistant",
             "text": response,
             "timestamp": datetime.now().isoformat(),
             "mode": self.name,
-            "tools_used": tools_used or self.last_tools_used
+            "tools_used": self.last_tools_used
         })
         
         # Обновляем в user_data
@@ -273,12 +252,7 @@ class BaseMode(ABC):
         """Предлагает терапевтическую сказку по проблеме"""
         if not issue:
             # Если проблема не указана, берём из слабого вектора
-            vector_names = {
-                "СБ": "страх", 
-                "ТФ": "деньги", 
-                "УБ": "понимание", 
-                "ЧВ": "отношения"
-            }
+            vector_names = {"СБ": "страх", "ТФ": "деньги", "УБ": "понимание", "ЧВ": "отношения"}
             issue = vector_names.get(self.weakest_vector, "рост")
         
         tale = self.tales.get_tale_for_issue(issue)
@@ -291,49 +265,3 @@ class BaseMode(ABC):
     def fire_anchor(self, trigger: str) -> bool:
         """Активирует якорь"""
         return self.anchoring.fire_anchor(self.user_id, trigger)
-    
-    def should_use_hypnosis(self, question: str) -> bool:
-        """Определяет, нужно ли использовать гипнотические техники"""
-        hypno_triggers = ["боюсь", "тревога", "страх", "паника", "не могу уснуть", 
-                          "напряжение", "стресс", "расслабиться", "успокоиться"]
-        
-        question_lower = question.lower()
-        for trigger in hypno_triggers:
-            if trigger in question_lower:
-                return True
-        return False
-    
-    def should_suggest_tale(self, question: str) -> bool:
-        """Определяет, нужно ли предложить сказку"""
-        tale_triggers = ["сказка", "история", "притча", "метафора", 
-                         "расскажи историю", "хочу сказку"]
-        
-        question_lower = question.lower()
-        for trigger in tale_triggers:
-            if trigger in question_lower:
-                return True
-        return False
-    
-    def format_response(self, text: str, suggestions: List[str] = None) -> Dict[str, Any]:
-        """
-        Форматирует ответ для отправки пользователю
-        
-        Args:
-            text: Основной текст ответа
-            suggestions: Предложения для продолжения диалога
-            
-        Returns:
-            Словарь с полным ответом
-        """
-        if suggestions is None:
-            suggestions = []
-        
-        return {
-            "response": text,
-            "suggestions": suggestions,
-            "tools_used": self.last_tools_used,
-            "follow_up": len(suggestions) > 0,
-            "hypnotic_suggestion": False,
-            "tale_suggested": False,
-            "should_save": True
-        }
