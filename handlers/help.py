@@ -17,6 +17,7 @@ from config import COMMUNICATION_MODES
 from message_utils import safe_send_message, safe_edit_message
 from keyboards import get_back_keyboard
 from hypno_module import TherapeuticTales
+from formatters import bold  # ✅ ДОБАВЛЕНО для show_weekend_ideas
 
 # ✅ ИСПРАВЛЕНО: импортируем из state, а не из main
 from state import (
@@ -382,6 +383,59 @@ def show_benefits(call: CallbackQuery):
     )
 
 # ============================================
+# ИДЕИ НА ВЫХОДНЫЕ (НОВАЯ ФУНКЦИЯ)
+# ============================================
+
+def show_weekend_ideas(call: CallbackQuery):
+    """
+    Показывает идеи на выходные
+    """
+    user_id = call.from_user.id
+    user_name = get_user_name(user_id)
+    user_data_dict = get_user_data_dict(user_id)
+    
+    # Проверяем, есть ли профиль
+    if not is_test_completed_check(user_data_dict):
+        safe_send_message(
+            call.message,
+            "❓ Сначала нужно пройти тест, чтобы я понимал твой профиль. Используй /start",
+            delete_previous=True
+        )
+        return
+    
+    text = f"""
+🎨 {bold('ИДЕИ НА ВЫХОДНЫЕ')}
+
+{user_name}, я подготовил для тебя несколько идей, как провести выходные с пользой и удовольствием.
+
+Выбери, что тебя интересует:
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🏃 Активный отдых", callback_data="weekend_active"),
+            InlineKeyboardButton(text="🧘 Расслабление", callback_data="weekend_relax")
+        ],
+        [
+            InlineKeyboardButton(text="🎨 Творчество", callback_data="weekend_creative"),
+            InlineKeyboardButton(text="📚 Саморазвитие", callback_data="weekend_learning")
+        ],
+        [
+            InlineKeyboardButton(text="👥 Общение", callback_data="weekend_social"),
+            InlineKeyboardButton(text="🏠 Домашний уют", callback_data="weekend_home")
+        ],
+        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="back_to_main")]
+    ])
+    
+    safe_send_message(
+        call.message,
+        text,
+        reply_markup=keyboard,
+        parse_mode='HTML',
+        delete_previous=True
+    )
+
+# ============================================
 # ОБРАБОТКА ВОПРОСОВ ПОСЛЕ ПОМОЩИ
 # ============================================
 
@@ -439,6 +493,7 @@ __all__ = [
     'handle_help_category',
     'show_tale',
     'show_benefits',
+    'show_weekend_ideas',  # ✅ ДОБАВЛЕНО
     'process_help_question',
     'get_help_keyboard'
 ]
