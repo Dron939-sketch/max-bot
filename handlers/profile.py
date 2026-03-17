@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики профиля пользователя для MAX
-Версия 2.1 - ИСПРАВЛЕННОЕ ФОРМАТИРОВАНИЕ
-ИСПРАВЛЕНО: убраны повторяющиеся заголовки в промежуточных частях сообщений
+Версия 2.2 - ИСПРАВЛЕНО: убраны дублирующиеся и полупустые сообщения
 """
 
 import logging
@@ -21,7 +20,7 @@ from services import generate_ai_profile, generate_psychologist_thought
 from profiles import VECTORS, DILTS_LEVELS, LEVEL_PROFILES
 from formatters import (
     bold, italic, format_profile_text, format_psychologist_text,
-    clean_text_for_safe_display
+    clean_text_for_safe_display, ensure_full_width
 )
 
 logger = logging.getLogger(__name__)
@@ -65,12 +64,42 @@ def split_long_message(text: str, max_length: int = 3500) -> List[str]:
         if split_point == -1:
             split_point = max_length
         
-        # Добавляем часть
-        parts.append(remaining[:split_point].strip())
+        # Добавляем часть (убираем лишние пробелы)
+        part = remaining[:split_point].strip()
+        if part:  # Только если часть не пустая
+            parts.append(part)
         remaining = remaining[split_point:].strip()
     
     logger.info(f"✂️ Сообщение разбито на {len(parts)} частей (было {len(text)} символов)")
     return parts
+
+
+def optimize_message_parts(parts: List[str]) -> List[str]:
+    """
+    Оптимизирует части сообщения - убирает пустые и слишком короткие
+    """
+    if not parts:
+        return []
+    
+    optimized = []
+    min_length = 50  # Минимальная длина содержательной части
+    
+    for part in parts:
+        # Очищаем от пробелов
+        cleaned = ensure_full_width(part).strip()
+        
+        # Проверяем, что часть не пустая и достаточно длинная
+        if cleaned and len(cleaned) >= min_length:
+            optimized.append(cleaned)
+        elif cleaned and len(cleaned) < min_length:
+            # Если часть слишком короткая, присоединяем к предыдущей
+            if optimized:
+                optimized[-1] = optimized[-1] + "\n\n" + cleaned
+            else:
+                optimized.append(cleaned)
+    
+    return optimized
+
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -385,31 +414,23 @@ async def show_ai_profile_async(message: Message, user_id: int):
                 pass
         
         if ai_profile:
-            if len(ai_profile) > 3500:
-                logger.info(f"📏 AI профиль слишком длинный: {len(ai_profile)} > 3500. Разбиваем на части.")
-                profile_parts = split_long_message(ai_profile)
-                logger.info(f"✂️ Разбито на {len(profile_parts)} частей")
-            else:
-                profile_parts = [ai_profile]
+            # Форматируем текст
+            formatted_text = format_profile_text(ai_profile)
             
-            # Форматируем все части
-            formatted_parts = []
-            for i, part in enumerate(profile_parts):
-                formatted_part = format_profile_text(part)
+            # Добавляем обращение по имени в начало
+            if user_name and "обращаюсь" not in formatted_text[:50].lower():
+                formatted_text = f"{user_name}, " + formatted_text[0].lower() + formatted_text[1:]
+            
+            # Разбиваем на части
+            if len(formatted_text) > 3500:
+                logger.info(f"📏 AI профиль слишком длинный: {len(formatted_text)} > 3500. Разбиваем на части.")
+                profile_parts = split_long_message(formatted_text)
+                logger.info(f"✂️ Разбито на {len(profile_parts)} частей")
                 
-                if i == 0 and not formatted_part.startswith("🧠"):
-                    formatted_part = f"🧠 {bold('ВАШ ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ')}\n\n{formatted_part}"
-                
-                if i == 0 and user_name and "обращаюсь" not in formatted_part[:50].lower():
-                    formatted_part = f"{user_name}, " + formatted_part[0].lower() + formatted_part[1:]
-                
-                # Проверяем длину отформатированной части
-                if len(formatted_part) > 3500:
-                    logger.warning(f"⚠️ Часть {i+1} слишком длинная: {len(formatted_part)}. Разбиваем ещё раз.")
-                    sub_parts = split_long_message(formatted_part)
-                    formatted_parts.extend(sub_parts)
-                else:
-                    formatted_parts.append(formatted_part)
+                # Оптимизируем части (убираем слишком короткие)
+                profile_parts = optimize_message_parts(profile_parts)
+            else:
+                profile_parts = [formatted_text]
             
             # Создаем клавиатуру
             keyboard = InlineKeyboardMarkup()
@@ -423,36 +444,48 @@ async def show_ai_profile_async(message: Message, user_id: int):
             # Сохраняем chat_id для последующих частей
             chat_id = message.chat.id
             
-            # Отправляем все части
-            for i, part in enumerate(formatted_parts):
+            # Отправляем все части, объединяя короткие
+            merged_parts = []
+            current = ""
+            
+            for part in profile_parts:
+                if len(current) + len(part) + 2 <= 3500:
+                    if current:
+                        current += "\n\n" + part
+                    else:
+                        current = part
+                else:
+                    if current:
+                        merged_parts.append(current)
+                    current = part
+            
+            if current:
+                merged_parts.append(current)
+            
+            # Отправляем финальные части
+            for i, part in enumerate(merged_parts):
                 try:
-                    if i == len(formatted_parts) - 1:
-                        text = f"""
-{part}
-
-👇 {bold('Что дальше?')}
-"""
+                    if i == len(merged_parts) - 1:
+                        # Последняя часть с кнопками
                         safe_send_message(
                             message if i == 0 else None,
-                            text,
-                            reply_markup=keyboard if i == len(formatted_parts) - 1 else None,
+                            part,
+                            reply_markup=keyboard,
                             parse_mode=None,
                             delete_previous=(i == 0),
                             chat_id=chat_id if i > 0 else None
                         )
                         logger.info(f"✅ Отправлена последняя часть {i+1} с кнопками")
                     else:
-                        # ✅ Просто текст без индикаторов HTML
-                        part_text = part
-                        
+                        # Промежуточные части без кнопок
                         safe_send_message(
                             None,
-                            part_text,
+                            part,
                             parse_mode=None,
                             delete_previous=False,
                             chat_id=chat_id
                         )
-                        logger.info(f"✅ Отправлена часть {i+1}/{len(formatted_parts)}")
+                        logger.info(f"✅ Отправлена часть {i+1}/{len(merged_parts)}")
                     
                     await asyncio.sleep(1)  # пауза между сообщениями
                     
@@ -460,7 +493,7 @@ async def show_ai_profile_async(message: Message, user_id: int):
                     logger.error(f"❌ Ошибка при отправке части {i+1}: {e}")
                     continue
             
-            logger.info(f"🎉 Все {len(formatted_parts)} частей профиля успешно отправлены")
+            logger.info(f"🎉 Все {len(merged_parts)} частей профиля успешно отправлены")
             return
             
         else:
@@ -555,23 +588,22 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                 pass
         
         if thought:
-            if len(thought) > 3500:
-                logger.info(f"📏 Мысли психолога слишком длинные: {len(thought)} > 3500. Разбиваем на части.")
-                thought_parts = split_long_message(thought)
-                logger.info(f"✂️ Разбито на {len(thought_parts)} частей")
-            else:
-                thought_parts = [thought]
+            # Форматируем текст
+            formatted_text = format_psychologist_text(thought, user_name)
             
-            # Форматируем все части
-            formatted_parts = []
-            for part in thought_parts:
-                formatted_part = format_psychologist_text(part, user_name)
-                if len(formatted_part) > 3500:
-                    logger.warning(f"⚠️ Часть мысли слишком длинная: {len(formatted_part)}. Разбиваем ещё раз.")
-                    sub_parts = split_long_message(formatted_part)
-                    formatted_parts.extend(sub_parts)
-                else:
-                    formatted_parts.append(formatted_part)
+            # Добавляем заголовок
+            full_text = f"🧠 {bold('МЫСЛИ ПСИХОЛОГА')}\n\n{formatted_text}"
+            
+            # Разбиваем на части
+            if len(full_text) > 3500:
+                logger.info(f"📏 Мысли психолога слишком длинные: {len(full_text)} > 3500. Разбиваем на части.")
+                thought_parts = split_long_message(full_text)
+                logger.info(f"✂️ Разбито на {len(thought_parts)} частей")
+                
+                # Оптимизируем части
+                thought_parts = optimize_message_parts(thought_parts)
+            else:
+                thought_parts = [full_text]
             
             keyboard = InlineKeyboardMarkup()
             keyboard.row(InlineKeyboardButton("📊 К ПРОФИЛЮ", callback_data="show_profile"))
@@ -581,19 +613,31 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
             # Сохраняем chat_id для последующих частей
             chat_id = message.chat.id
             
-            for i, part in enumerate(formatted_parts):
+            # Объединяем короткие части
+            merged_parts = []
+            current = ""
+            
+            for part in thought_parts:
+                if len(current) + len(part) + 2 <= 3500:
+                    if current:
+                        current += "\n\n" + part
+                    else:
+                        current = part
+                else:
+                    if current:
+                        merged_parts.append(current)
+                    current = part
+            
+            if current:
+                merged_parts.append(current)
+            
+            for i, part in enumerate(merged_parts):
                 try:
-                    if i == len(formatted_parts) - 1:
-                        text = f"""
-🧠 {bold('МЫСЛИ ПСИХОЛОГА')}
-
-{part}
-
-👇 {bold('Что дальше?')}
-"""
+                    if i == len(merged_parts) - 1:
+                        # Последняя часть с кнопками
                         safe_send_message(
                             message if i == 0 else None,
-                            text,
+                            part,
                             reply_markup=keyboard,
                             parse_mode=None,
                             delete_previous=(i == 0),
@@ -601,17 +645,15 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                         )
                         logger.info(f"✅ Отправлена последняя часть мысли {i+1} с кнопками")
                     else:
-                        # 👇 ИСПРАВЛЕНО: ТОЛЬКО ТЕКСТ, БЕЗ ЗАГОЛОВКА
-                        part_text = part
-                        
+                        # Промежуточные части
                         safe_send_message(
                             None,
-                            part_text,
+                            part,
                             parse_mode=None,
                             delete_previous=False,
                             chat_id=chat_id
                         )
-                        logger.info(f"✅ Отправлена часть мысли {i+1}/{len(formatted_parts)}")
+                        logger.info(f"✅ Отправлена часть мысли {i+1}/{len(merged_parts)}")
                     
                     await asyncio.sleep(1)
                     
@@ -619,7 +661,7 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                     logger.error(f"❌ Ошибка при отправке части мысли {i+1}: {e}")
                     continue
             
-            logger.info(f"🎉 Все {len(formatted_parts)} частей мысли успешно отправлены")
+            logger.info(f"🎉 Все {len(merged_parts)} частей мысли успешно отправлены")
             return
             
         else:
