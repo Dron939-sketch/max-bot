@@ -120,6 +120,14 @@ def show_reality_check(call: CallbackQuery):
     state_data = get_user_state_data(user_id)
     context = get_user_context(user_id)
     
+    # ✅ Получаем данные из user_data, если в state_data нет
+    if not state_data.get("current_destination"):
+        # Пробуем найти в user_data
+        user_data_dict = get_user_data(user_id)
+        if user_data_dict.get("current_destination"):
+            update_user_state_data(user_id, current_destination=user_data_dict["current_destination"])
+            state_data = get_user_state_data(user_id)  # Обновляем
+    
     # Проверяем, есть ли цель
     goal = state_data.get("current_destination")
     
