@@ -3,7 +3,7 @@
 """
 Утилиты для отправки сообщений в MAX
 Исправленная версия с поддержкой длинных сообщений и безопасной отправкой
-СИНХРОННАЯ ВЕРСИЯ (возврат к работающему состоянию)
+СИНХРОННАЯ ВЕРСИЯ - ДОБАВЛЕНА ОЧИСТКА ОТ ПРОБЕЛОВ
 """
 
 import logging
@@ -17,7 +17,7 @@ from maxibot import MaxiBot
 # Импортируем бота (убедись, что bot_instance.py существует)
 from bot_instance import bot
 
-from formatters import clean_text_for_safe_display, html_to_markdown
+from formatters import clean_text_for_safe_display, html_to_markdown, ensure_full_width
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,10 @@ def safe_send_message(
     if not text:
         logger.error("❌ Попытка отправить пустое сообщение")
         return None
+    
+    # ✅ КРИТИЧЕСКИ ВАЖНО: Очищаем текст от пробелов в начале каждой строки
+    # Это гарантирует, что сообщение будет на всю ширину экрана
+    text = ensure_full_width(text)
     
     # ✅ Преобразуем HTML в Markdown
     markdown_text = html_to_markdown(text)
@@ -199,6 +203,9 @@ def send_with_status_cleanup(
     """
     chat_id = message.chat.id
     
+    # ✅ Очищаем текст от пробелов в начале каждой строки
+    text = ensure_full_width(text)
+    
     # Преобразуем HTML в Markdown
     markdown_text = html_to_markdown(text)
     
@@ -302,6 +309,9 @@ def safe_edit_message(
     Returns:
         отредактированное сообщение или None при ошибке
     """
+    # ✅ Очищаем текст от пробелов в начале каждой строки
+    new_text = ensure_full_width(new_text)
+    
     # Преобразуем HTML в Markdown
     markdown_text = html_to_markdown(new_text)
     
@@ -452,6 +462,9 @@ def split_and_send_long_message(
     """
     from handlers.profile import split_long_message
     
+    # ✅ Очищаем текст от пробелов в начале каждой строки
+    text = ensure_full_width(text)
+    
     # Преобразуем HTML в Markdown
     markdown_text = html_to_markdown(text)
     
@@ -494,3 +507,19 @@ def split_and_send_long_message(
     
     logger.info(f"📨 Отправлено {len(sent_messages)}/{len(parts)} частей сообщения")
     return sent_messages
+
+
+# ============================================
+# ЭКСПОРТ
+# ============================================
+
+__all__ = [
+    'safe_send_message',
+    'send_with_status_cleanup',
+    'safe_edit_message',
+    'safe_send_typing',
+    'safe_delete_message',
+    'clear_user_history',
+    'get_user_history',
+    'split_and_send_long_message'
+]
