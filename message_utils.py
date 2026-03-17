@@ -4,9 +4,8 @@
 Утилиты для отправки сообщений в MAX
 """
 import logging
-import time
 import re
-from typing import Optional, Dict, List, Union
+from typing import Optional, Union, List
 
 from maxibot import types
 from maxibot import MaxiBot
@@ -20,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Хранилище последних сообщений для каждого пользователя
 # Структура: {chat_id: [message_id1, message_id2, ...]}
-user_messages_history: Dict[int, List[int]] = {}
+user_messages_history: dict = {}
 
 # Максимальное количество сообщений для хранения истории на пользователя
 MAX_HISTORY_PER_USER = 10
@@ -69,7 +68,9 @@ def safe_send_message(
                         bot.delete_message(chat_id, msg_id)
                         if not silent:
                             logger.debug(f"🗑️ Удалено сообщение {msg_id} для чата {chat_id}")
-                        time.sleep(0.05)  # Небольшая пауза чтобы не превысить лимиты
+                        # Небольшая пауза чтобы не превысить лимиты
+                        import time
+                        time.sleep(0.05)
                     except Exception as e:
                         # Игнорируем ошибки удаления (сообщение могло быть уже удалено)
                         pass
@@ -172,6 +173,7 @@ def send_with_status_cleanup(
                 try:
                     bot.delete_message(chat_id, msg_id)
                     logger.debug(f"🗑️ Удалено сообщение из истории {msg_id}")
+                    import time
                     time.sleep(0.05)
                 except:
                     pass
@@ -232,9 +234,9 @@ def safe_edit_message(
     """
     try:
         edited_msg = bot.edit_message_text(
-            new_text,
             chat_id=message.chat.id,
             message_id=message.message_id,
+            text=new_text,
             reply_markup=reply_markup,
             parse_mode=parse_mode
         )
@@ -255,9 +257,9 @@ def safe_edit_message(
             
             try:
                 return bot.edit_message_text(
-                    clean_text,
                     chat_id=message.chat.id,
                     message_id=message.message_id,
+                    text=clean_text,
                     reply_markup=reply_markup
                 )
             except Exception as e2:
@@ -339,6 +341,7 @@ def clear_user_history(chat_id: int, keep_last: int = 0):
         try:
             bot.delete_message(chat_id, msg_id)
             logger.debug(f"🗑️ Удалено сообщение {msg_id} при очистке истории")
+            import time
             time.sleep(0.05)
         except:
             pass
@@ -347,15 +350,6 @@ def clear_user_history(chat_id: int, keep_last: int = 0):
     logger.info(f"🧹 Очищена история для чата {chat_id}, оставлено {len(history)} сообщений")
 
 
-def get_user_history(chat_id: int) -> List[int]:
+def get_user_history(chat_id: int) -> list:
     """Возвращает историю сообщений пользователя"""
     return user_messages_history.get(chat_id, [])
-
-
-def cleanup_all_old_messages(max_age_minutes: int = 60):
-    """
-    Очищает старые сообщения из истории (не из чата, а из памяти)
-    """
-    # Эта функция просто очищает словарь, если нужно
-    # В MAX API нет возможности получить старые сообщения по времени
-    pass
