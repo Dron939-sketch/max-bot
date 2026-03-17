@@ -223,30 +223,22 @@ async def show_ai_profile_async(message: Message, user_id: int):
             else:
                 profile_parts = [ai_profile]
             
-            # Форматируем первую часть
-            first_part = profile_parts[0]
-            formatted_profile = format_profile_text(first_part)
+            # Форматируем все части
+            formatted_parts = []
+            for i, part in enumerate(profile_parts):
+                formatted_part = format_profile_text(part)
+                
+                # Добавляем заголовок только к первой части, если его нет
+                if i == 0 and not formatted_part.startswith("🧠"):
+                    formatted_part = f"🧠 {bold('ВАШ ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ')}\n\n{formatted_part}"
+                
+                # Форматируем с учетом имени пользователя (только для первой части)
+                if i == 0 and user_name and "обращаюсь" not in formatted_part[:50].lower():
+                    formatted_part = f"{user_name}, " + formatted_part[0].lower() + formatted_part[1:]
+                
+                formatted_parts.append(formatted_part)
             
-            # Добавляем заголовок, если его нет
-            if not formatted_profile.startswith("🧠"):
-                formatted_profile = f"🧠 {bold('ВАШ ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ')}\n\n{formatted_profile}"
-            
-            # Форматируем с учетом имени пользователя
-            if user_name and "обращаюсь" not in formatted_profile[:50].lower():
-                # Добавляем обращение в начало
-                formatted_profile = f"{user_name}, " + formatted_profile[0].lower() + formatted_profile[1:]
-            
-            # Добавляем индикатор продолжения для первой части
-            if len(profile_parts) > 1:
-                formatted_profile += f"\n\n<code>✉️ Часть 1/{len(profile_parts)}</code>"
-            
-            text = f"""
-{formatted_profile}
-
-👇 {bold('Что дальше?')}
-"""
-            
-            # Создаем клавиатуру для первой части
+            # Создаем клавиатуру для последнего сообщения
             keyboard = InlineKeyboardMarkup()
             keyboard.row(InlineKeyboardButton("🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"))
             keyboard.row(
@@ -255,31 +247,38 @@ async def show_ai_profile_async(message: Message, user_id: int):
             )
             keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
             
-            # Отправляем первую часть
-            safe_send_message(
-                message,
-                text,
-                reply_markup=keyboard,
-                parse_mode='HTML',
-                delete_previous=True
-            )
+            # Отправляем все части
+            for i, part in enumerate(formatted_parts):
+                # Для последней части добавляем текст "Что дальше?" и клавиатуру
+                if i == len(formatted_parts) - 1:
+                    text = f"""
+{part}
+
+👇 {bold('Что дальше?')}
+"""
+                    # Отправляем с клавиатурой
+                    safe_send_message(
+                        message if i == 0 else None,
+                        text,
+                        reply_markup=keyboard,
+                        parse_mode='HTML',
+                        delete_previous=(i == 0)
+                    )
+                else:
+                    # Для промежуточных частей добавляем индикатор продолжения
+                    part_text = f"{part}\n\n<code>✉️ Часть {i+1}/{len(formatted_parts)}</code>"
+                    
+                    safe_send_message(
+                        message if i == 0 else None,
+                        part_text,
+                        parse_mode='HTML',
+                        delete_previous=(i == 0)
+                    )
+                    
+                    # Небольшая пауза между сообщениями
+                    await asyncio.sleep(0.5)
             
-            # Отправляем остальные части (без клавиатуры)
-            for i, part in enumerate(profile_parts[1:], start=2):
-                formatted_part = format_profile_text(part)
-                part_text = f"{formatted_part}\n\n<code>✉️ Часть {i}/{len(profile_parts)}</code>"
-                
-                safe_send_message(
-                    message,
-                    part_text,
-                    parse_mode='HTML',
-                    delete_previous=False  # Не удаляем предыдущие сообщения
-                )
-                
-                # Небольшая пауза между сообщениями
-                await asyncio.sleep(0.5)
-            
-            return  # Выходим, чтобы не отправлять еще одно сообщение
+            return
             
         else:
             # Если не удалось сгенерировать, показываем обычный профиль
@@ -329,7 +328,7 @@ async def show_ai_profile_async(message: Message, user_id: int):
 👇 {bold('Что дальше?')}
 """
     
-    # Создаем клавиатуру (только если не было разбивки)
+    # Создаем клавиатуру для финального сообщения
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"))
     keyboard.row(
@@ -389,50 +388,56 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
             else:
                 thought_parts = [thought]
             
-            # Форматируем первую часть
-            first_part = thought_parts[0]
-            formatted_thought = format_psychologist_text(first_part, user_name)
+            # Форматируем все части
+            formatted_parts = []
+            for part in thought_parts:
+                formatted_parts.append(format_psychologist_text(part, user_name))
             
-            # Добавляем индикатор продолжения
-            part_indicator = f"\n\n<code>✉️ Часть 1/{len(thought_parts)}</code>" if len(thought_parts) > 1 else ""
-            
-            text = f"""
-🧠 {bold('МЫСЛИ ПСИХОЛОГА')}
-
-{formatted_thought}{part_indicator}
-
-👇 {bold('Что дальше?')}
-"""
-            
-            # Создаем клавиатуру для первой части
+            # Создаем клавиатуру для последнего сообщения
             keyboard = InlineKeyboardMarkup()
             keyboard.row(InlineKeyboardButton("📊 К ПРОФИЛЮ", callback_data="show_profile"))
             keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
             keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
             
-            # Отправляем первую часть
-            safe_send_message(
-                message,
-                text,
-                reply_markup=keyboard,
-                parse_mode='HTML',
-                delete_previous=True
-            )
+            # Отправляем все части
+            for i, part in enumerate(formatted_parts):
+                # Для последней части добавляем текст "Что дальше?" и клавиатуру
+                if i == len(formatted_parts) - 1:
+                    text = f"""
+🧠 {bold('МЫСЛИ ПСИХОЛОГА')}
+
+{part}
+
+👇 {bold('Что дальше?')}
+"""
+                    # Отправляем с клавиатурой
+                    safe_send_message(
+                        message if i == 0 else None,
+                        text,
+                        reply_markup=keyboard,
+                        parse_mode='HTML',
+                        delete_previous=(i == 0)
+                    )
+                else:
+                    # Для промежуточных частей добавляем индикатор продолжения
+                    part_text = f"""
+🧠 {bold('МЫСЛИ ПСИХОЛОГА')} <code>(часть {i+1}/{len(formatted_parts)})</code>
+
+{part}
+
+<code>✉️ Продолжение следует...</code>
+"""
+                    
+                    safe_send_message(
+                        message if i == 0 else None,
+                        part_text,
+                        parse_mode='HTML',
+                        delete_previous=(i == 0)
+                    )
+                    
+                    await asyncio.sleep(0.5)
             
-            # Отправляем остальные части (без клавиатуры)
-            for i, part in enumerate(thought_parts[1:], start=2):
-                formatted_part = format_psychologist_text(part, user_name)
-                part_text = f"{formatted_part}\n\n<code>✉️ Часть {i}/{len(thought_parts)}</code>"
-                
-                safe_send_message(
-                    message,
-                    part_text,
-                    parse_mode='HTML',
-                    delete_previous=False
-                )
-                await asyncio.sleep(0.5)
-            
-            return  # Выходим, чтобы не отправлять еще одно сообщение
+            return
             
         else:
             text = f"""
@@ -470,7 +475,7 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
 👇 {bold('Что дальше?')}
 """
     
-    # Создаем клавиатуру (только если не было разбивки)
+    # Создаем клавиатуру для финального сообщения
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("📊 К ПРОФИЛЮ", callback_data="show_profile"))
     keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
@@ -579,7 +584,6 @@ async def show_final_profile_async(message: Message, user_id: int):
 
 def show_profile(message: Message, user_id: int):
     """Синхронная обертка для показа профиля"""
-    # Эта функция не асинхронная, оставляем как есть
     data = user_data.get(user_id, {})
     
     if not data:
@@ -661,7 +665,7 @@ def show_final_profile(message: Message, user_id: int):
 
 
 def show_old_final_profile(message: Message, user_id: int, status_msg: Optional[Message] = None):
-    """Старая версия финального профиля (резерв) - оставляем синхронной"""
+    """Старая версия финального профиля (резерв)"""
     data = user_data.get(user_id, {})
     scores = {}
     for k in VECTORS:
