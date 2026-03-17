@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Модуль для форматирования текста
-Содержит функции для форматирования текста, прогресс-баров и очистки
+Модуль для форматирования текста для МАКС
+Использует Markdown-форматирование (**жирный**, *курсив*)
 """
 
 import re
@@ -10,17 +10,17 @@ from typing import List
 
 
 def bold(text: str) -> str:
-    """Жирный текст (HTML)"""
+    """Жирный текст для МАКС (Markdown)"""
     if not text:
         return ""
-    return f"<b>{text}</b>"
+    return f"**{text}**"
 
 
 def italic(text: str) -> str:
-    """Курсив (HTML)"""
+    """Курсив для МАКС (Markdown)"""
     if not text:
         return ""
-    return f"<i>{text}</i>"
+    return f"*{text}*"
 
 
 def emoji_text(emoji: str, text: str, bold_text: bool = True) -> str:
@@ -55,23 +55,11 @@ def calculate_progress(current: int, total: int) -> str:
 
 
 def clean_text_for_safe_display(text: str) -> str:
-    """Полностью очищает текст для безопасного отображения"""
+    """Очищает текст от лишних символов, сохраняя Markdown-форматирование"""
     if not text:
         return text
     
-    # Удаляем все возможные форматирования (Markdown)
-    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-    text = re.sub(r'__(.*?)__', r'\1', text)
-    text = re.sub(r'\*(.*?)\*', r'\1', text)
-    text = re.sub(r'_(.*?)_', r'\1', text)
-    text = re.sub(r'`(.*?)`', r'\1', text)
-    text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
-    text = re.sub(r'!\[(.*?)\]\(.*?\)', r'\1', text)
-    text = re.sub(r'#{1,6}\s+', '', text)
-    text = re.sub(r'^\s*[-*+]\s+', '', text, flags=re.MULTILINE)
-    text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)
-    
-    # Удаляем HTML-теги
+    # Удаляем HTML-теги (они не работают в МАКС)
     text = re.sub(r'<[^>]+>', '', text)
     
     # Удаляем множественные переводы строк
@@ -162,27 +150,55 @@ def format_profile_text(text: str) -> str:
     if not text:
         return text
     
-    text = clean_text_for_safe_display(text)
+    # Очищаем от HTML
+    text = re.sub(r'<[^>]+>', '', text)
     
+    # Карта замены заголовков с эмодзи
     header_map = [
-        (r'БЛОК\s*1:?\s*', '🔑 КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА'),
-        (r'БЛОК\s*2:?\s*', '💪 СИЛЬНЫЕ СТОРОНЫ'),
-        (r'БЛОК\s*3:?\s*', '🎯 ЗОНЫ РОСТА'),
-        (r'БЛОК\s*4:?\s*', '🌱 КАК ЭТО СФОРМИРОВАЛОСЬ'),
-        (r'БЛОК\s*5:?\s*', '⚠️ ГЛАВНАЯ ЛОВУШКА'),
+        (r'БЛОК\s*1:?\s*', '🔑 **КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА**'),
+        (r'БЛОК\s*2:?\s*', '💪 **СИЛЬНЫЕ СТОРОНЫ**'),
+        (r'БЛОК\s*3:?\s*', '🎯 **ЗОНЫ РОСТА**'),
+        (r'БЛОК\s*4:?\s*', '🌱 **КАК ЭТО СФОРМИРОВАЛОСЬ**'),
+        (r'БЛОК\s*5:?\s*', '⚠️ **ГЛАВНАЯ ЛОВУШКА**'),
     ]
     
+    # Заменяем "БЛОК X:" на правильные заголовки
     for pattern, replacement in header_map:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     
+    # Убираем дублирование заголовков
     for _, header in header_map:
-        pattern = rf'({re.escape(header)})\s*\n\s*{re.escape(header)}'
+        # Убираем дубли: заголовок + такой же заголовок (без **)
+        clean_header = header.replace('**', '')
+        pattern = rf'({re.escape(header)})\s*\n\s*{re.escape(clean_header)}'
         text = re.sub(pattern, r'\1', text, flags=re.IGNORECASE)
     
-    for _, header in header_map:
-        text = re.sub(rf'({re.escape(header)})', rf'{bold(header)}', text, flags=re.IGNORECASE)
+    # ✅ Добавляем пустые строки между разделами
+    sections = [
+        'КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА',
+        'СИЛЬНЫЕ СТОРОНЫ',
+        'ЗОНЫ РОСТА',
+        'КАК ЭТО СФОРМИРОВАЛОСЬ',
+        'ГЛАВНАЯ ЛОВУШКА'
+    ]
     
-    return text
+    for section in sections:
+        # Ищем заголовок с эмодзи и жирным
+        pattern = rf'(🔑|💪|🎯|🌱|⚠️)\s+\*\*{re.escape(section)}\*\*'
+        
+        # Добавляем пустую строку перед заголовком, если её нет
+        def add_newline_before(match):
+            return f"\n\n{match.group(0)}"
+        
+        text = re.sub(pattern, add_newline_before, text)
+    
+    # Убираем лишние пустые строки в начале
+    text = re.sub(r'^\n+', '', text)
+    
+    # Нормализуем пустые строки (не больше двух подряд)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()
 
 
 def format_psychologist_text(text: str, user_name: str = "") -> str:
@@ -190,27 +206,61 @@ def format_psychologist_text(text: str, user_name: str = "") -> str:
     if not text:
         return text
     
-    text = clean_text_for_safe_display(text)
-    text = re.sub(r'###\s*\d+\.?\s*', '', text)
+    # Очищаем от HTML
+    text = re.sub(r'<[^>]+>', '', text)
     
+    # Убираем нумерацию
+    text = re.sub(r'###\s*\d+\.?\s*', '', text)
+    text = re.sub(r'\d+\.\s*', '', text)
+    
+    # Добавляем обращение по имени
     if user_name and not text.lower().startswith(user_name.lower()):
         first_word = text.split()[0] if text else ""
         if first_word and first_word.lower() not in ['здравствуйте', 'привет', 'добрый']:
             text = f"{user_name}, " + text[0].lower() + text[1:] if text else text
     
+    # ✅ Убираем дублирование эмодзи
+    text = re.sub(r'🔐\s*🔐', '🔐', text)
+    text = re.sub(r'🔄\s*🔄', '🔄', text)
+    text = re.sub(r'🚪\s*🚪', '🚪', text)
+    text = re.sub(r'📊\s*📊', '📊', text)
+    
+    # Карта замены заголовков
     header_map = [
-        (r'КЛЮЧЕВОЙ\s*ЭЛЕМЕНТ', '🔐 КЛЮЧЕВОЙ ЭЛЕМЕНТ'),
-        (r'ПЕТЛЯ', '🔄 ПЕТЛЯ'),
-        (r'ТОЧКА\s*ВХОДА', '🚪 ТОЧКА ВХОДА'),
-        (r'ПРОГНОЗ', '📊 ПРОГНОЗ'),
+        (r'🔐\s*КЛЮЧЕВОЙ\s*ЭЛЕМЕНТ', '🔐 **КЛЮЧЕВОЙ ЭЛЕМЕНТ**'),
+        (r'🔄\s*ПЕТЛЯ', '🔄 **ПЕТЛЯ**'),
+        (r'🚪\s*ТОЧКА\s*ВХОДА', '🚪 **ТОЧКА ВХОДА**'),
+        (r'📊\s*ПРОГНОЗ', '📊 **ПРОГНОЗ**'),
     ]
     
+    # Применяем форматирование к заголовкам
     for pattern, replacement in header_map:
-        text = re.sub(rf'({pattern})', rf'{bold(replacement)}', text, flags=re.IGNORECASE)
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     
+    # ✅ Добавляем пустые строки между разделами
+    sections = [
+        'КЛЮЧЕВОЙ ЭЛЕМЕНТ',
+        'ПЕТЛЯ',
+        'ТОЧКА ВХОДА',
+        'ПРОГНОЗ'
+    ]
+    
+    for section in sections:
+        pattern = rf'(🔐|🔄|🚪|📊)\s+\*\*{re.escape(section)}\*\*'
+        
+        def add_newline_before(match):
+            return f"\n\n{match.group(0)}"
+        
+        text = re.sub(pattern, add_newline_before, text)
+    
+    # Убираем лишние символы в конце
     text = re.sub(r'И вот:\s*$', '', text)
     
-    return text
+    # Нормализуем пустые строки
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r'^\n+', '', text)
+    
+    return text.strip()
 
 
 def strip_html(text: str) -> str:
@@ -222,6 +272,29 @@ def strip_html(text: str) -> str:
     # Заменяем HTML-сущности
     text = text.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
     text = text.replace('&quot;', '"').replace('&#39;', "'")
+    return text
+
+
+def html_to_markdown(text: str) -> str:
+    """
+    Преобразует HTML-форматирование в Markdown для МАКС
+    <b>текст</b> -> **текст**
+    <i>текст</i> -> *текст*
+    """
+    if not text:
+        return text
+    
+    # Жирный
+    text = re.sub(r'<b>(.*?)</b>', r'**\1**', text, flags=re.DOTALL)
+    text = re.sub(r'<strong>(.*?)</strong>', r'**\1**', text, flags=re.DOTALL)
+    
+    # Курсив
+    text = re.sub(r'<i>(.*?)</i>', r'*\1*', text, flags=re.DOTALL)
+    text = re.sub(r'<em>(.*?)</em>', r'*\1*', text, flags=re.DOTALL)
+    
+    # Остальные теги удаляем
+    text = re.sub(r'<[^>]+>', '', text)
+    
     return text
 
 
@@ -238,5 +311,6 @@ __all__ = [
     'split_long_message',
     'format_profile_text',
     'format_psychologist_text',
-    'strip_html'
+    'strip_html',
+    'html_to_markdown'
 ]
