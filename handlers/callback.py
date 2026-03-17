@@ -38,7 +38,8 @@ from handlers.reality import handle_reality_callback
 # Импорты обработчиков целей
 from handlers.goals import (
     show_dynamic_destinations, handle_dynamic_destination,
-    custom_destination, route_step_done
+    custom_destination, route_step_done, show_goals_categories,
+    show_goals_for_category, select_goal
 )
 
 # Импорты обработчиков вопросов
@@ -343,12 +344,26 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     # ЦЕЛИ И МАРШРУТЫ
     # ============================================
+    elif data == "show_goals":
+        logger.info(f"🎯 show_goals для пользователя {user_id}")
+        show_goals_categories(call.message, user_id)
+    
     elif data == "show_dynamic_destinations":
         logger.info(f"🎯 show_dynamic_destinations для пользователя {user_id}")
         show_dynamic_destinations(call)
     
-    elif data.startswith("dynamic_dest_"):
+    elif data.startswith("goal_cat_"):
+        logger.info(f"🎯 Категория целей: {data} для пользователя {user_id}")
+        category = data.replace("goal_cat_", "")
+        show_goals_for_category(call, category)
+    
+    elif data.startswith("select_goal_"):
         logger.info(f"🎯 Выбор цели: {data} для пользователя {user_id}")
+        goal_id = data.replace("select_goal_", "")
+        select_goal(call, goal_id)
+    
+    elif data.startswith("dynamic_dest_"):
+        logger.info(f"🎯 Выбор динамической цели: {data} для пользователя {user_id}")
         handle_dynamic_destination(call)
     
     elif data == "custom_destination":
@@ -364,15 +379,15 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "show_help":
         logger.info(f"❓ show_help для пользователя {user_id}")
-        show_help(call)  # ✅ ИСПРАВЛЕНО: передаем call, а не call.message
+        show_help(call)
     
     elif data == "show_benefits":
         logger.info(f"📖 show_benefits для пользователя {user_id}")
-        show_benefits(call)  # ✅ ИСПРАВЛЕНО: передаем call, а не call.message
+        show_benefits(call)
     
     elif data == "show_tale":
         logger.info(f"📚 show_tale для пользователя {user_id}")
-        show_tale(call)  # ✅ ИСПРАВЛЕНО: передаем call, а не call.message
+        show_tale(call)
     
     elif data == "smart_questions":
         logger.info(f"🤔 smart_questions для пользователя {user_id}")
@@ -384,11 +399,17 @@ async def handle_sync_callback(call: CallbackQuery):
     
     elif data == "ask_pretest":
         logger.info(f"❓ ask_pretest для пользователя {user_id}")
-        show_question_input(call)  # ✅ ИСПРАВЛЕНО: передаем только call
+        show_question_input(call)
     
     elif data == "ask_question":
         logger.info(f"❓ ask_question для пользователя {user_id}")
-        show_question_input(call)  # ✅ ИСПРАВЛЕНО: передаем только call
+        show_question_input(call)
+    
+    elif data == "ask_hypnosis":
+        logger.info(f"🧠 ask_hypnosis для пользователя {user_id}")
+        # Показываем меню гипноза или просто сказку
+        from handlers.help import show_tale
+        show_tale(call)
     
     # ============================================
     # ПРОФИЛЬ (синхронные версии для обратной совместимости)
