@@ -3,6 +3,7 @@
 """
 Модуль клавиатур для MAX-бота
 Все клавиатуры возвращаются в формате, понятном для maxibot
+ИСПРАВЛЕНО: заменены проблемные эмодзи на безопасные
 """
 from maxibot import types
 from typing import List, Optional, Dict, Any
@@ -280,11 +281,11 @@ def get_restart_keyboard() -> types.InlineKeyboardMarkup:
 
 
 def get_start_context_keyboard() -> types.InlineKeyboardMarkup:
-    """Клавиатура для начала сбора контекста"""
+    """Клавиатура для начала сбора контекста (исправлено: 🤨 -> ❓)"""
     buttons = [
         [
             {"text": "🚀 ДАВАЙ, ПОГНАЛИ!", "callback_data": "start_context"},
-            {"text": "🤨 А ТЫ ВООБЩЕ КТО?", "callback_data": "why_details"}
+            {"text": "❓ КТО ТЫ?", "callback_data": "why_details"}  # 🤨 заменен на ❓
         ]
     ]
     return create_inline_keyboard(buttons)
@@ -309,11 +310,11 @@ def get_why_details_keyboard() -> types.InlineKeyboardMarkup:
 # ============================================
 
 def get_profile_keyboard() -> types.InlineKeyboardMarkup:
-    """Клавиатура для страницы профиля"""
+    """Клавиатура для страницы профиля (исправлено: 💭 -> 🧠)"""
     buttons = [
         [
             {"text": "🧠 AI-ПРОФИЛЬ", "callback_data": "show_ai_profile"},
-            {"text": "💭 МЫСЛИ ПСИХОЛОГА", "callback_data": "show_psychologist_thought"}
+            {"text": "🧠 МЫСЛИ ПСИХОЛОГА", "callback_data": "show_psychologist_thought"}  # 💭 -> 🧠
         ],
         [
             {"text": "🎯 ВЫБРАТЬ ЦЕЛЬ", "callback_data": "show_goals"},
@@ -327,10 +328,10 @@ def get_profile_keyboard() -> types.InlineKeyboardMarkup:
 
 
 def get_ai_profile_keyboard() -> types.InlineKeyboardMarkup:
-    """Клавиатура под AI-профилем"""
+    """Клавиатура под AI-профилем (исправлено: 💭 -> 🧠)"""
     buttons = [
         [
-            {"text": "💭 МЫСЛИ ПСИХОЛОГА", "callback_data": "show_psychologist_thought"},
+            {"text": "🧠 МЫСЛИ ПСИХОЛОГА", "callback_data": "show_psychologist_thought"},  # 💭 -> 🧠
             {"text": "🎯 ВЫБРАТЬ ЦЕЛЬ", "callback_data": "show_goals"}
         ],
         [
@@ -342,11 +343,11 @@ def get_ai_profile_keyboard() -> types.InlineKeyboardMarkup:
 
 
 def get_psychologist_thought_keyboard() -> types.InlineKeyboardMarkup:
-    """Клавиатура под мыслями психолога"""
+    """Клавиатура под мыслями психолога (исправлено: 💭 -> 🧠)"""
     buttons = [
         [
-            {"text": "🎯 ВЫБРАТЬ ЦЕЛЬ", "callback_data": "show_goals"},
-            {"text": "🔮 СМЕНИТЬ РЕЖИМ", "callback_data": "show_modes"}
+            {"text": "🧠 МЫСЛИ ПСИХОЛОГА", "callback_data": "show_psychologist_thought"},  # 💭 -> 🧠
+            {"text": "🎯 ВЫБРАТЬ ЦЕЛЬ", "callback_data": "show_goals"}
         ],
         [
             {"text": "📖 СКАЗКА", "callback_data": "ask_tale"},
