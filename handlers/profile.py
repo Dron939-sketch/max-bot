@@ -6,7 +6,8 @@
 
 import logging
 import asyncio
-from typing import Optional
+import time  # Добавлено для паузы между сообщениями
+from typing import Optional, List
 
 from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -21,6 +22,51 @@ from formatters import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ФУНКЦИЯ ДЛЯ РАЗБИВКИ ДЛИННЫХ СООБЩЕНИЙ (ДОБАВЛЕНА!)
+# ============================================
+
+def split_long_message(text: str, max_length: int = 4000) -> List[str]:
+    """
+    Разбивает длинное сообщение на части по границам предложений
+    """
+    if not text or len(text) <= max_length:
+        return [text]
+    
+    parts = []
+    remaining = text
+    
+    while remaining:
+        if len(remaining) <= max_length:
+            parts.append(remaining)
+            break
+        
+        # Ищем место для разрыва
+        split_point = -1
+        
+        # 1. Пробуем найти конец предложения
+        for separator in ['. ', '! ', '? ', '.\n', '!\n', '?\n', '\n\n']:
+            pos = remaining.rfind(separator, 0, max_length)
+            if pos > split_point:
+                split_point = pos + len(separator)
+        
+        # 2. Если нет конца предложения, ищем пробел
+        if split_point == -1 or split_point <= max_length // 2:  # Избегаем слишком коротких частей
+            split_point = remaining.rfind(' ', 0, max_length)
+        
+        # 3. Если нет пробела, режем жестко
+        if split_point == -1:
+            split_point = max_length
+        
+        # Добавляем часть
+        parts.append(remaining[:split_point].strip())
+        remaining = remaining[split_point:].strip()
+    
+    # Логируем результат
+    logger.info(f"✂️ Сообщение разбито на {len(parts)} частей (было {len(text)} символов)")
+    
+    return parts
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -226,8 +272,18 @@ def show_ai_profile(message: Message, user_id: int):
                 pass
         
         if ai_profile:
-            # Форматируем текст
-            formatted_profile = format_profile_text(ai_profile)
+            # ========== НОВАЯ ЛОГИКА РАЗБИВКИ ==========
+            # Проверяем длину и разбиваем если нужно
+            if len(ai_profile) > 3800:  # Немного меньше лимита для запаса
+                logger.info(f"📏 AI профиль слишком длинный: {len(ai_profile)} > 3800. Разбиваем на части.")
+                profile_parts = split_long_message(ai_profile)
+                logger.info(f"✂️ Разбито на {len(profile_parts)} частей")
+            else:
+                profile_parts = [ai_profile]
+            
+            # Форматируем первую часть
+            first_part = profile_parts[0]
+            formatted_profile = format_profile_text(first_part)
             
             # Добавляем заголовок, если его нет
             if not formatted_profile.startswith("🧠"):
@@ -235,14 +291,53 @@ def show_ai_profile(message: Message, user_id: int):
             
             # Форматируем с учетом имени пользователя
             if user_name and "обращаюсь" not in formatted_profile[:50].lower():
-                # Добавляем обращение в начало
                 formatted_profile = f"{user_name}, " + formatted_profile[0].lower() + formatted_profile[1:]
+            
+            # Добавляем индикатор продолжения для первой части
+            if len(profile_parts) > 1:
+                formatted_profile += f"\n\n<code>✉️ Часть 1/{len(profile_parts)}</code>"
             
             text = f"""
 {formatted_profile}
 
 👇 {bold('Что дальше?')}
 """
+            
+            # Создаем клавиатуру для первой части
+            keyboard = InlineKeyboardMarkup()
+            keyboard.row(InlineKeyboardButton("🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"))
+            keyboard.row(
+                InlineKeyboardButton("🎤 ЗАДАТЬ ВОПРОС", callback_data="ask_question"),
+                InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations")
+            )
+            keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
+            
+            # Отправляем первую часть
+            safe_send_message(
+                message,
+                text,
+                reply_markup=keyboard,
+                parse_mode='HTML',
+                delete_previous=True
+            )
+            
+            # Отправляем остальные части (без клавиатуры)
+            for i, part in enumerate(profile_parts[1:], start=2):
+                formatted_part = format_profile_text(part)
+                part_text = f"{formatted_part}\n\n<code>✉️ Часть {i}/{len(profile_parts)}</code>"
+                
+                safe_send_message(
+                    message,
+                    part_text,
+                    parse_mode='HTML',
+                    delete_previous=False  # Не удаляем предыдущие сообщения
+                )
+                
+                # Небольшая пауза между сообщениями
+                time.sleep(0.5)
+            
+            return  # Выходим, чтобы не отправлять еще одно сообщение
+            
         else:
             # Если не удалось сгенерировать, показываем обычный профиль
             scores = {}
@@ -290,7 +385,7 @@ def show_ai_profile(message: Message, user_id: int):
 👇 {bold('Что дальше?')}
 """
     
-    # Создаем клавиатуру
+    # Создаем клавиатуру (только если не было разбивки)
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"))
     keyboard.row(
@@ -353,16 +448,60 @@ def show_psychologist_thought(message: Message, user_id: int):
                 pass
         
         if thought:
-            # Форматируем текст
-            formatted_thought = format_psychologist_text(thought, user_name)
+            # ========== НОВАЯ ЛОГИКА РАЗБИВКИ ==========
+            # Проверяем длину и разбиваем если нужно
+            if len(thought) > 3800:
+                logger.info(f"📏 Мысли психолога слишком длинные: {len(thought)} > 3800. Разбиваем на части.")
+                thought_parts = split_long_message(thought)
+                logger.info(f"✂️ Разбито на {len(thought_parts)} частей")
+            else:
+                thought_parts = [thought]
+            
+            # Форматируем первую часть
+            first_part = thought_parts[0]
+            formatted_thought = format_psychologist_text(first_part, user_name)
+            
+            # Добавляем индикатор продолжения
+            part_indicator = f"\n\n<code>✉️ Часть 1/{len(thought_parts)}</code>" if len(thought_parts) > 1 else ""
             
             text = f"""
 🧠 {bold('МЫСЛИ ПСИХОЛОГА')}
 
-{formatted_thought}
+{formatted_thought}{part_indicator}
 
 👇 {bold('Что дальше?')}
 """
+            
+            # Создаем клавиатуру для первой части
+            keyboard = InlineKeyboardMarkup()
+            keyboard.row(InlineKeyboardButton("📊 К ПРОФИЛЮ", callback_data="show_profile"))
+            keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
+            keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
+            
+            # Отправляем первую часть
+            safe_send_message(
+                message,
+                text,
+                reply_markup=keyboard,
+                parse_mode='HTML',
+                delete_previous=True
+            )
+            
+            # Отправляем остальные части (без клавиатуры)
+            for i, part in enumerate(thought_parts[1:], start=2):
+                formatted_part = format_psychologist_text(part, user_name)
+                part_text = f"{formatted_part}\n\n<code>✉️ Часть {i}/{len(thought_parts)}</code>"
+                
+                safe_send_message(
+                    message,
+                    part_text,
+                    parse_mode='HTML',
+                    delete_previous=False
+                )
+                time.sleep(0.5)
+            
+            return  # Выходим, чтобы не отправлять еще одно сообщение
+            
         else:
             text = f"""
 🧠 {bold('МЫСЛИ ПСИХОЛОГА')}
@@ -398,7 +537,7 @@ def show_psychologist_thought(message: Message, user_id: int):
 👇 {bold('Что дальше?')}
 """
     
-    # Создаем клавиатуру
+    # Создаем клавиатуру (только если не было разбивки)
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("📊 К ПРОФИЛЮ", callback_data="show_profile"))
     keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
@@ -421,8 +560,6 @@ def show_final_profile(message: Message, user_id: int):
     # Проверяем, есть ли уже AI профиль
     if data.get("ai_generated_profile"):
         logger.info(f"✅ Найден сохраненный AI профиль для пользователя {user_id}")
-        # Используем send_with_status_cleanup для красивого перехода
-        from handlers.profile import show_ai_profile
         show_ai_profile(message, user_id)
         return
     
@@ -471,7 +608,6 @@ def show_final_profile(message: Message, user_id: int):
                 pass
         
         # Показываем AI профиль
-        from handlers.profile import show_ai_profile
         show_ai_profile(message, user_id)
         return
     
