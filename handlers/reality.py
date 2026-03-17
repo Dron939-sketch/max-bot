@@ -8,10 +8,11 @@
 import logging
 import re
 import time
+import asyncio
 from typing import Dict, Any, Optional
 
 from bot_instance import bot
-from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 
 # Наши модули
 from config import COMMUNICATION_MODES
@@ -26,6 +27,7 @@ from reality_check import (
     parse_goal_context_answers
 )
 from services import generate_route_ai
+from state import user_data, user_state_data, user_contexts, user_states, user_names
 
 logger = logging.getLogger(__name__)
 
@@ -35,37 +37,36 @@ logger = logging.getLogger(__name__)
 
 def get_user_data(user_id: int) -> Dict[str, Any]:
     """Получает данные пользователя"""
-    from main import user_data
     if user_id not in user_data:
         user_data[user_id] = {}
     return user_data[user_id]
 
 def get_user_state_data(user_id: int) -> Dict[str, Any]:
     """Получает данные состояния пользователя"""
-    from main import user_state_data
     if user_id not in user_state_data:
         user_state_data[user_id] = {}
     return user_state_data[user_id]
 
 def update_user_state_data(user_id: int, **kwargs):
     """Обновляет данные состояния пользователя"""
-    from main import user_state_data
     if user_id not in user_state_data:
         user_state_data[user_id] = {}
     user_state_data[user_id].update(kwargs)
 
 def get_user_context(user_id: int):
     """Получает контекст пользователя"""
-    from main import user_contexts
     return user_contexts.get(user_id)
 
-def get_user_names(user_id: int) -> str:
+def get_user_name(user_id: int) -> str:
     """Получает имя пользователя"""
-    from main import user_names
     return user_names.get(user_id, "друг")
 
+def set_user_state(user_id: int, state: str):
+    """Устанавливает состояние пользователя"""
+    user_states[user_id] = state
+
 # ============================================
-# ЕДИНЫЙ ОБРАБОТЧИК CALLBACK'ОВ (ДОБАВЛЕН!)
+# ЕДИНЫЙ ОБРАБОТЧИК CALLBACK'ОВ
 # ============================================
 
 def handle_reality_callback(call: CallbackQuery):
@@ -150,7 +151,7 @@ def start_life_context_collection(call: CallbackQuery, goal: Dict):
     Сбор базового контекста жизни (1 раз)
     """
     user_id = call.from_user.id
-    user_name = get_user_names(user_id)
+    user_name = get_user_name(user_id)
     
     questions = generate_life_context_questions()
     
@@ -172,8 +173,7 @@ def start_life_context_collection(call: CallbackQuery, goal: Dict):
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     
     # Устанавливаем состояние
-    from main import user_states
-    user_states[user_id] = "collecting_life_context"
+    set_user_state(user_id, "collecting_life_context")
     update_user_state_data(user_id, pending_goal=goal)
 
 def ask_goal_specific_questions(call: CallbackQuery, goal: Dict):
@@ -210,21 +210,19 @@ def ask_goal_specific_questions(call: CallbackQuery, goal: Dict):
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     
     # Устанавливаем состояние
-    from main import user_states
-    user_states[user_id] = "collecting_goal_context"
+    set_user_state(user_id, "collecting_goal_context")
     update_user_state_data(user_id, pending_goal=goal)
 
 # ============================================
 # ОБРАБОТЧИКИ ОТВЕТОВ
 # ============================================
 
-def process_life_context(message, user_id: int, text: str):
+def process_life_context(message: Message, user_id: int, text: str):
     """Обрабатывает ответы на вопросы о жизненном контексте"""
     context = get_user_context(user_id)
     if not context:
         from models import UserContext
         context = UserContext(user_id)
-        from main import user_contexts
         user_contexts[user_id] = context
     
     try:
@@ -256,7 +254,7 @@ def process_life_context(message, user_id: int, text: str):
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
     if goal:
-        # Создаём фейковый callback для продолжения
+        # Переходим к целевым вопросам
         from maxibot.types import CallbackQuery
         fake_call = CallbackQuery(
             id="fake",
@@ -268,10 +266,10 @@ def process_life_context(message, user_id: int, text: str):
         ask_goal_specific_questions(fake_call, goal)
     else:
         # Если цели нет, показываем меню
-        from .modes import show_main_menu_after_mode
+        from handlers.modes import show_main_menu_after_mode
         show_main_menu_after_mode(message, context)
 
-def process_goal_context(message, user_id: int, text: str):
+def process_goal_context(message: Message, user_id: int, text: str):
     """Обрабатывает ответы на вопросы о целевом контексте"""
     state_data = get_user_state_data(user_id)
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
@@ -297,7 +295,7 @@ def process_goal_context(message, user_id: int, text: str):
     
     update_user_state_data(user_id, goal_context=goal_context)
     
-    # Создаём фейковый callback для расчёта
+    # Переходим к расчёту
     from maxibot.types import CallbackQuery
     fake_call = CallbackQuery(
         id="fake",
@@ -442,15 +440,19 @@ def skip_to_route(call: CallbackQuery):
         delete_previous=True
     )
     
-    # Генерируем маршрут
-    route = generate_route_ai(user_id, user_data_dict, goal)
+    # Генерируем маршрут (асинхронно)
+    try:
+        loop = asyncio.get_running_loop()
+        route = loop.run_until_complete(generate_route_ai(user_id, user_data_dict, goal))
+    except RuntimeError:
+        route = asyncio.run(generate_route_ai(user_id, user_data_dict, goal))
     
     if route:
         update_user_state_data(user_id, current_route=route)
-        from .goals import show_route_step
+        from handlers.goals import show_route_step
         show_route_step(call, 1, route, status_msg)
     else:
-        from .goals import show_fallback_route
+        from handlers.goals import show_fallback_route
         show_fallback_route(call, goal, status_msg)
 
 # ============================================
@@ -478,15 +480,19 @@ def accept_feasibility_plan(call: CallbackQuery):
         delete_previous=True
     )
     
-    # Генерируем маршрут
-    route = generate_route_ai(user_id, user_data_dict, goal)
+    # Генерируем маршрут (асинхронно)
+    try:
+        loop = asyncio.get_running_loop()
+        route = loop.run_until_complete(generate_route_ai(user_id, user_data_dict, goal))
+    except RuntimeError:
+        route = asyncio.run(generate_route_ai(user_id, user_data_dict, goal))
     
     if route:
         update_user_state_data(user_id, current_route=route)
-        from .goals import show_route_step
+        from handlers.goals import show_route_step
         show_route_step(call, 1, route, status_msg)
     else:
-        from .goals import show_fallback_route
+        from handlers.goals import show_fallback_route
         show_fallback_route(call, goal, status_msg)
 
 def adjust_timeline(call: CallbackQuery):
@@ -568,7 +574,7 @@ def select_goal_50(call: CallbackQuery):
     update_user_state_data(user_id, current_destination=new_goal)
     
     # Показываем теоретический путь
-    from .goals import show_theoretical_path
+    from handlers.goals import show_theoretical_path
     show_theoretical_path(call, new_goal)
 
 def select_goal_30(call: CallbackQuery):
@@ -588,7 +594,7 @@ def select_goal_30(call: CallbackQuery):
     
     update_user_state_data(user_id, current_destination=new_goal)
     
-    from .goals import show_theoretical_path
+    from handlers.goals import show_theoretical_path
     show_theoretical_path(call, new_goal)
 
 def select_goal_blocks(call: CallbackQuery):
@@ -608,7 +614,7 @@ def select_goal_blocks(call: CallbackQuery):
     
     update_user_state_data(user_id, current_destination=new_goal)
     
-    from .goals import show_theoretical_path
+    from handlers.goals import show_theoretical_path
     show_theoretical_path(call, new_goal)
 
 
@@ -617,7 +623,7 @@ def select_goal_blocks(call: CallbackQuery):
 # ============================================
 
 __all__ = [
-    'handle_reality_callback',  # ← ДОБАВЛЕНО!
+    'handle_reality_callback',
     'show_reality_check',
     'start_life_context_collection',
     'ask_goal_specific_questions',
