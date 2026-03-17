@@ -92,10 +92,12 @@ from morning_messages import MorningMessageManager
 from profiles import *
 from questions import *
 from hypno_module import HypnoOrchestrator, TherapeuticTales, Anchoring
-from weekend_planner import get_weekend_planner, get_weekend_ideas_keyboard
+from weekend_planner import WeekendPlanner, get_weekend_ideas_keyboard
 from keyboards import *
 from message_utils import safe_send_message, safe_edit_message, safe_delete_message
 from state import *
+from scheduler import TaskScheduler
+from question_analyzer import QuestionAnalyzer, create_analyzer_from_user_data
 
 # Импорты из formatters.py
 from formatters import (
@@ -115,6 +117,7 @@ from handlers.help import show_help, show_tale, show_benefits
 from handlers.goals import *
 from handlers.questions import *
 from handlers.admin import *
+from handlers.voice import handle_voice_message  # 👈 НОВЫЙ ИМПОРТ
 
 # Настройка логирования
 logging.basicConfig(
@@ -146,7 +149,8 @@ morning_manager = MorningMessageManager()
 hypno = HypnoOrchestrator()
 tales = TherapeuticTales()
 anchoring = Anchoring()
-weekend_planner = get_weekend_planner()
+weekend_planner = WeekendPlanner()
+scheduler = TaskScheduler()  # 👈 НОВЫЙ МЕНЕДЖЕР
 
 # ============================================
 # HEALTH CHECK ДЛЯ RENDER
@@ -288,6 +292,47 @@ def check_consistency(scores_list: list) -> bool:
     return std_dev <= 1.3
 
 # ============================================
+# ФУНКЦИЯ ПРОВЕРКИ API ПРИ СТАРТЕ
+# ============================================
+
+async def check_api_on_startup():
+    """Проверяет работу API при запуске"""
+    logger.info("🔍 Проверка API при запуске...")
+    
+    results = {
+        "deepseek": False,
+        "deepgram": False,
+        "yandex": False,
+        "openweather": False
+    }
+    
+    # Проверка DeepSeek
+    if DEEPSEEK_API_KEY:
+        try:
+            test_response = await call_deepseek("Ответь 'OK' одним словом", max_tokens=10)
+            results["deepseek"] = test_response is not None
+            logger.info(f"✅ DeepSeek API: {'работает' if results['deepseek'] else 'ошибка'}")
+        except Exception as e:
+            logger.error(f"❌ DeepSeek API ошибка: {e}")
+    
+    # Проверка Deepgram (по наличию ключа)
+    if DEEPGRAM_API_KEY:
+        results["deepgram"] = True
+        logger.info("✅ Deepgram API ключ найден")
+    
+    # Проверка Yandex (по наличию ключа)
+    if YANDEX_API_KEY:
+        results["yandex"] = True
+        logger.info("✅ Yandex TTS ключ найден")
+    
+    # Проверка OpenWeather
+    if OPENWEATHER_API_KEY:
+        results["openweather"] = True
+        logger.info("✅ OpenWeather API ключ найден")
+    
+    return results
+
+# ============================================
 # ОБРАБОТЧИКИ КОМАНД
 # ============================================
 
@@ -342,6 +387,181 @@ def cmd_context(message: types.Message):
     
     safe_send_message(message, "🔄 Давайте обновим ваш контекст")
     start_context(message)
+
+# 👇 НОВЫЕ КОМАНДЫ ДЛЯ АДМИНИСТРАТОРОВ
+@bot.message_handler(commands=['test_yandex'])
+def cmd_test_yandex(message: types.Message):
+    """Тестирование Yandex TTS"""
+    if message.from_user.id not in ADMIN_IDS:
+        safe_send_message(message, "⛔ Доступ запрещен")
+        return
+    
+    # Создаем задачу для асинхронного тестирования
+    asyncio.create_task(test_yandex_async(message))
+
+@bot.message_handler(commands=['test_weather'])
+def cmd_test_weather(message: types.Message):
+    """Тестирование OpenWeather API"""
+    if message.from_user.id not in ADMIN_IDS:
+        safe_send_message(message, "⛔ Доступ запрещен")
+        return
+    
+    asyncio.create_task(test_weather_async(message))
+
+@bot.message_handler(commands=['test_voices'])
+def cmd_test_voices(message: types.Message):
+    """Тестирование голосов"""
+    if message.from_user.id not in ADMIN_IDS:
+        safe_send_message(message, "⛔ Доступ запрещен")
+        return
+    
+    asyncio.create_task(test_voices_async(message))
+
+@bot.message_handler(commands=['weekend'])
+def cmd_weekend(message: types.Message):
+    """Команда /weekend - идеи на выходные"""
+    user_id = message.from_user.id
+    data = user_data.get(user_id, {})
+    
+    if not data.get("profile_data") and not data.get("ai_generated_profile"):
+        safe_send_message(
+            message,
+            "❓ Сначала нужно пройти тест, чтобы я понимал твой профиль. Используй /start",
+            delete_previous=True
+        )
+        return
+    
+    asyncio.create_task(show_weekend_ideas(message, user_id))
+
+# 👇 АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ ТЕСТИРОВАНИЯ
+async def test_yandex_async(message: types.Message):
+    """Асинхронное тестирование Yandex TTS"""
+    status_msg = await safe_send_message(
+        message,
+        "🎧 Тестирую Yandex TTS...",
+        delete_previous=True
+    )
+    
+    test_text = "Привет! Это тестовое голосовое сообщение."
+    results = []
+    
+    for mode in ["coach", "psychologist", "trainer"]:
+        audio = await text_to_speech(test_text, mode)
+        if audio:
+            # Здесь нужно отправить аудиофайл
+            # В MAX API может быть другой способ
+            results.append(f"✅ {COMMUNICATION_MODES[mode]['display_name']}")
+        else:
+            results.append(f"❌ {COMMUNICATION_MODES[mode]['display_name']}")
+        await asyncio.sleep(0.5)
+    
+    await safe_delete_message(message.chat.id, status_msg.message_id)
+    await safe_send_message(
+        message,
+        "📊 Результаты тестирования Yandex TTS:\n" + "\n".join(results),
+        delete_previous=True
+    )
+
+async def test_weather_async(message: types.Message):
+    """Асинхронное тестирование OpenWeather"""
+    if not OPENWEATHER_API_KEY:
+        await safe_send_message(message, "❌ OPENWEATHER_API_KEY не настроен", delete_previous=True)
+        return
+    
+    test_city = "Москва"
+    status_msg = await safe_send_message(
+        message,
+        f"🌍 Тестирую погоду для города {test_city}...",
+        delete_previous=True
+    )
+    
+    try:
+        import aiohttp
+        url = f"http://api.openweathermap.org/data/2.5/weather?q={test_city}&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    temp = data['main']['temp']
+                    feels_like = data['main']['feels_like']
+                    desc = data['weather'][0]['description']
+                    humidity = data['main']['humidity']
+                    wind = data['wind']['speed']
+                    
+                    text = f"✅ Погода работает!\n\n"
+                    text += f"📍 Город: {test_city}\n"
+                    text += f"🌡 Температура: {temp}°C (ощущается как {feels_like}°C)\n"
+                    text += f"☁️ Описание: {desc}\n"
+                    text += f"💧 Влажность: {humidity}%\n"
+                    text += f"💨 Ветер: {wind} м/с"
+                    
+                    await safe_delete_message(message.chat.id, status_msg.message_id)
+                    await safe_send_message(message, text, delete_previous=True)
+                else:
+                    error_text = await response.text()
+                    await safe_delete_message(message.chat.id, status_msg.message_id)
+                    await safe_send_message(message, f"❌ Ошибка {response.status}: {error_text[:200]}", delete_previous=True)
+    except Exception as e:
+        await safe_delete_message(message.chat.id, status_msg.message_id)
+        await safe_send_message(message, f"❌ Ошибка: {e}", delete_previous=True)
+
+async def test_voices_async(message: types.Message):
+    """Тестирование всех голосов"""
+    await safe_send_message(
+        message,
+        "🎙 Функция тестирования голосов в разработке",
+        delete_previous=True
+    )
+
+async def show_weekend_ideas(message: types.Message, user_id: int):
+    """Показывает идеи на выходные"""
+    data = user_data.get(user_id, {})
+    context = user_contexts.get(user_id)
+    user_name = user_names.get(user_id, "друг")
+    
+    # Получаем scores из данных
+    scores = {}
+    for k in VECTORS:
+        levels = data.get("behavioral_levels", {}).get(k, [])
+        scores[k] = sum(levels) / len(levels) if levels else 3.0
+    
+    profile_data = data.get("profile_data", {})
+    
+    # Отправляем статусное сообщение
+    status_msg = await safe_send_message(
+        message,
+        "🎨 Генерирую идеи специально для тебя...\n\nЭто займёт несколько секунд.",
+        delete_previous=True
+    )
+    
+    try:
+        ideas_text = await weekend_planner.get_weekend_ideas(
+            user_id=user_id,
+            user_name=user_name,
+            scores=scores,
+            profile_data=profile_data,
+            context=context
+        )
+        
+        await safe_delete_message(message.chat.id, status_msg.message_id)
+        
+        keyboard = get_weekend_ideas_keyboard()
+        
+        await safe_send_message(
+            message,
+            ideas_text,
+            reply_markup=keyboard,
+            delete_previous=True
+        )
+    except Exception as e:
+        logger.error(f"Ошибка генерации идей: {e}")
+        await safe_delete_message(message.chat.id, status_msg.message_id)
+        await safe_send_message(
+            message,
+            "😔 Что-то пошло не так. Попробуй позже.",
+            delete_previous=True
+        )
 
 # ============================================
 # ФУНКЦИЯ show_context_complete (вынесена из stages.py)
@@ -472,6 +692,12 @@ def handle_context_message_wrapper(message: types.Message):
             keep_last=1
         )
 
+# 👇 НОВЫЙ ОБРАБОТЧИК ГОЛОСОВЫХ СООБЩЕНИЙ
+@bot.message_handler(content_types=['voice'])
+def handle_voice_wrapper(message: types.Message):
+    """Обработчик голосовых сообщений"""
+    asyncio.create_task(handle_voice_message(message))
+
 @bot.message_handler(func=lambda message: True)
 def handle_unknown_message(message: types.Message):
     user_id = message.from_user.id
@@ -530,9 +756,19 @@ def main():
     print("📊 5 этапов тестирования: ✅")
     print("🎯 Динамический подбор целей: ✅")
     print("🔍 Проверка реальности: ✅")
+    print("🎤 Голосовые сообщения: " + ("✅" if DEEPGRAM_API_KEY and YANDEX_API_KEY else "❌"))
+    print("🗓 Планировщик задач: ✅")
+    print("🎨 Идеи на выходные: ✅")
+    print("🔬 Глубинный анализ вопросов: ✅")
     print("="*80 + "\n")
     
     logger.info("🚀 Бот для MAX запущен!")
+    
+    # Запускаем проверку API
+    asyncio.create_task(check_api_on_startup())
+    
+    # Запускаем планировщик
+    scheduler.start()
     
     is_render = os.environ.get('RENDER') is not None
     retry_count = 0
