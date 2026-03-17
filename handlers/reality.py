@@ -3,6 +3,7 @@
 """
 Обработчики проверки реальности для MAX
 Восстановлено из оригинального bot3.py и адаптировано
+ИСПРАВЛЕНО: все функции, вызываемые с await, сделаны асинхронными
 """
 
 import logging
@@ -112,7 +113,7 @@ def handle_reality_callback(call: CallbackQuery):
 # ОСНОВНЫЕ ФУНКЦИИ ПРОВЕРКИ РЕАЛЬНОСТИ
 # ============================================
 
-def show_reality_check(call: CallbackQuery, state_data: Dict = None):
+async def show_reality_check(call: CallbackQuery, state_data: Dict = None):
     """
     Запускает проверку реальности для выбранной цели
     """
@@ -134,7 +135,7 @@ def show_reality_check(call: CallbackQuery, state_data: Dict = None):
     
     if not goal:
         text = f"""
-🧠 <b>ФРЕДИ: СНАЧАЛА ВЫБЕРИ ЦЕЛЬ</b>
+🧠 **ФРЕДИ: СНАЧАЛА ВЫБЕРИ ЦЕЛЬ**
 
 Чтобы проверить реальность, нужно знать, к чему мы стремимся.
 
@@ -144,18 +145,18 @@ def show_reality_check(call: CallbackQuery, state_data: Dict = None):
         keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
         keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_mode_selected"))
         
-        safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+        await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
         return
     
     # Проверяем, есть ли базовый контекст
     if not (context and context.life_context_complete):
         # Если нет — собираем
-        start_life_context_collection(call, goal, state_data)
+        await start_life_context_collection(call, goal, state_data)
     else:
         # Если есть — задаём целевые вопросы
-        ask_goal_specific_questions(call, goal, state_data)
+        await ask_goal_specific_questions(call, goal, state_data)
 
-def start_life_context_collection(call: CallbackQuery, goal: Dict, state_data: Dict = None):
+async def start_life_context_collection(call: CallbackQuery, goal: Dict, state_data: Dict = None):
     """
     Сбор базового контекста жизни (1 раз)
     """
@@ -167,27 +168,27 @@ def start_life_context_collection(call: CallbackQuery, goal: Dict, state_data: D
     questions = generate_life_context_questions()
     
     text = f"""
-🧠 <b>ФРЕДИ: ДАВАЙ ПОЗНАКОМИМСЯ С ТВОЕЙ РЕАЛЬНОСТЬЮ</b>
+🧠 **ФРЕДИ: ДАВАЙ ПОЗНАКОМИМСЯ С ТВОЕЙ РЕАЛЬНОСТЬЮ**
 
-{user_name}, чтобы понять, что потребуется для твоей цели "<b>{goal.get('name', 'цель')}</b>", мне нужно знать твои условия.
+{user_name}, чтобы понять, что потребуется для твоей цели "**{goal.get('name', 'цель')}**", мне нужно знать твои условия.
 
 Это вопросы на 2 минуты. Ответь коротко (можно одним сообщением все сразу):
 
 {questions}
 
-👇 <b>Напиши ответы одним сообщением или отправь голосовое сообщение 🎤</b>
+👇 **Напиши ответы одним сообщением или отправь голосовое сообщение 🎤**
 """
     
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("⏭ ПРОПУСТИТЬ (будет неточно)", callback_data="skip_life_context"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
     
     # Устанавливаем состояние
     set_user_state(user_id, "collecting_life_context")
     update_user_state_data(user_id, pending_goal=goal)
 
-def ask_goal_specific_questions(call: CallbackQuery, goal: Dict, state_data: Dict = None):
+async def ask_goal_specific_questions(call: CallbackQuery, goal: Dict, state_data: Dict = None):
     """
     Задаёт вопросы, специфичные для цели
     """
@@ -206,21 +207,21 @@ def ask_goal_specific_questions(call: CallbackQuery, goal: Dict, state_data: Dic
     questions = generate_goal_context_questions(goal_id, profile, mode, goal_name)
     
     text = f"""
-🧠 <b>ФРЕДИ: УТОЧНЯЮ ПОД ТВОЮ ЦЕЛЬ</b>
+🧠 **ФРЕДИ: УТОЧНЯЮ ПОД ТВОЮ ЦЕЛЬ**
 
-{user_name}, твоя цель: <b>{goal_name}</b>
+{user_name}, твоя цель: **{goal_name}**
 
 Чтобы точно рассчитать маршрут с учётом твоих условий, ответь на несколько вопросов:
 
 {questions}
 
-👇 <b>Напиши ответы (можно по порядку) или отправь голосовое сообщение 🎤</b>
+👇 **Напиши ответы (можно по порядку) или отправь голосовое сообщение 🎤**
 """
     
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("⏭ ПРОПУСТИТЬ (общий план)", callback_data="skip_goal_questions"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
     
     # Устанавливаем состояние
     set_user_state(user_id, "collecting_goal_context")
@@ -276,7 +277,8 @@ def process_life_context(message: Message, user_id: int, text: str):
             data="fake",
             chat_instance=""
         )
-        ask_goal_specific_questions(fake_call, goal)
+        # Запускаем асинхронную функцию
+        asyncio.create_task(ask_goal_specific_questions(fake_call, goal))
     else:
         # Если цели нет, показываем меню
         from handlers.modes import show_main_menu_after_mode
@@ -317,13 +319,14 @@ def process_goal_context(message: Message, user_id: int, text: str):
         data="fake",
         chat_instance=""
     )
-    calculate_and_show_feasibility(fake_call, user_id)
+    # Запускаем асинхронную функцию
+    asyncio.create_task(calculate_and_show_feasibility(fake_call, user_id))
 
 # ============================================
 # РАСЧЁТ ДОСТИЖИМОСТИ
 # ============================================
 
-def calculate_and_show_feasibility(call: CallbackQuery, user_id: int):
+async def calculate_and_show_feasibility(call: CallbackQuery, user_id: int):
     """
     Рассчитывает достижимость и показывает результат
     """
@@ -334,7 +337,7 @@ def calculate_and_show_feasibility(call: CallbackQuery, user_id: int):
     
     goal = state_data.get("current_destination") or state_data.get("pending_goal")
     if not goal:
-        safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
+        await safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
         return
     
     goal_id = goal.get("id", "income_growth")
@@ -366,23 +369,23 @@ def calculate_and_show_feasibility(call: CallbackQuery, user_id: int):
     status_emoji = "✅" if result['deficit'] < 30 else "⚠️" if result['deficit'] < 60 else "❌"
     
     text = f"""
-🧠 <b>ФРЕДИ: РЕАЛЬНОСТЬ ЦЕЛИ</b>
+🧠 **ФРЕДИ: РЕАЛЬНОСТЬ ЦЕЛИ**
 
-{status_emoji} <b>{result['status_text']}</b>
+{status_emoji} **{result['status_text']}**
 
-Твоя цель: <b>{goal.get('name', 'цель')}</b>
+Твоя цель: **{goal.get('name', 'цель')}**
 
-👇 <b>ЧТО ПОТРЕБУЕТСЯ:</b>
+👇 **ЧТО ПОТРЕБУЕТСЯ:**
 {result['requirements_text']}
 
-👇 <b>ЧТО У ТЕБЯ ЕСТЬ:</b>
+👇 **ЧТО У ТЕБЯ ЕСТЬ:**
 {result['available_text']}
 
-📊 <b>ДЕФИЦИТ РЕСУРСОВ:</b> {result['deficit']}%
+📊 **ДЕФИЦИТ РЕСУРСОВ:** {result['deficit']}%
 
 {result['recommendation']}
 
-👇 <b>Что делаем, {user_name}?</b>
+👇 **Что делаем, {user_name}?**
 """
     
     keyboard = InlineKeyboardMarkup()
@@ -391,13 +394,13 @@ def calculate_and_show_feasibility(call: CallbackQuery, user_id: int):
     keyboard.row(InlineKeyboardButton("📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal"))
     keyboard.row(InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 # ============================================
 # ОБРАБОТЧИКИ ПРОПУСКА
 # ============================================
 
-def skip_life_context(call: CallbackQuery, state_data: Dict = None):
+async def skip_life_context(call: CallbackQuery, state_data: Dict = None):
     """
     Пропускает сбор жизненного контекста
     """
@@ -407,7 +410,7 @@ def skip_life_context(call: CallbackQuery, state_data: Dict = None):
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
     text = f"""
-🧠 <b>ФРЕДИ: БУДЕТ НЕТОЧНО</b>
+🧠 **ФРЕДИ: БУДЕТ НЕТОЧНО**
 
 Ок, пропускаем. Маршрут построю без учёта твоих условий — он будет общим.
 
@@ -419,9 +422,9 @@ def skip_life_context(call: CallbackQuery, state_data: Dict = None):
     keyboard.row(InlineKeyboardButton("🔄 ВСЁ-ТАКИ ОТВЕТИТЬ", callback_data="check_reality"))
     keyboard.row(InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
-def skip_goal_questions(call: CallbackQuery, state_data: Dict = None):
+async def skip_goal_questions(call: CallbackQuery, state_data: Dict = None):
     """
     Пропускает целевые вопросы
     """
@@ -433,9 +436,9 @@ def skip_goal_questions(call: CallbackQuery, state_data: Dict = None):
     # Используем данные по умолчанию
     update_user_state_data(user_id, goal_context={"time_per_week": 5, "budget": 0})
     
-    calculate_and_show_feasibility(call, user_id)
+    await calculate_and_show_feasibility(call, user_id)
 
-def skip_to_route(call: CallbackQuery, state_data: Dict = None):
+async def skip_to_route(call: CallbackQuery, state_data: Dict = None):
     """
     Пропускает проверку и сразу строит маршрут
     """
@@ -447,13 +450,13 @@ def skip_to_route(call: CallbackQuery, state_data: Dict = None):
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
     if not goal:
-        safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
+        await safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
         return
     
     # Отправляем статусное сообщение
-    status_msg = safe_send_message(
+    status_msg = await safe_send_message(
         call.message,
-        f"🧠 Строю маршрут к цели: <b>{goal.get('name')}</b>...\n\nЭто займёт несколько секунд.",
+        f"🧠 Строю маршрут к цели: **{goal.get('name')}**...\n\nЭто займёт несколько секунд.",
         delete_previous=True
     )
     
@@ -462,21 +465,22 @@ def skip_to_route(call: CallbackQuery, state_data: Dict = None):
         loop = asyncio.get_running_loop()
         route = loop.run_until_complete(generate_route_ai(user_id, user_data_dict, goal))
     except RuntimeError:
-        route = asyncio.run(generate_route_ai(user_id, user_data_dict, goal))
+        route = await generate_route_ai(user_id, user_data_dict, goal)
     
     if route:
         update_user_state_data(user_id, current_route=route)
         from handlers.goals import show_route_step
-        show_route_step(call, 1, route, status_msg)
+        # show_route_step должна быть асинхронной или вызываться без await
+        await show_route_step(call, 1, route, status_msg)
     else:
         from handlers.goals import show_fallback_route
-        show_fallback_route(call, goal, status_msg)
+        await show_fallback_route(call, goal, status_msg)
 
 # ============================================
 # ОБРАБОТЧИКИ РЕШЕНИЙ ПОСЛЕ ПРОВЕРКИ
 # ============================================
 
-def accept_feasibility_plan(call: CallbackQuery, state_data: Dict = None):
+async def accept_feasibility_plan(call: CallbackQuery, state_data: Dict = None):
     """
     Принимает план и переходит к построению маршрута
     """
@@ -488,13 +492,13 @@ def accept_feasibility_plan(call: CallbackQuery, state_data: Dict = None):
     goal = state_data.get("current_destination")
     
     if not goal:
-        safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
+        await safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
         return
     
     # Отправляем статусное сообщение
-    status_msg = safe_send_message(
+    status_msg = await safe_send_message(
         call.message,
-        f"🧠 Строю маршрут к цели: <b>{goal.get('name')}</b>...\n\nЭто займёт несколько секунд.",
+        f"🧠 Строю маршрут к цели: **{goal.get('name')}**...\n\nЭто займёт несколько секунд.",
         delete_previous=True
     )
     
@@ -503,15 +507,15 @@ def accept_feasibility_plan(call: CallbackQuery, state_data: Dict = None):
         loop = asyncio.get_running_loop()
         route = loop.run_until_complete(generate_route_ai(user_id, user_data_dict, goal))
     except RuntimeError:
-        route = asyncio.run(generate_route_ai(user_id, user_data_dict, goal))
+        route = await generate_route_ai(user_id, user_data_dict, goal)
     
     if route:
         update_user_state_data(user_id, current_route=route)
         from handlers.goals import show_route_step
-        show_route_step(call, 1, route, status_msg)
+        await show_route_step(call, 1, route, status_msg)
     else:
         from handlers.goals import show_fallback_route
-        show_fallback_route(call, goal, status_msg)
+        await show_fallback_route(call, goal, status_msg)
 
 def adjust_timeline(call: CallbackQuery, state_data: Dict = None):
     """
@@ -523,9 +527,9 @@ def adjust_timeline(call: CallbackQuery, state_data: Dict = None):
     goal = state_data.get("current_destination")
     
     text = f"""
-🧠 <b>ФРЕДИ: КОРРЕКТИРОВКА СРОКОВ</b>
+🧠 **ФРЕДИ: КОРРЕКТИРОВКА СРОКОВ**
 
-Текущий срок: <b>6 месяцев</b>
+Текущий срок: **6 месяцев**
 
 Если увеличить срок до 12 месяцев, нагрузка снизится:
 • Время: с 13 ч/нед до 6-7 ч/нед
@@ -542,19 +546,19 @@ def adjust_timeline(call: CallbackQuery, state_data: Dict = None):
     keyboard.row(InlineKeyboardButton("📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal"))
     keyboard.row(InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 def reduce_goal(call: CallbackQuery, state_data: Dict = None):
     """
     Предлагает снизить планку цели
     """
     text = f"""
-🧠 <b>ФРЕДИ: СНИЖЕНИЕ ПЛАНКИ</b>
+🧠 **ФРЕДИ: СНИЖЕНИЕ ПЛАНКИ**
 
 Вместо "увеличить доход в 2 раза" можно выбрать:
-• <b>Увеличить на 50%</b> (реалистично за 6 месяцев)
-• <b>Увеличить на 30%</b> (легко за 3-4 месяца)
-• <b>Проработать денежные блоки</b> (подготовка)
+• **Увеличить на 50%** (реалистично за 6 месяцев)
+• **Увеличить на 30%** (легко за 3-4 месяца)
+• **Проработать денежные блоки** (подготовка)
 
 👇 Что выбираешь?
 """
@@ -565,14 +569,14 @@ def reduce_goal(call: CallbackQuery, state_data: Dict = None):
     keyboard.row(InlineKeyboardButton("🧠 ПРОРАБОТКА БЛОКОВ", callback_data="select_goal_blocks"))
     keyboard.row(InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
-def apply_extended_timeline(call: CallbackQuery, state_data: Dict = None):
+async def apply_extended_timeline(call: CallbackQuery, state_data: Dict = None):
     """
     Применяет увеличенный срок и пересчитывает
     """
     # Пока просто принимаем план
-    accept_feasibility_plan(call, state_data)
+    await accept_feasibility_plan(call, state_data)
 
 def select_goal_50(call: CallbackQuery, state_data: Dict = None):
     """
