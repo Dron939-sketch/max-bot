@@ -3,7 +3,7 @@
 """
 Утилиты для отправки сообщений в MAX
 Исправленная версия с поддержкой длинных сообщений и безопасной отправкой
-СИНХРОННАЯ ВЕРСИЯ - ДОБАВЛЕНА ОЧИСТКА ОТ ПРОБЕЛОВ
+СИНХРОННАЯ ВЕРСИЯ - ДОБАВЛЕНА АГРЕССИВНАЯ ОЧИСТКА ОТ ПРОБЕЛОВ
 """
 
 import logging
@@ -30,6 +30,36 @@ MAX_HISTORY_PER_USER = 10
 
 # Максимальная длина сообщения (лимит MAX)
 MAX_MESSAGE_LENGTH = 4096
+
+
+def aggressive_clean_text(text: str) -> str:
+    """
+    АГРЕССИВНАЯ очистка текста от любых пробелов в начале строк
+    Дополнительная функция для гарантии ширины сообщения
+    """
+    if not text:
+        return text
+    
+    # Разбиваем на строки
+    lines = text.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        if not line.strip():
+            # Пустые строки оставляем как есть (для абзацев)
+            cleaned_lines.append('')
+        else:
+            # Удаляем ВСЕ пробелы и табуляции в начале строки
+            cleaned = line.lstrip()
+            cleaned_lines.append(cleaned)
+    
+    # Собираем обратно
+    result = '\n'.join(cleaned_lines)
+    
+    # Дополнительно удаляем пробелы в самом начале всего текста
+    result = result.lstrip()
+    
+    return result
 
 
 def safe_send_message(
@@ -66,11 +96,13 @@ def safe_send_message(
         logger.error("❌ Попытка отправить пустое сообщение")
         return None
     
-    # ✅ КРИТИЧЕСКИ ВАЖНО: Очищаем текст от пробелов в начале каждой строки
-    # Это гарантирует, что сообщение будет на всю ширину экрана
+    # ✅ ШАГ 1: Агрессивная очистка от пробелов в начале строк
+    text = aggressive_clean_text(text)
+    
+    # ✅ ШАГ 2: Очищаем текст от пробелов в начале каждой строки (штатная функция)
     text = ensure_full_width(text)
     
-    # ✅ Преобразуем HTML в Markdown
+    # ✅ ШАГ 3: Преобразуем HTML в Markdown
     markdown_text = html_to_markdown(text)
     
     # Проверяем длину текста
@@ -156,6 +188,9 @@ def safe_send_message(
             plain_text = re.sub(r'\*\*(.*?)\*\*', r'\1', markdown_text)
             plain_text = re.sub(r'\*(.*?)\*', r'\1', plain_text)
             
+            # Ещё раз агрессивно очищаем
+            plain_text = aggressive_clean_text(plain_text)
+            
             if len(plain_text) > MAX_MESSAGE_LENGTH:
                 plain_text = plain_text[:MAX_MESSAGE_LENGTH - 3] + "..."
             
@@ -203,7 +238,8 @@ def send_with_status_cleanup(
     """
     chat_id = message.chat.id
     
-    # ✅ Очищаем текст от пробелов в начале каждой строки
+    # ✅ Агрессивная очистка текста
+    text = aggressive_clean_text(text)
     text = ensure_full_width(text)
     
     # Преобразуем HTML в Markdown
@@ -271,6 +307,7 @@ def send_with_status_cleanup(
         try:
             plain_text = re.sub(r'\*\*(.*?)\*\*', r'\1', markdown_text)
             plain_text = re.sub(r'\*(.*?)\*', r'\1', plain_text)
+            plain_text = aggressive_clean_text(plain_text)
             
             sent_msg = bot.send_message(
                 chat_id, 
@@ -309,7 +346,8 @@ def safe_edit_message(
     Returns:
         отредактированное сообщение или None при ошибке
     """
-    # ✅ Очищаем текст от пробелов в начале каждой строки
+    # ✅ Агрессивная очистка текста
+    new_text = aggressive_clean_text(new_text)
     new_text = ensure_full_width(new_text)
     
     # Преобразуем HTML в Markdown
@@ -462,7 +500,8 @@ def split_and_send_long_message(
     """
     from handlers.profile import split_long_message
     
-    # ✅ Очищаем текст от пробелов в начале каждой строки
+    # ✅ Агрессивная очистка текста
+    text = aggressive_clean_text(text)
     text = ensure_full_width(text)
     
     # Преобразуем HTML в Markdown
@@ -475,6 +514,10 @@ def split_and_send_long_message(
     separator = "─" * 40
     
     for i, part in enumerate(parts):
+        # ✅ Каждую часть дополнительно очищаем
+        part = aggressive_clean_text(part)
+        part = ensure_full_width(part)
+        
         # Для промежуточных частей - добавляем индикатор на всю ширину
         if i < len(parts) - 1:
             part_text = f"{part}\n\n{separator}\n📄 Часть {i+1} из {len(parts)}\n{separator}"
@@ -521,5 +564,6 @@ __all__ = [
     'safe_delete_message',
     'clear_user_history',
     'get_user_history',
-    'split_and_send_long_message'
+    'split_and_send_long_message',
+    'aggressive_clean_text'
 ]
