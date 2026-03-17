@@ -7,7 +7,6 @@ import logging
 import time
 from typing import Optional
 
-from maxibot import types
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 
 from bot_instance import bot
@@ -22,11 +21,11 @@ from keyboards import (
 from formatters import bold
 from message_utils import safe_send_message
 
-# ИСПРАВЛЕННЫЕ ИМПОРТЫ - используем state.py
+# Импорты из state.py
 from state import (
     user_data, user_names, user_contexts, 
     get_user_context, get_user_context_dict,
-    clear_state, set_state, get_state
+    clear_state, set_state, get_state, TestStates
 )
 
 logger = logging.getLogger(__name__)
@@ -104,22 +103,22 @@ def cmd_start(message: types.Message):
         profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
         
         text = f"""
-🧠 <b>ФРЕДИ: ВИРТУАЛЬНЫЙ ПСИХОЛОГ</b>
+🧠 {bold('ФРЕДИ: ВИРТУАЛЬНЫЙ ПСИХОЛОГ')}
 
 👋 О, {user_name}, я вас помню!
 (У меня, в отличие от людей, с памятью всё отлично — спасибо базе данных)
 
-📊 <b>ВАШ ПРОФИЛЬ:</b> {profile_code}
+📊 {bold('ВАШ ПРОФИЛЬ:')} {profile_code}
 (Лежит у меня в архивах, пылится...)
 
-❓ <b>ЧТО ДЕЛАЕМ?</b>
+❓ {bold('ЧТО ДЕЛАЕМ?')}
 
 Вы можете:
 🔄 Пройти тест заново — вдруг вы изменились?
 📋 Посмотреть свой профиль
 🎯 Выбрать цель
 
-⬇️ <b>ВЫБИРАЙТЕ:</b>
+⬇️ {bold('ВЫБИРАЙТЕ:')}
 """
         
         keyboard = get_restart_keyboard()
@@ -128,11 +127,11 @@ def cmd_start(message: types.Message):
     
     # Проверяем, заполнен ли контекст (город, пол, возраст)
     if not (context.city and context.gender and context.age):
-        # Новый пользователь
+        # Новый пользователь - показываем красивое приветствие из Telegram
         welcome_text = f"""
 {user_name}, привет! Ну, здравствуйте, дорогой человек! 👋
 
-🧠 <b>Я — Фреди, виртуальный психолог.</b>
+🧠 {bold('Я — Фреди, виртуальный психолог.')}
 Оцифрованная версия Андрея Мейстера, если хотите — его цифровой слепок.
 
 🎭 Короче, я — это он, только батарейка дольше держит и пожрать не прошу.
@@ -142,7 +141,7 @@ def cmd_start(message: types.Message):
 🧐 Чтобы я понимал, с кем имею дело и чем могу быть полезен —
 давайте-ка пройдём небольшой тест.
 
-📊 <b>Всего 5 этапов:</b>
+📊 {bold('Всего 5 этапов:')}
 
 1️⃣ Конфигурация восприятия — как вы фильтруете реальность
 2️⃣ Конфигурация мышления — как ваш мозг перерабатывает информацию
@@ -150,12 +149,17 @@ def cmd_start(message: types.Message):
 4️⃣ Точка роста — куда двигаться, чтобы не топтаться на месте
 5️⃣ Глубинные паттерны — что сформировало вас как личность
 
-⏱ <b>15 минут</b> — и я буду знать о вас больше, чем вы думаете.
+⏱ {bold('15 минут')} — и я буду знать о вас больше, чем вы думаете.
 
 🚀 Ну что, начнём наше знакомство?
 """
         
-        keyboard = get_start_context_keyboard()
+        keyboard = InlineKeyboardMarkup()
+        keyboard.row(
+            InlineKeyboardButton("🚀 Давай, погнали!", callback_data="start_context"),
+            InlineKeyboardButton("🤨 А ты вообще кто такой?", callback_data="why_details")
+        )
+        
         safe_send_message(message, welcome_text, reply_markup=keyboard)
         return
     
@@ -226,7 +230,11 @@ def callback_restart_test(call: types.CallbackQuery):
 🚀 Погнали?
 """
     
-    keyboard = get_start_context_keyboard()
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(
+        InlineKeyboardButton("🚀 Давай, погнали!", callback_data="start_context")
+    )
+    
     safe_send_message(call.message, text, reply_markup=keyboard, delete_previous=True)
 
 
@@ -269,10 +277,10 @@ def callback_back_to_start(call: types.CallbackQuery):
 # ============================================
 
 def show_why_details(call: types.CallbackQuery):
-    """Показывает детальную информацию о боте"""
+    """Показывает детальную информацию о боте (из Telegram)"""
     
     text = f"""
-🎭 <b>Ну, вопрос хороший. Давайте по существу.</b>
+🎭 {bold('Ну, вопрос хороший. Давайте по существу.')}
 
 Видите ли, дорогой человек, я — экспериментальная модель.
 Андрей Мейстер однажды подумал: "А что, если я создам свою цифровую копию?
@@ -280,14 +288,14 @@ def show_why_details(call: types.CallbackQuery):
 
 Так я и появился. 🧠
 
-🧐 <b>Что я умею:</b>
+🧐 {bold('Что я умею:')}
 
 • Вижу паттерны там, где вы видите просто день сурка
 • Нахожу систему в ваших "случайных" решениях
 • Понимаю, почему вы выбираете одних и тех же "не тех" людей
 • Я реально беспристрастен — у меня нет плохого настроения
 
-🎯 <b>Конкретно по тесту:</b>
+🎯 {bold('Конкретно по тесту:')}
 
 1️⃣ Восприятие — поймём, какую линзу вы носите
 2️⃣ Мышление — узнаем, как вы пережёвываете реальность
@@ -295,7 +303,7 @@ def show_why_details(call: types.CallbackQuery):
 4️⃣ Точка роста — я скажу, куда вам двигаться
 5️⃣ Глубинные паттерны — заглянем в детство и подсознание
 
-⏱ <b>15 минут</b> — и я составлю ваш профиль.
+⏱ {bold('15 минут')} — и я составлю ваш профиль.
 
 👌 Погнали?"""
     
@@ -331,7 +339,7 @@ def show_main_menu(message: types.Message, context: UserContext):
     else:
         welcome_text += f"🏡 Личное время. Есть что обсудить?\n\n"
     
-    welcome_text += f"👇 <b>Выберите действие:</b>"
+    welcome_text += f"👇 {bold('Выберите действие:')}"
     
     keyboard = get_main_menu_keyboard()
     
