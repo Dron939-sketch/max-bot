@@ -538,6 +538,12 @@ async def handle_sync_callback(call: CallbackQuery):
         fake_msg = FakeMessage(user_id, call.message.chat.id)
         cmd_start(fake_msg)
     
+    # ✅ ДОБАВЛЕНО: обработка back_to_context (возврат к контексту из начала теста)
+    elif data == "back_to_context":
+        logger.info(f"◀️ back_to_context для пользователя {user_id}")
+        from handlers.context import start_context
+        start_context(call.message)
+    
     # ============================================
     # ИГНОРИРУЕМЫЕ CALLBACK'И
     # ============================================
