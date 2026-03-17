@@ -4,7 +4,7 @@
 Модуль для форматирования текста для МАКС
 Использует Markdown-форматирование (**жирный**, *курсив*)
 
-ВЕРСИЯ 2.3 - ИСПРАВЛЕНО РАЗБИЕНИЕ СООБЩЕНИЙ И ФОРМАТИРОВАНИЕ МЫСЛЕЙ ПСИХОЛОГА
+ВЕРСИЯ 2.4 - ПРИНУДИТЕЛЬНАЯ ОЧИСТКА ВСЕХ СООБЩЕНИЙ
 """
 
 import re
@@ -83,6 +83,30 @@ def clean_text_for_safe_display(text: str) -> str:
     return text.strip()
 
 
+def ensure_full_width(text: str) -> str:
+    """
+    ГАРАНТИРУЕТ, что сообщение будет на всю ширину.
+    Убирает все пробелы в начале каждой строки.
+    """
+    if not text:
+        return text
+    
+    # Разбиваем на строки
+    lines = text.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        if not line.strip():
+            # Пустые строки оставляем как есть (для абзацев)
+            cleaned_lines.append('')
+        else:
+            # Убираем ВСЕ пробелы и табуляции в начале строки
+            cleaned = line.lstrip()
+            cleaned_lines.append(cleaned)
+    
+    return '\n'.join(cleaned_lines)
+
+
 def split_long_message(text: str, max_length: int = 3500) -> List[str]:
     """
     Разбивает длинное сообщение на части, стараясь не разрывать абзацы.
@@ -96,6 +120,9 @@ def split_long_message(text: str, max_length: int = 3500) -> List[str]:
     """
     if not text:
         return []
+    
+    # Сначала применяем очистку ширины
+    text = ensure_full_width(text)
     
     # Если текст короткий, возвращаем как есть
     if len(text) <= max_length:
@@ -169,29 +196,16 @@ def split_long_message(text: str, max_length: int = 3500) -> List[str]:
     if current_part:
         parts.append(current_part)
     
-    # ✅ ОЧИСТКА: Убираем пробелы в начале каждой части
+    # ✅ ФИНАЛЬНАЯ ОЧИСТКА: Применяем ensure_full_width к каждой части
     cleaned_parts = []
     for i, part in enumerate(parts):
-        # Убираем пробелы в начале
-        cleaned = re.sub(r'^\s+', '', part)
-        
-        # Убираем пробелы в начале каждой строки внутри части
-        lines = cleaned.split('\n')
-        cleaned_lines = []
-        for line in lines:
-            # Если строка начинается с маркера списка, сохраняем один пробел
-            if re.match(r'^[•\-*\d]', line.lstrip()):
-                cleaned_lines.append(' ' + line.lstrip())
-            else:
-                # Для обычного текста убираем все ведущие пробелы
-                cleaned_lines.append(line.lstrip())
-        
-        cleaned = '\n'.join(cleaned_lines)
+        # Очищаем от пробелов в начале каждой строки
+        cleaned = ensure_full_width(part)
         
         # Для всех частей, кроме первой, добавляем маркер начала обычного текста
         if i > 0:
-            # Добавляем обычный текст в начале, чтобы сбросить форматирование
-            cleaned = "⠀" + cleaned  # Символ-невидимка
+            # Символ-невидимка для сброса форматирования
+            cleaned = "⠀" + cleaned
         
         cleaned_parts.append(cleaned)
     
@@ -251,12 +265,8 @@ def format_profile_text(text: str) -> str:
     # Нормализуем пустые строки (не больше двух подряд)
     text = re.sub(r'\n{3,}', '\n\n', text)
     
-    # ✅ Убираем пробелы в начале каждой строки
-    lines = text.split('\n')
-    cleaned_lines = []
-    for line in lines:
-        cleaned_lines.append(line.lstrip())
-    text = '\n'.join(cleaned_lines)
+    # ✅ Принудительная очистка ширины
+    text = ensure_full_width(text)
     
     return text.strip()
 
@@ -320,18 +330,8 @@ def format_psychologist_text(text: str, user_name: str = "") -> str:
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = re.sub(r'^\n+', '', text)
     
-    # ✅ Убираем пробелы в начале каждой строки (ОЧЕНЬ ВАЖНО для ширины)
-    lines = text.split('\n')
-    cleaned_lines = []
-    for line in lines:
-        # Если строка пустая, оставляем как есть
-        if not line.strip():
-            cleaned_lines.append('')
-        else:
-            # Убираем пробелы в начале строки
-            cleaned_lines.append(line.lstrip())
-    
-    text = '\n'.join(cleaned_lines)
+    # ✅ Принудительная очистка ширины
+    text = ensure_full_width(text)
     
     return text.strip()
 
@@ -381,6 +381,7 @@ __all__ = [
     'emoji_text',
     'calculate_progress',
     'clean_text_for_safe_display',
+    'ensure_full_width',
     'split_long_message',
     'format_profile_text',
     'format_psychologist_text',
