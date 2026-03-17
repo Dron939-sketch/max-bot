@@ -3,7 +3,7 @@
 """
 Обработчики проверки реальности для MAX
 Восстановлено из оригинального bot3.py и адаптировано
-ИСПРАВЛЕНО: удален дублирующийся обработчик callback'ов, все функции асинхронные
+ИСПРАВЛЕНО: убраны await перед синхронными функциями safe_send_message
 """
 
 import logging
@@ -102,7 +102,8 @@ async def show_reality_check(call: CallbackQuery, state_data: Dict = None):
         keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
         keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_mode_selected"))
         
-        await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
+        # Убираем await!
+        safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
         return
     
     # Проверяем, есть ли базовый контекст
@@ -139,7 +140,8 @@ async def start_life_context_collection(call: CallbackQuery, goal: Dict, state_d
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("⏭ ПРОПУСТИТЬ (будет неточно)", callback_data="skip_life_context"))
     
-    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
+    # Убираем await!
+    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
     
     # Устанавливаем состояние
     set_user_state(user_id, "collecting_life_context")
@@ -178,7 +180,8 @@ async def ask_goal_specific_questions(call: CallbackQuery, goal: Dict, state_dat
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("⏭ ПРОПУСТИТЬ (общий план)", callback_data="skip_goal_questions"))
     
-    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
+    # Убираем await!
+    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
     
     # Устанавливаем состояние
     set_user_state(user_id, "collecting_goal_context")
@@ -294,7 +297,8 @@ async def calculate_and_show_feasibility(call: CallbackQuery, user_id: int):
     
     goal = state_data.get("current_destination") or state_data.get("pending_goal")
     if not goal:
-        await safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
+        # Убираем await!
+        safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
         return
     
     goal_id = goal.get("id", "income_growth")
@@ -351,7 +355,8 @@ async def calculate_and_show_feasibility(call: CallbackQuery, user_id: int):
     keyboard.row(InlineKeyboardButton("📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal"))
     keyboard.row(InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
-    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
+    # Убираем await!
+    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 # ============================================
 # ОБРАБОТЧИКИ ПРОПУСКА
@@ -379,7 +384,8 @@ async def skip_life_context(call: CallbackQuery, state_data: Dict = None):
     keyboard.row(InlineKeyboardButton("🔄 ВСЁ-ТАКИ ОТВЕТИТЬ", callback_data="check_reality"))
     keyboard.row(InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
-    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
+    # Убираем await!
+    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 async def skip_goal_questions(call: CallbackQuery, state_data: Dict = None):
     """
@@ -407,11 +413,12 @@ async def skip_to_route(call: CallbackQuery, state_data: Dict = None):
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
     if not goal:
-        await safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
+        # Убираем await!
+        safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
         return
     
-    # Отправляем статусное сообщение
-    status_msg = await safe_send_message(
+    # Отправляем статусное сообщение (без await!)
+    status_msg = safe_send_message(
         call.message,
         f"🧠 Строю маршрут к цели: **{goal.get('name')}**...\n\nЭто займёт несколько секунд.",
         delete_previous=True
@@ -427,7 +434,7 @@ async def skip_to_route(call: CallbackQuery, state_data: Dict = None):
     if route:
         update_user_state_data(user_id, current_route=route)
         from handlers.goals import show_route_step
-        # show_route_step должна быть асинхронной или вызываться без await
+        # show_route_step должна быть асинхронной
         await show_route_step(call, 1, route, status_msg)
     else:
         from handlers.goals import show_fallback_route
@@ -449,11 +456,12 @@ async def accept_feasibility_plan(call: CallbackQuery, state_data: Dict = None):
     goal = state_data.get("current_destination")
     
     if not goal:
-        await safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
+        # Убираем await!
+        safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
         return
     
-    # Отправляем статусное сообщение
-    status_msg = await safe_send_message(
+    # Отправляем статусное сообщение (без await!)
+    status_msg = safe_send_message(
         call.message,
         f"🧠 Строю маршрут к цели: **{goal.get('name')}**...\n\nЭто займёт несколько секунд.",
         delete_previous=True
@@ -503,7 +511,8 @@ async def adjust_timeline(call: CallbackQuery, state_data: Dict = None):
     keyboard.row(InlineKeyboardButton("📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal"))
     keyboard.row(InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
-    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
+    # Убираем await!
+    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 async def reduce_goal(call: CallbackQuery, state_data: Dict = None):
     """
@@ -526,7 +535,8 @@ async def reduce_goal(call: CallbackQuery, state_data: Dict = None):
     keyboard.row(InlineKeyboardButton("🧠 ПРОРАБОТКА БЛОКОВ", callback_data="select_goal_blocks"))
     keyboard.row(InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
-    await safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
+    # Убираем await!
+    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 async def apply_extended_timeline(call: CallbackQuery, state_data: Dict = None):
     """
