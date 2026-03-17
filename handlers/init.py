@@ -21,6 +21,7 @@ from . import admin
 from . import help
 from . import reality
 from . import routes
+from . import voice  # 👈 ДОБАВЛЕНО
 
 logger.info("✅ Все обработчики загружены")
 
@@ -36,5 +37,6 @@ __all__ = [
     'admin',
     'help',
     'reality',
-    'routes'
+    'routes',
+    'voice'  # 👈 ДОБАВЛЕНО
 ]
