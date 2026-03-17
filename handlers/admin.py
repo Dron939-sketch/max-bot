@@ -7,6 +7,7 @@
 
 import logging
 import time
+import datetime
 from typing import Dict, Any, List, Optional
 
 from bot_instance import bot
@@ -14,37 +15,40 @@ from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 
 # Наши модули
 from config import ADMIN_IDS
-from message_utils import safe_send_message, safe_edit_message
+from message_utils import safe_send_message, safe_edit_message, safe_delete_message
 from keyboards import get_back_keyboard
+
+# ✅ ИСПРАВЛЕНО: Импортируем из state, а не из main
+from state import (
+    user_data, user_contexts, user_names, user_state_data, user_states,
+    get_state, set_state, get_state_data, update_state_data, clear_state
+)
+from main import stats  # stats оставляем, так как это менеджер, а не данные
 
 logger = logging.getLogger(__name__)
 
 # ============================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (теперь используют state)
 # ============================================
 
 def get_user_data(user_id: int) -> Dict[str, Any]:
     """Получает данные пользователя"""
-    from main import user_data
     if user_id not in user_data:
         user_data[user_id] = {}
     return user_data[user_id]
 
 def get_user_state_data(user_id: int) -> Dict[str, Any]:
     """Получает данные состояния пользователя"""
-    from main import user_state_data
     if user_id not in user_state_data:
         user_state_data[user_id] = {}
     return user_state_data[user_id]
 
 def get_user_context(user_id: int):
     """Получает контекст пользователя"""
-    from main import user_contexts
     return user_contexts.get(user_id)
 
 def get_user_names(user_id: int) -> str:
     """Получает имя пользователя"""
-    from main import user_names
     return user_names.get(user_id, "Пользователь")
 
 def is_admin(user_id: int) -> bool:
@@ -157,8 +161,7 @@ def cmd_broadcast(message: Message):
     
     safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     
-    # Устанавливаем состояние ожидания текста рассылки
-    from main import user_states
+    # ✅ ИСПРАВЛЕНО: используем импортированный user_states из state
     user_states[message.from_user.id] = "awaiting_broadcast"
 
 @bot.message_handler(commands=['users'])
@@ -180,13 +183,12 @@ def show_admin_panel(message_or_call):
     if not check_admin_access(message_or_call):
         return
     
-    from main import user_data, user_contexts, stats
+    from main import stats
     
     # Собираем статистику
     total_users = len(user_data)
     active_today = 0
     # Подсчёт активных за сегодня
-    import datetime
     today = datetime.datetime.now().date()
     for uid, data in user_data.items():
         last_active = data.get('last_active')
@@ -311,8 +313,7 @@ def start_broadcast(call: CallbackQuery):
         delete_previous=True
     )
     
-    # Устанавливаем состояние ожидания текста рассылки
-    from main import user_states
+    # ✅ ИСПРАВЛЕНО: используем импортированный user_states из state
     user_states[call.from_user.id] = "awaiting_broadcast"
 
 def process_broadcast(message: Message, text: str):
@@ -322,8 +323,6 @@ def process_broadcast(message: Message, text: str):
     user_id = message.from_user.id
     if not is_admin(user_id):
         return
-    
-    from main import user_data
     
     # Получаем список всех пользователей
     all_users = list(user_data.keys())
@@ -364,7 +363,6 @@ def process_broadcast(message: Message, text: str):
     
     # Удаляем статусное сообщение
     try:
-        from message_utils import safe_delete_message
         safe_delete_message(message.chat.id, status_msg.message_id)
     except:
         pass
@@ -395,8 +393,6 @@ def show_users_list(message_or_call):
     if not check_admin_access(message_or_call):
         return
     
-    from main import user_data, user_names, user_contexts
-    
     all_users = list(user_data.keys())
     
     if not all_users:
@@ -410,7 +406,7 @@ def show_users_list(message_or_call):
             context = user_contexts.get(uid)
             
             # Определяем, прошел ли тест
-            test_passed = "✅" if user_data[uid].get("profile_data") else "❌"
+            test_passed = "✅" if user_data[uid].get("profile_data") or user_data[uid].get("ai_generated_profile") else "❌"
             
             # Режим
             mode = context.communication_mode if context else "coach"
@@ -535,8 +531,6 @@ def cleanup_cache(call: CallbackQuery):
     if not check_admin_access(call):
         return
     
-    from main import user_state_data
-    
     # Очищаем state_data для всех пользователей
     user_state_data.clear()
     
@@ -570,8 +564,6 @@ def cleanup_users(call: CallbackQuery):
     """Очищает неактивных пользователей"""
     if not check_admin_access(call):
         return
-    
-    from main import user_data, user_contexts, user_names, user_state_data
     
     # Оставляем только пользователей с профилями
     active_users = {}
@@ -615,8 +607,6 @@ def cleanup_tests(call: CallbackQuery):
     """Очищает незавершённые тесты"""
     if not check_admin_access(call):
         return
-    
-    from main import user_data
     
     # Удаляем данные незавершённых тестов
     cleaned = 0
