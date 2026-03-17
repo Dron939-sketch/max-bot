@@ -500,7 +500,18 @@ def show_mode_selected(message: types.Message, mode: str):
 👇 {bold(f'С чего начнём, {user_name}?')}
 """
     
-    keyboard = get_mode_confirmation_keyboard()
+    # Проверяем, есть ли профиль
+    has_profile = False
+    if profile_data or user_data.get(user_id, {}).get("ai_generated_profile"):
+        has_profile = True
+    else:
+        user_data_dict = user_data.get(user_id, {})
+        required_minimal = ["perception_type", "thinking_level", "behavioral_levels"]
+        if all(field in user_data_dict for field in required_minimal):
+            has_profile = True
+    
+    # Получаем клавиатуру с проверкой профиля
+    keyboard = get_main_menu_after_mode_keyboard(has_profile)
     
     safe_send_message(message, full_text, reply_markup=keyboard, delete_previous=True)
     
@@ -577,9 +588,24 @@ def show_main_menu_after_mode(message: types.Message, context: UserContext):
     
     text += "• Выбрать тему — отношения, деньги, самоощущение\n"
     text += "• Послушать сказку — для глубокой работы\n"
-    text += "• Посмотреть портрет — напомнить себе, кто вы"
     
-    keyboard = get_main_menu_after_mode_keyboard()
+    # Проверяем, есть ли профиль
+    user_id = message.chat.id
+    user_data_dict = user_data.get(user_id, {})
+    has_profile = False
+    
+    if user_data_dict.get("profile_data") or user_data_dict.get("ai_generated_profile"):
+        has_profile = True
+    else:
+        required_minimal = ["perception_type", "thinking_level", "behavioral_levels"]
+        if all(field in user_data_dict for field in required_minimal):
+            has_profile = True
+    
+    if has_profile:
+        text += "• Посмотреть портрет — напомнить себе, кто вы"
+    
+    # Получаем клавиатуру с проверкой профиля
+    keyboard = get_main_menu_after_mode_keyboard(has_profile)
     
     safe_send_message(message, text, reply_markup=keyboard)
 
