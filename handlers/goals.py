@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики целей и маршрутов для MAX
-Версия 2.0 - ПОЛНАЯ с проверкой реальности и категориями целей
+Версия 2.1 - ИСПРАВЛЕНА ОШИБКА С STATE_DATA
 """
 
 import logging
@@ -14,7 +14,7 @@ from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 
 # Наши модули
 from config import COMMUNICATION_MODES
-from message_utils import safe_send_message
+from message_utils import safe_send_message, safe_delete_message
 from keyboards import get_back_keyboard, get_main_menu_after_mode_keyboard
 from services import generate_route_ai
 from reality_check import (
@@ -513,7 +513,6 @@ async def show_dynamic_destinations(call: CallbackQuery, state_data: Dict):
         callback_data="back_to_mode_selected"
     ))
     
-    # ✅ ИСПРАВЛЕНО: убран await
     safe_send_message(
         call.message,
         text,
@@ -566,7 +565,6 @@ async def show_theoretical_path(call: CallbackQuery, state_data: Dict, goal_info
     keyboard.add(InlineKeyboardButton(text="🔄 ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     keyboard.add(InlineKeyboardButton(text="◀️ НАЗАД", callback_data="back_to_mode_selected"))
     
-    # ✅ ИСПРАВЛЕНО: убран await
     safe_send_message(
         call.message,
         text,
@@ -623,7 +621,6 @@ async def custom_destination(call: CallbackQuery, state_data: Dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton(text="◀️ НАЗАД", callback_data="show_dynamic_destinations"))
     
-    # ✅ ИСПРАВЛЕНО: убран await
     safe_send_message(
         call.message,
         text,
@@ -661,7 +658,6 @@ async def show_reality_check(call: CallbackQuery, state_data: Dict):
         keyboard.add(InlineKeyboardButton(text="🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
         keyboard.add(InlineKeyboardButton(text="◀️ НАЗАД", callback_data="back_to_mode_selected"))
         
-        # ✅ ИСПРАВЛЕНО: убран await
         safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
         return
     
@@ -699,7 +695,6 @@ async def start_life_context_collection(call: CallbackQuery, state_data: Dict, g
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton(text="⏭ ПРОПУСТИТЬ (будет неточно)", callback_data="skip_life_context"))
     
-    # ✅ ИСПРАВЛЕНО: убран await
     safe_send_message(
         call.message,
         text,
@@ -742,7 +737,6 @@ async def ask_goal_specific_questions(call: CallbackQuery, state_data: Dict, goa
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton(text="⏭ ПРОПУСТИТЬ (общий план)", callback_data="skip_goal_questions"))
     
-    # ✅ ИСПРАВЛЕНО: убран await
     safe_send_message(
         call.message,
         text,
@@ -818,7 +812,6 @@ async def calculate_and_show_feasibility(call: CallbackQuery, state_data: Dict):
     keyboard.add(InlineKeyboardButton(text="📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal"))
     keyboard.add(InlineKeyboardButton(text="◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
-    # ✅ ИСПРАВЛЕНО: убран await
     safe_send_message(
         call.message,
         text,
@@ -848,7 +841,6 @@ async def skip_life_context(call: CallbackQuery, state_data: Dict):
     keyboard.add(InlineKeyboardButton(text="🔄 ВСЁ-ТАКИ ОТВЕТИТЬ", callback_data="check_reality"))
     keyboard.add(InlineKeyboardButton(text="◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
-    # ✅ ИСПРАВЛЕНО: убран await
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
 
@@ -915,7 +907,6 @@ async def adjust_timeline(call: CallbackQuery, state_data: Dict):
     keyboard.add(InlineKeyboardButton(text="🔄 ОСТАВИТЬ КАК ЕСТЬ", callback_data="accept_feasibility_plan"))
     keyboard.add(InlineKeyboardButton(text="📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal"))
     
-    # ✅ ИСПРАВЛЕНО: убран await
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
 
@@ -940,7 +931,6 @@ async def reduce_goal(call: CallbackQuery, state_data: Dict):
     keyboard.add(InlineKeyboardButton(text="🧠 ПРОРАБОТКА БЛОКОВ", callback_data="select_goal_blocks"))
     keyboard.add(InlineKeyboardButton(text="◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
-    # ✅ ИСПРАВЛЕНО: убран await
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
 
 
@@ -1016,7 +1006,7 @@ async def build_route(call: CallbackQuery, state_data: Dict, goal_id: str):
         goal_info = state_data.get("current_destination")
     
     if not goal_info:
-        await safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
+        safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
         return
     
     # Отправляем статусное сообщение
@@ -1041,11 +1031,26 @@ async def build_route(call: CallbackQuery, state_data: Dict, goal_id: str):
         await show_fallback_route(call, state_data, goal_info, status_msg)
 
 
-async def show_route_step(call: CallbackQuery, state_data: Dict, step: int, route: Dict, status_msg=None):
+async def show_route_step(
+    call: CallbackQuery, 
+    state_data: Dict, 
+    step: int, 
+    route: Dict, 
+    status_msg=None
+):
     """Показывает текущий шаг маршрута"""
     user_id = call.from_user.id
     
+    # ✅ ВАЖНО: проверяем, что state_data - это словарь
+    if not isinstance(state_data, dict):
+        logger.error(f"❌ state_data не является словарем: {type(state_data)}")
+        # Пробуем получить state_data заново
+        state_data = get_user_state_data_dict(user_id)
+    
     destination = state_data.get("current_destination", {})
+    if not isinstance(destination, dict):
+        destination = {}
+    
     mode = state_data.get("communication_mode", "coach")
     mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
     
@@ -1072,12 +1077,11 @@ async def show_route_step(call: CallbackQuery, state_data: Dict, step: int, rout
     # Удаляем статусное сообщение, если оно есть
     if status_msg:
         try:
-            from message_utils import safe_delete_message
-            await safe_delete_message(call.message.chat.id, status_msg.message_id)
-        except:
-            pass
+            # ✅ safe_delete_message - синхронная функция, не используем await
+            safe_delete_message(call.message.chat.id, status_msg.message_id)
+        except Exception as e:
+            logger.error(f"Ошибка при удалении статусного сообщения: {e}")
     
-    # ✅ ИСПРАВЛЕНО: убран await
     safe_send_message(
         call.message,
         text,
@@ -1091,6 +1095,12 @@ async def show_route_step(call: CallbackQuery, state_data: Dict, step: int, rout
 async def show_fallback_route(call: CallbackQuery, state_data: Dict, destination: dict, status_msg=None):
     """Резервный маршрут, если ИИ не отвечает"""
     user_id = call.from_user.id
+    
+    # ✅ ВАЖНО: проверяем, что state_data - это словарь
+    if not isinstance(state_data, dict):
+        logger.error(f"❌ state_data не является словарем: {type(state_data)}")
+        state_data = get_user_state_data_dict(user_id)
+    
     mode = state_data.get("communication_mode", "coach")
     mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
     
@@ -1125,12 +1135,11 @@ async def show_fallback_route(call: CallbackQuery, state_data: Dict, destination
     # Удаляем статусное сообщение, если оно есть
     if status_msg:
         try:
-            from message_utils import safe_delete_message
-            await safe_delete_message(call.message.chat.id, status_msg.message_id)
-        except:
-            pass
+            # ✅ safe_delete_message - синхронная функция
+            safe_delete_message(call.message.chat.id, status_msg.message_id)
+        except Exception as e:
+            logger.error(f"Ошибка при удалении статусного сообщения: {e}")
     
-    # ✅ ИСПРАВЛЕНО: убран await
     safe_send_message(
         call.message,
         text,
@@ -1159,7 +1168,6 @@ async def route_step_done(call: CallbackQuery, state_data: Dict):
     if next_step > 3:
         await complete_route(call, state_data)
     else:
-        # ✅ ИСПРАВЛЕНО: убран await
         safe_send_message(
             call.message,
             f"✅ {bold(f'Этап {step} выполнен!')}\n\nПереходим к этапу {next_step}...",
@@ -1196,7 +1204,6 @@ async def complete_route(call: CallbackQuery, state_data: Dict):
     keyboard.add(InlineKeyboardButton(text="🧠 К ПОРТРЕТУ", callback_data="show_results"))
     keyboard.add(InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions"))
     
-    # ✅ ИСПРАВЛЕНО: убран await
     safe_send_message(
         call.message,
         text,
