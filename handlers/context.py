@@ -4,6 +4,7 @@
 Обработчики сбора контекста (город, возраст, пол) для MAX
 Восстановлено из оригинального bot3.py и адаптировано
 ДОБАВЛЕНО: Сохранение контекста в PostgreSQL
+ИСПРАВЛЕНО: Устранен циклический импорт с main.py
 """
 
 import logging
@@ -13,7 +14,6 @@ import threading
 import asyncio
 from typing import Dict, Any, Optional, Tuple
 
-from bot_instance import bot
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 
 # Наши модули
@@ -32,8 +32,8 @@ from state import (
     get_state, set_state, get_state_data, update_state_data, clear_state, TestStates
 )
 
-# Импортируем базу данных из main
-from main import db, save_user_to_db
+# ✅ ИСПРАВЛЕНО: Импортируем базу данных из отдельного модуля, а не из main
+from db_instance import db, save_user_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -289,7 +289,8 @@ def handle_context_callback(call: CallbackQuery):
         )
         
         # Показываем главное меню
-        from .modes import show_main_menu
+        # ✅ ИСПРАВЛЕНО: Импортируем здесь, чтобы избежать циклического импорта
+        from handlers.modes import show_main_menu
         show_main_menu(call.message, context)
         
         call.answer()
