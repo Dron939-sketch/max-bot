@@ -4,7 +4,7 @@
 ОБЪЕДИНЕННЫЙ ФАЙЛ: Обработчики вопросов тестирования И умных вопросов
 Версия для MAX - ПОЛНАЯ с голосовой поддержкой
 ИСПРАВЛЕНО: убраны HTML-теги, используется Markdown, исправлено дублирование сообщений, добавлена блокировка
-ИСПРАВЛЕНО (v2.1): Убраны await перед синхронными функциями safe_send_message
+ИСПРАВЛЕНО (v2.2): Добавлена поддержка БД, исправлены асинхронные вызовы
 """
 
 import logging
@@ -14,6 +14,7 @@ import random
 import asyncio
 import tempfile
 import os
+import threading  # ✅ ДОБАВЛЕНО
 from typing import Dict, Any, List, Optional
 
 from maxibot import MaxiBot
@@ -30,6 +31,9 @@ from state import (
     user_data, user_names, user_contexts,
     get_state, set_state, get_state_data, update_state_data, TestStates
 )
+
+# ✅ ДОБАВЛЕНО: импорт для БД
+from db_instance import db, save_user_to_db
 
 # Импорты из profiles.py
 from profiles import VECTORS, STAGE_1_FEEDBACK, STAGE_2_FEEDBACK, STAGE_3_FEEDBACK
@@ -59,6 +63,27 @@ from handlers.voice import send_voice_to_max
 logger = logging.getLogger(__name__)
 
 # ============================================
+# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# ============================================
+
+def run_async_task(coro_func, *args, **kwargs):
+    """
+    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
+    """
+    def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            coro = coro_func(*args, **kwargs)
+            loop.run_until_complete(coro)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+        finally:
+            loop.close()
+    
+    threading.Thread(target=_wrapper, daemon=True).start()
+
+# ============================================
 # БЛОКИРОВКА ДЛЯ ПРЕДОТВРАЩЕНИЯ ДВОЙНОЙ ОБРАБОТКИ
 # ============================================
 
@@ -72,6 +97,49 @@ def is_processing(user_id: int) -> bool:
 def set_processing(user_id: int, value: bool):
     """Устанавливает флаг обработки"""
     _processing_lock[user_id] = value
+
+# ============================================
+# ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
+# ============================================
+
+async def save_answer_to_db(user_id: int, answer_data: Dict[str, Any]):
+    """Сохраняет отдельный ответ в БД"""
+    try:
+        # Получаем последний результат теста
+        results = await db.get_user_test_results(user_id, limit=1)
+        test_result_id = results[0]['id'] if results else None
+        
+        await db.save_test_answer(
+            user_id=user_id,
+            test_result_id=test_result_id,
+            stage=answer_data.get('stage', 0),
+            question_index=answer_data.get('question_index', 0),
+            question_text=answer_data.get('question', ''),
+            answer_text=answer_data.get('answer', ''),
+            answer_value=answer_data.get('option', ''),
+            scores=answer_data.get('scores'),
+            measures=answer_data.get('measures'),
+            strategy=answer_data.get('strategy'),
+            dilts=answer_data.get('dilts'),
+            pattern=answer_data.get('pattern'),
+            target=answer_data.get('target')
+        )
+        logger.debug(f"💾 Ответ этапа {answer_data.get('stage')} для {user_id} сохранен в БД")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения ответа для {user_id}: {e}")
+
+async def save_question_analysis_to_db(user_id: int, question: str, answer: str, analysis: Dict[str, Any]):
+    """Сохраняет анализ вопроса в кэш БД"""
+    try:
+        await db.cache_question_analysis(user_id, question, {
+            'question': question,
+            'answer': answer,
+            'analysis': analysis,
+            'timestamp': time.time()
+        })
+        logger.debug(f"💾 Анализ вопроса для {user_id} сохранен в БД")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения анализа для {user_id}: {e}")
 
 # ============================================
 # ЧАСТЬ 1: ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -321,14 +389,18 @@ def handle_stage_1_answer(call: CallbackQuery, user_id: int, state_data: dict):
                 perception_scores[axis] = perception_scores.get(axis, 0) + score
         
         all_answers = data.get("all_answers", [])
-        all_answers.append({
+        answer_data = {
             'stage': 1,
             'question_index': current,
             'question': question['text'],
             'answer': selected_option['text'],
             'option': option_id,
             'scores': selected_option.get('scores', {})
-        })
+        }
+        all_answers.append(answer_data)
+        
+        # ✅ Сохраняем в БД
+        run_async_task(save_answer_to_db, user_id, answer_data)
         
         update_state_data(user_id,
             perception_scores=perception_scores,
@@ -499,7 +571,7 @@ def handle_stage_2_answer(call: CallbackQuery, user_id: int, state_data: dict):
                 pass
         
         all_answers = data.get("all_answers", [])
-        all_answers.append({
+        answer_data = {
             'stage': 2,
             'question_index': current,
             'question': question['text'],
@@ -507,7 +579,11 @@ def handle_stage_2_answer(call: CallbackQuery, user_id: int, state_data: dict):
             'option': selected_level,
             'measures': measures,
             'perception_type': perception_type
-        })
+        }
+        all_answers.append(answer_data)
+        
+        # ✅ Сохраняем в БД
+        run_async_task(save_answer_to_db, user_id, answer_data)
         
         update_state_data(user_id,
             stage2_level_scores_dict=stage2_level_scores_dict,
@@ -683,14 +759,18 @@ def handle_stage_3_answer(call: CallbackQuery, user_id: int, state_data: dict):
             behavioral_levels[strategy].append(level_val)
         
         all_answers = data.get("all_answers", [])
-        all_answers.append({
+        answer_data = {
             'stage': 3,
             'question_index': current,
             'question': question['text'],
             'answer': option_text,
             'answer_value': level_val,
             'strategy': strategy
-        })
+        }
+        all_answers.append(answer_data)
+        
+        # ✅ Сохраняем в БД
+        run_async_task(save_answer_to_db, user_id, answer_data)
         
         update_state_data(user_id,
             stage3_level_scores=stage3_level_scores,
@@ -856,14 +936,18 @@ def handle_stage_4_answer(call: CallbackQuery, user_id: int, state_data: dict):
         dilts_counts[dilts] = dilts_counts.get(dilts, 0) + 1
         
         all_answers = data.get("all_answers", [])
-        all_answers.append({
+        answer_data = {
             'stage': 4,
             'question_index': current,
             'question': question['text'],
             'answer': selected_option['text'],
             'option': option_id,
             'dilts': dilts
-        })
+        }
+        all_answers.append(answer_data)
+        
+        # ✅ Сохраняем в БД
+        run_async_task(save_answer_to_db, user_id, answer_data)
         
         update_state_data(user_id,
             dilts_counts=dilts_counts,
@@ -1006,14 +1090,19 @@ def handle_stage_5_answer(call: CallbackQuery, user_id: int, state_data: dict):
             return
         
         stage5_answers = data.get("stage5_answers", [])
-        stage5_answers.append({
+        answer_data = {
+            'stage': 5,
             'question_id': current,
             'question': question['text'],
             'answer': selected_option['text'],
             'option': option_id,
             'pattern': selected_option.get('pattern'),
             'target': question.get('target')
-        })
+        }
+        stage5_answers.append(answer_data)
+        
+        # ✅ Сохраняем в БД
+        run_async_task(save_answer_to_db, user_id, answer_data)
         
         update_state_data(user_id,
             stage5_answers=stage5_answers,
@@ -1100,12 +1189,23 @@ def handle_clarifying_answer(call: CallbackQuery, user_id: int, state_data: dict
     question = questions[current]
     
     answers = data.get("clarifying_answers", [])
-    answers.append({
+    answer_data = {
         "question": question['text'],
         "answer_key": answer_key,
         "answer_text": question['options'].get(answer_key, ""),
         "type": question.get('type'),
         "target": question.get('target') or question.get('vector')
+    }
+    answers.append(answer_data)
+    
+    # ✅ Сохраняем в БД
+    run_async_task(save_answer_to_db, user_id, {
+        'stage': 'clarifying',
+        'question_index': current,
+        'question': question['text'],
+        'answer': answer_data['answer_text'],
+        'option': answer_key,
+        'target': answer_data['target']
     })
     
     update_state_data(user_id,
@@ -1326,6 +1426,9 @@ def handle_smart_question(call: CallbackQuery, question_num: int):
         user_data_dict["history"] = []
     user_data_dict["history"] = mode.history
     
+    # ✅ Сохраняем в БД
+    run_async_task(save_user_to_db, user_id, user_data, user_contexts, {})
+    
     # Очищаем ответ от форматирования для отображения
     clean_response = clean_text_for_safe_display(response)
     
@@ -1532,6 +1635,9 @@ def process_text_question_sync(
         history.append({"role": "assistant", "content": response})
         user_data_dict["history"] = history
         
+        # ✅ Сохраняем в БД
+        run_async_task(save_user_to_db, user_id, user_data, user_contexts, {})
+        
         # Очищаем ответ от форматирования для отображения
         clean_response = clean_text_for_safe_display(response)
         
@@ -1724,7 +1830,7 @@ __all__ = [
     'show_smart_questions',
     'handle_smart_question',
     'show_question_input',
-    'process_text_question_sync',  # ✅ Добавлено для синхронного вызова
+    'process_text_question_sync',
     'process_text_question_async',
     'process_voice_message_async',
     
@@ -1734,5 +1840,9 @@ __all__ = [
     'get_level_group',
     'calculate_final_level',
     'determine_dominant_dilts',
-    'calculate_profile_final'
+    'calculate_profile_final',
+    
+    # ✅ ДОБАВЛЕНО: функции для БД
+    'save_answer_to_db',
+    'save_question_analysis_to_db'
 ]
