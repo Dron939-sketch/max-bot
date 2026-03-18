@@ -4,6 +4,7 @@
 ВИРТУАЛЬНЫЙ ПСИХОЛОГ - МАТРИЦА ПОВЕДЕНИЙ 4×6
 ВЕРСИЯ ДЛЯ MAX
 ИСПРАВЛЕНО: обработка вопросов без await для синхронных функций
+ДОБАВЛЕНО: FastAPI для мини-приложения
 """
 
 import os
@@ -20,6 +21,13 @@ import asyncio
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, List, Any, Tuple, Union
 from datetime import datetime
+
+# ========== ИМПОРТЫ ДЛЯ FASTAPI ==========
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, FileResponse
+import uvicorn
+# =========================================
 
 # ========== ЗАЩИТА ОТ ДВОЙНОГО ЗАПУСКА ==========
 PID_FILE = '/tmp/max-bot.pid'
@@ -113,7 +121,10 @@ from handlers.reality import process_life_context, process_goal_context
 from handlers.callback import callback_handler
 from handlers.modes import show_mode_selection, show_mode_selected, show_main_menu_after_mode
 from handlers.start import cmd_start as start_cmd, show_why_details
-from handlers.profile import show_profile, show_ai_profile, show_psychologist_thought, show_final_profile
+from handlers.profile import (
+    show_profile, show_ai_profile, show_psychologist_thought, show_final_profile,
+    set_morning_manager  # ✅ Добавлено для установки morning_manager
+)
 from handlers.stages import *
 from handlers.help import show_help, show_tale, show_benefits
 from handlers.goals import *
@@ -154,6 +165,161 @@ anchoring = Anchoring()
 weekend_planner = WeekendPlanner()
 scheduler = TaskScheduler()
 
+# ✅ Устанавливаем morning_manager для profile.py (чтобы избежать циклического импорта)
+set_morning_manager(morning_manager)
+
+# ✅ Привязываем morning_manager к боту и контекстам
+morning_manager.set_bot(bot)
+morning_manager.set_contexts(user_contexts, user_data)
+
+# ============================================
+# FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
+# ============================================
+
+# Создаем FastAPI приложение
+api_app = FastAPI(title="Фреди - Мини-приложение")
+
+# Настройка CORS
+api_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Путь к статическим файлам мини-приложения
+MINIAPP_PATH = os.path.join(os.path.dirname(__file__), 'miniapp')
+
+# Создаем папку для мини-приложения, если её нет
+os.makedirs(MINIAPP_PATH, exist_ok=True)
+
+# Обслуживаем HTML и другие статические файлы
+@api_app.get("/")
+async def serve_miniapp():
+    """Главная страница мини-приложения"""
+    index_path = os.path.join(MINIAPP_PATH, 'index.html')
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    else:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Мини-приложение не установлено. Создайте файл miniapp/index.html"}
+        )
+
+@api_app.get("/styles.css")
+async def serve_css():
+    """CSS стили мини-приложения"""
+    css_path = os.path.join(MINIAPP_PATH, 'styles.css')
+    if os.path.exists(css_path):
+        return FileResponse(css_path)
+    return JSONResponse(status_code=404, content={"error": "styles.css not found"})
+
+@api_app.get("/script.js")
+async def serve_js():
+    """JavaScript мини-приложения"""
+    js_path = os.path.join(MINIAPP_PATH, 'script.js')
+    if os.path.exists(js_path):
+        return FileResponse(js_path)
+    return JSONResponse(status_code=404, content={"error": "script.js not found"})
+
+# API эндпоинты для данных
+@api_app.get("/api/user-data")
+async def get_user_data(user_id: int):
+    """Возвращает базовую информацию о пользователе"""
+    user_id = int(user_id)
+    context = user_contexts.get(user_id)
+    
+    return {
+        "user_id": user_id,
+        "user_name": context.name if context else "друг",
+        "has_profile": bool(user_data.get(user_id, {}).get("ai_generated_profile"))
+    }
+
+@api_app.get("/api/profile")
+async def get_profile(user_id: int):
+    """Возвращает психологический портрет"""
+    user_id = int(user_id)
+    data = user_data.get(user_id, {})
+    
+    profile = data.get("ai_generated_profile")
+    if not profile:
+        # Если нет AI профиля, генерируем стандартный
+        scores = {}
+        for k in VECTORS:
+            levels = data.get("behavioral_levels", {}).get(k, [])
+            scores[k] = sum(levels) / len(levels) if levels else 3.0
+        
+        perception_type = data.get("perception_type", "не определен")
+        thinking_level = data.get("thinking_level", 5)
+        dilts_counts = data.get("dilts_counts", {})
+        dominant_dilts = determine_dominant_dilts(dilts_counts)
+        
+        profile = get_human_readable_profile(
+            scores,
+            perception_type=perception_type,
+            thinking_level=thinking_level,
+            dominant_dilts=dominant_dilts
+        )
+    
+    return {"profile": profile}
+
+@api_app.get("/api/thought")
+async def get_thought(user_id: int):
+    """Возвращает мысли психолога"""
+    user_id = int(user_id)
+    data = user_data.get(user_id, {})
+    
+    thought = data.get("psychologist_thought")
+    if not thought:
+        # Генерируем мысль, если её нет
+        thought = await generate_psychologist_thought(user_id, data)
+        if thought:
+            if user_id not in user_data:
+                user_data[user_id] = {}
+            user_data[user_id]["psychologist_thought"] = thought
+    
+    return {"thought": thought}
+
+@api_app.get("/api/ideas")
+async def get_ideas(user_id: int):
+    """Возвращает идеи на выходные"""
+    user_id = int(user_id)
+    data = user_data.get(user_id, {})
+    context = user_contexts.get(user_id)
+    user_name = context.name if context else "друг"
+    
+    scores = {}
+    for k in VECTORS:
+        levels = data.get("behavioral_levels", {}).get(k, [])
+        scores[k] = sum(levels) / len(levels) if levels else 3.0
+    
+    profile_data = data.get("profile_data", {})
+    
+    ideas_text = await weekend_planner.get_weekend_ideas(
+        user_id=user_id,
+        user_name=user_name,
+        scores=scores,
+        profile_data=profile_data,
+        context=context
+    )
+    
+    # Преобразуем текст в структурированные идеи (упрощенно)
+    ideas = []
+    paragraphs = ideas_text.split('\n\n')
+    for p in paragraphs:
+        if p.strip() and not p.startswith('#'):
+            ideas.append({
+                "title": p[:50] + "..." if len(p) > 50 else p,
+                "description": p
+            })
+    
+    return {"ideas": ideas[:5]}  # Возвращаем первые 5 идей
+
+@api_app.get("/health")
+async def health_check():
+    """Health check для Render"""
+    return {"status": "ok"}
+
 # ============================================
 # HEALTH CHECK ДЛЯ RENDER
 # ============================================
@@ -180,6 +346,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         pass
 
 def run_health_server():
+    """Запускает HTTP сервер для health check"""
     ports = [10000, 10001, 10002, 10003, 10004]
     for port in ports:
         try:
@@ -804,6 +971,17 @@ async def process_custom_goal_async(message: types.Message, user_id: int, text: 
 
 
 # ============================================
+# ФУНКЦИЯ ЗАПУСКА FASTAPI
+# ============================================
+
+def run_fastapi():
+    """Запускает FastAPI сервер в отдельном потоке"""
+    port = int(os.environ.get('PORT', 8000))
+    logger.info(f"🚀 Запуск FastAPI на порту {port}")
+    uvicorn.run(api_app, host="0.0.0.0", port=port)
+
+
+# ============================================
 # ЗАПУСК БОТА
 # ============================================
 
@@ -838,9 +1016,6 @@ def run_async_tasks():
     except Exception as e:
         logger.error(f"❌ Ошибка при проверке API: {e}")
     
-    # Здесь можно добавить другие асинхронные задачи
-    # loop.run_until_complete(some_other_task())
-    
     loop.close()
 
 def main():
@@ -859,16 +1034,22 @@ def main():
     print("🗓 Планировщик задач: ✅")
     print("🎨 Идеи на выходные: ✅")
     print("🔬 Глубинный анализ вопросов: ✅")
+    print("📱 Мини-приложение: ✅ (FastAPI)")
     print("="*80 + "\n")
     
     logger.info("🚀 Бот для MAX запущен!")
     
-    # Запускаем планировщик (теперь он запускается в отдельном потоке)
+    # Запускаем планировщик
     scheduler.start()
     
     # Запускаем асинхронные задачи в отдельном потоке
     async_thread = threading.Thread(target=run_async_tasks, daemon=True)
     async_thread.start()
+    
+    # Запускаем FastAPI в отдельном потоке
+    api_thread = threading.Thread(target=run_fastapi, daemon=True)
+    api_thread.start()
+    logger.info("✅ FastAPI сервер запущен")
     
     is_render = os.environ.get('RENDER') is not None
     retry_count = 0
