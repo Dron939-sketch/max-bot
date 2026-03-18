@@ -4,6 +4,7 @@
 Обработчики проверки реальности для MAX
 Восстановлено из оригинального bot3.py и адаптировано
 ИСПРАВЛЕНО: убраны await перед синхронными функциями safe_send_message
+И ДОБАВЛЕНЫ ПРОВЕРКИ ТИПОВ ДЛЯ state_data
 """
 
 import logging
@@ -66,6 +67,15 @@ def set_user_state(user_id: int, state: str):
     """Устанавливает состояние пользователя"""
     user_states[user_id] = state
 
+def ensure_state_dict(state_data, user_id: int) -> Dict:
+    """Гарантирует, что state_data - словарь"""
+    if state_data is None:
+        return get_user_state_data(user_id)
+    if isinstance(state_data, dict):
+        return state_data
+    logger.warning(f"⚠️ state_data не является словарем: {type(state_data)}. Создаем новый.")
+    return get_user_state_data(user_id)
+
 # ============================================
 # ОСНОВНЫЕ ФУНКЦИИ ПРОВЕРКИ РЕАЛЬНОСТИ
 # ============================================
@@ -75,8 +85,7 @@ async def show_reality_check(call: CallbackQuery, state_data: Dict = None):
     Запускает проверку реальности для выбранной цели
     """
     user_id = call.from_user.id
-    if state_data is None:
-        state_data = get_user_state_data(user_id)
+    state_data = ensure_state_dict(state_data, user_id)
     context = get_user_context(user_id)
     
     # ✅ Получаем данные из user_data, если в state_data нет
@@ -107,20 +116,20 @@ async def show_reality_check(call: CallbackQuery, state_data: Dict = None):
         return
     
     # Проверяем, есть ли базовый контекст
-    if not (context and context.life_context_complete):
+    if not (context and hasattr(context, 'life_context_complete') and context.life_context_complete):
         # Если нет — собираем
         await start_life_context_collection(call, goal, state_data)
     else:
         # Если есть — задаём целевые вопросы
         await ask_goal_specific_questions(call, goal, state_data)
 
+
 async def start_life_context_collection(call: CallbackQuery, goal: Dict, state_data: Dict = None):
     """
     Сбор базового контекста жизни (1 раз)
     """
     user_id = call.from_user.id
-    if state_data is None:
-        state_data = get_user_state_data(user_id)
+    state_data = ensure_state_dict(state_data, user_id)
     user_name = get_user_name(user_id)
     
     questions = generate_life_context_questions()
@@ -147,13 +156,13 @@ async def start_life_context_collection(call: CallbackQuery, goal: Dict, state_d
     set_user_state(user_id, "collecting_life_context")
     update_user_state_data(user_id, pending_goal=goal)
 
+
 async def ask_goal_specific_questions(call: CallbackQuery, goal: Dict, state_data: Dict = None):
     """
     Задаёт вопросы, специфичные для цели
     """
     user_id = call.from_user.id
-    if state_data is None:
-        state_data = get_user_state_data(user_id)
+    state_data = ensure_state_dict(state_data, user_id)
     user_data_dict = get_user_data(user_id)
     context = get_user_context(user_id)
     user_name = context.name if context and context.name else "друг"
@@ -186,6 +195,7 @@ async def ask_goal_specific_questions(call: CallbackQuery, goal: Dict, state_dat
     # Устанавливаем состояние
     set_user_state(user_id, "collecting_goal_context")
     update_user_state_data(user_id, pending_goal=goal)
+
 
 # ============================================
 # ОБРАБОТЧИКИ ОТВЕТОВ
@@ -238,11 +248,12 @@ async def process_life_context(message: Message, user_id: int, text: str):
             chat_instance=""
         )
         # Запускаем асинхронную функцию
-        await ask_goal_specific_questions(fake_call, goal)
+        await ask_goal_specific_questions(fake_call, goal, state_data)
     else:
         # Если цели нет, показываем меню
         from handlers.modes import show_main_menu_after_mode
         await show_main_menu_after_mode(message, context)
+
 
 async def process_goal_context(message: Message, user_id: int, text: str):
     """Обрабатывает ответы на вопросы о целевом контексте"""
@@ -282,6 +293,7 @@ async def process_goal_context(message: Message, user_id: int, text: str):
     # Запускаем асинхронную функцию
     await calculate_and_show_feasibility(fake_call, user_id)
 
+
 # ============================================
 # РАСЧЁТ ДОСТИЖИМОСТИ
 # ============================================
@@ -312,9 +324,9 @@ async def calculate_and_show_feasibility(call: CallbackQuery, user_id: int):
     if context:
         life_context = {
             "time_per_week": 0,
-            "energy_level": context.energy_level or 5,
-            "has_private_space": context.has_private_space or False,
-            "support_people": context.support_people or None
+            "energy_level": getattr(context, 'energy_level', 5),
+            "has_private_space": getattr(context, 'has_private_space', False),
+            "support_people": getattr(context, 'support_people', None)
         }
     
     goal_context = state_data.get("goal_context", {})
@@ -358,6 +370,7 @@ async def calculate_and_show_feasibility(call: CallbackQuery, user_id: int):
     # Убираем await!
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
+
 # ============================================
 # ОБРАБОТЧИКИ ПРОПУСКА
 # ============================================
@@ -367,8 +380,7 @@ async def skip_life_context(call: CallbackQuery, state_data: Dict = None):
     Пропускает сбор жизненного контекста
     """
     user_id = call.from_user.id
-    if state_data is None:
-        state_data = get_user_state_data(user_id)
+    state_data = ensure_state_dict(state_data, user_id)
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
     text = f"""
@@ -387,13 +399,13 @@ async def skip_life_context(call: CallbackQuery, state_data: Dict = None):
     # Убираем await!
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
+
 async def skip_goal_questions(call: CallbackQuery, state_data: Dict = None):
     """
     Пропускает целевые вопросы
     """
     user_id = call.from_user.id
-    if state_data is None:
-        state_data = get_user_state_data(user_id)
+    state_data = ensure_state_dict(state_data, user_id)
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
     # Используем данные по умолчанию
@@ -401,13 +413,13 @@ async def skip_goal_questions(call: CallbackQuery, state_data: Dict = None):
     
     await calculate_and_show_feasibility(call, user_id)
 
+
 async def skip_to_route(call: CallbackQuery, state_data: Dict = None):
     """
     Пропускает проверку и сразу строит маршрут
     """
     user_id = call.from_user.id
-    if state_data is None:
-        state_data = get_user_state_data(user_id)
+    state_data = ensure_state_dict(state_data, user_id)
     user_data_dict = get_user_data(user_id)
     
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
@@ -434,11 +446,12 @@ async def skip_to_route(call: CallbackQuery, state_data: Dict = None):
     if route:
         update_user_state_data(user_id, current_route=route)
         from handlers.goals import show_route_step
-        # show_route_step должна быть асинхронной
-        await show_route_step(call, 1, route, status_msg)
+        # show_route_step теперь ожидает state_data как третий параметр
+        await show_route_step(call, state_data, 1, route, status_msg)
     else:
         from handlers.goals import show_fallback_route
-        await show_fallback_route(call, goal, status_msg)
+        await show_fallback_route(call, state_data, goal, status_msg)
+
 
 # ============================================
 # ОБРАБОТЧИКИ РЕШЕНИЙ ПОСЛЕ ПРОВЕРКИ
@@ -449,8 +462,7 @@ async def accept_feasibility_plan(call: CallbackQuery, state_data: Dict = None):
     Принимает план и переходит к построению маршрута
     """
     user_id = call.from_user.id
-    if state_data is None:
-        state_data = get_user_state_data(user_id)
+    state_data = ensure_state_dict(state_data, user_id)
     user_data_dict = get_user_data(user_id)
     
     goal = state_data.get("current_destination")
@@ -477,18 +489,18 @@ async def accept_feasibility_plan(call: CallbackQuery, state_data: Dict = None):
     if route:
         update_user_state_data(user_id, current_route=route)
         from handlers.goals import show_route_step
-        await show_route_step(call, 1, route, status_msg)
+        await show_route_step(call, state_data, 1, route, status_msg)
     else:
         from handlers.goals import show_fallback_route
-        await show_fallback_route(call, goal, status_msg)
+        await show_fallback_route(call, state_data, goal, status_msg)
+
 
 async def adjust_timeline(call: CallbackQuery, state_data: Dict = None):
     """
     Предлагает скорректировать сроки
     """
     user_id = call.from_user.id
-    if state_data is None:
-        state_data = get_user_state_data(user_id)
+    state_data = ensure_state_dict(state_data, user_id)
     goal = state_data.get("current_destination")
     
     text = f"""
@@ -514,6 +526,7 @@ async def adjust_timeline(call: CallbackQuery, state_data: Dict = None):
     # Убираем await!
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
+
 async def reduce_goal(call: CallbackQuery, state_data: Dict = None):
     """
     Предлагает снизить планку цели
@@ -538,6 +551,7 @@ async def reduce_goal(call: CallbackQuery, state_data: Dict = None):
     # Убираем await!
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
+
 async def apply_extended_timeline(call: CallbackQuery, state_data: Dict = None):
     """
     Применяет увеличенный срок и пересчитывает
@@ -545,13 +559,13 @@ async def apply_extended_timeline(call: CallbackQuery, state_data: Dict = None):
     # Пока просто принимаем план
     await accept_feasibility_plan(call, state_data)
 
+
 async def select_goal_50(call: CallbackQuery, state_data: Dict = None):
     """
     Выбирает цель +50%
     """
     user_id = call.from_user.id
-    if state_data is None:
-        state_data = get_user_state_data(user_id)
+    state_data = ensure_state_dict(state_data, user_id)
     
     # Создаём новую цель с меньшей амбициозностью
     new_goal = {
@@ -566,15 +580,15 @@ async def select_goal_50(call: CallbackQuery, state_data: Dict = None):
     
     # Показываем теоретический путь
     from handlers.goals import show_theoretical_path
-    await show_theoretical_path(call, new_goal)
+    await show_theoretical_path(call, state_data, new_goal)
+
 
 async def select_goal_30(call: CallbackQuery, state_data: Dict = None):
     """
     Выбирает цель +30%
     """
     user_id = call.from_user.id
-    if state_data is None:
-        state_data = get_user_state_data(user_id)
+    state_data = ensure_state_dict(state_data, user_id)
     
     new_goal = {
         "id": "income_growth_30",
@@ -587,15 +601,15 @@ async def select_goal_30(call: CallbackQuery, state_data: Dict = None):
     update_user_state_data(user_id, current_destination=new_goal)
     
     from handlers.goals import show_theoretical_path
-    await show_theoretical_path(call, new_goal)
+    await show_theoretical_path(call, state_data, new_goal)
+
 
 async def select_goal_blocks(call: CallbackQuery, state_data: Dict = None):
     """
     Выбирает работу с блоками
     """
     user_id = call.from_user.id
-    if state_data is None:
-        state_data = get_user_state_data(user_id)
+    state_data = ensure_state_dict(state_data, user_id)
     
     new_goal = {
         "id": "money_blocks",
@@ -608,7 +622,7 @@ async def select_goal_blocks(call: CallbackQuery, state_data: Dict = None):
     update_user_state_data(user_id, current_destination=new_goal)
     
     from handlers.goals import show_theoretical_path
-    await show_theoretical_path(call, new_goal)
+    await show_theoretical_path(call, state_data, new_goal)
 
 
 # ============================================
