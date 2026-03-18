@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики команды /start и начальных экранов для MAX
-ВЕРСИЯ 2.1 - ИСПРАВЛЕНА ПРОБЛЕМА С АСИНХРОННЫМИ ВЫЗОВАМИ
+ВЕРСИЯ 2.2 - ИСПРАВЛЕНЫ ПРОБЛЕМЫ С СОЕДИНЕНИЕМ БД
 ДОБАВЛЕНО: Загрузка пользователей из БД, автосохранение
 ИСПРАВЛЕНО: Все асинхронные вызовы обернуты в отдельные потоки с новым циклом событий
+ДОБАВЛЕНО: Проверка соединения с БД перед загрузкой
 """
 import logging
 import time
@@ -35,7 +36,7 @@ from state import (
 )
 
 # ✅ ИСПРАВЛЕНО: импортируем из db_instance вместо main
-from db_instance import db, save_user_to_db
+from db_instance import db, save_user_to_db, ensure_db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,8 @@ class Stats:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
+                # ✅ Проверяем соединение перед логированием
+                loop.run_until_complete(ensure_db_connection())
                 loop.run_until_complete(db.log_event(user_id, 'start', {'timestamp': time.time()}))
             except Exception as e:
                 logger.error(f"❌ Ошибка логирования старта для {user_id}: {e}")
@@ -114,7 +117,7 @@ stats = Stats()
 
 
 # ============================================
-# ✅ НОВАЯ ФУНКЦИЯ: ЗАГРУЗКА ПОЛЬЗОВАТЕЛЯ ИЗ БД
+# ✅ ИСПРАВЛЕНО: ФУНКЦИЯ ЗАГРУЗКИ ПОЛЬЗОВАТЕЛЯ ИЗ БД С ПРОВЕРКОЙ СОЕДИНЕНИЯ
 # ============================================
 
 async def ensure_user_loaded(user_id: int, user_name: str = None) -> bool:
@@ -127,6 +130,17 @@ async def ensure_user_loaded(user_id: int, user_name: str = None) -> bool:
         if user_name and user_id not in user_names:
             user_names[user_id] = user_name
         return True
+    
+    # ✅ Проверяем, что соединение с БД установлено
+    try:
+        # Пробуем выполнить простой запрос для проверки соединения
+        async with db.get_connection() as conn:
+            await conn.execute("SELECT 1")
+    except Exception as e:
+        logger.warning(f"⚠️ Соединение с БД не установлено, пробуем подключиться... Ошибка: {e}")
+        # Пробуем переподключиться
+        from db_instance import init_db
+        await init_db()
     
     # Пробуем загрузить из БД
     logger.info(f"🔄 Загружаем пользователя {user_id} из БД...")
@@ -156,6 +170,8 @@ def cmd_start(message: Message):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
+            # ✅ Проверяем соединение перед сохранением
+            loop.run_until_complete(ensure_db_connection())
             loop.run_until_complete(db.save_telegram_user(
                 user_id=user_id,
                 first_name=user_name,
@@ -176,6 +192,8 @@ def cmd_start(message: Message):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
+            # ✅ Проверяем соединение перед загрузкой
+            loop.run_until_complete(ensure_db_connection())
             loaded = loop.run_until_complete(ensure_user_loaded(user_id, user_name))
             # После загрузки продолжаем обработку в основном потоке
             # Но так как мы в отдельном потоке, используем bot.send_message напрямую
@@ -441,6 +459,8 @@ def callback_restart_test(call: CallbackQuery):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
+            # ✅ Проверяем соединение перед сохранением
+            loop.run_until_complete(ensure_db_connection())
             loop.run_until_complete(save_user_to_db(user_id, user_data, user_contexts, user_routes))
             loop.run_until_complete(db.log_event(user_id, 'restart_test', {}))
         except Exception as e:
@@ -614,7 +634,7 @@ def show_main_menu(message: Message, context: UserContext):
 __all__ = [
     'cmd_start',
     'cmd_menu',
-    'cmd_sync',  # ✅ Добавлено
+    'cmd_sync',
     'show_why_details',
     'show_intro',
     'show_main_menu',
@@ -624,6 +644,6 @@ __all__ = [
     'callback_show_profile',
     'callback_show_modes',
     'callback_back_to_start',
-    'ensure_user_loaded',  # ✅ Добавлено
-    'get_profile_code'  # ✅ Добавлено
+    'ensure_user_loaded',
+    'get_profile_code'
 ]
