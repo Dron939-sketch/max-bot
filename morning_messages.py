@@ -5,6 +5,7 @@
 С ИИ-генерацией для Дней 2 и 3
 ВЕРСИЯ ДЛЯ MAX
 ДОБАВЛЕНО: Сохранение в PostgreSQL
+ИСПРАВЛЕНО: Асинхронные вызовы обернуты в run_async_task
 """
 
 import asyncio
@@ -13,6 +14,7 @@ import random
 import re
 import json
 import time
+import threading  # ✅ ДОБАВЛЕНО
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Any
 
@@ -24,9 +26,34 @@ from profiles import VECTORS, LEVEL_PROFILES
 from services import call_deepseek, text_to_speech
 
 # ✅ ДОБАВЛЕНО: импорт для БД
-from db_instance import db
+from db_instance import db, ensure_db_connection
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================
+# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# ============================================
+
+def run_async_task(coro_func, *args, **kwargs):
+    """
+    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
+    """
+    def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            # Проверяем соединение с БД перед выполнением
+            if 'db' in str(coro_func) or 'save' in str(coro_func) or 'log' in str(coro_func):
+                loop.run_until_complete(ensure_db_connection())
+            coro = coro_func(*args, **kwargs)
+            loop.run_until_complete(coro)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+        finally:
+            loop.close()
+    
+    threading.Thread(target=_wrapper, daemon=True).start()
 
 
 class MorningMessageManager:
@@ -170,8 +197,8 @@ class MorningMessageManager:
                 f"   Через: {seconds_until_target/3600:.1f} часов"
             )
             
-            # ✅ СОХРАНЯЕМ ЗАПЛАНИРОВАННОЕ СООБЩЕНИЕ В БД
-            asyncio.create_task(db.add_reminder(
+            # ✅ ИСПРАВЛЕНО: Сохраняем запланированное сообщение через run_async_task
+            run_async_task(db.add_reminder,
                 user_id=user_id,
                 reminder_type=f'morning_scheduled_day_{day}',
                 remind_at=target_utc,
@@ -180,7 +207,7 @@ class MorningMessageManager:
                     'scheduled_time': target_utc.isoformat(),
                     'user_name': user_name
                 }
-            ))
+            )
             
             # Создаем задачу
             task = asyncio.create_task(
@@ -255,9 +282,9 @@ class MorningMessageManager:
             # Клавиатура для дня (три кнопки)
             keyboard = self._get_keyboard_for_day(day)
             
-            # ✅ СОХРАНЯЕМ В БД
-            asyncio.create_task(self._save_message_to_db(user_id, day, text))
-            asyncio.create_task(self._save_generation_stats(user_id, day, success, error_msg))
+            # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+            run_async_task(self._save_message_to_db, user_id, day, text)
+            run_async_task(self._save_generation_stats, user_id, day, success, error_msg)
             
             # ✅ ИСПРАВЛЕНО: отправляем текст (проверяем асинхронность)
             try:
@@ -456,7 +483,8 @@ class MorningMessageManager:
                 return formatted
         except Exception as e:
             logger.error(f"❌ Ошибка генерации ИИ: {e}")
-            asyncio.create_task(self._save_generation_stats(user_id, day, False, str(e)))
+            # ✅ ИСПРАВЛЕНО: Сохраняем статистику через run_async_task
+            run_async_task(self._save_generation_stats, user_id, day, False, str(e))
         
         # Запасной вариант, если ИИ не ответил
         return await self._generate_fallback_text(day, user_name, address)
@@ -707,12 +735,12 @@ class MorningMessageManager:
                 logger.info(f"⏰ Отменён день {day} для пользователя {user_id}")
             del self.scheduled_tasks[user_id]
             
-            # ✅ ОТМЕЧАЕМ В БД
-            asyncio.create_task(db.log_event(
+            # ✅ ИСПРАВЛЕНО: Отмечаем в БД через run_async_task
+            run_async_task(db.log_event,
                 user_id,
                 'morning_cancelled',
                 {'days': list(self.scheduled_tasks.get(user_id, {}).keys())}
-            ))
+            )
     
     async def get_user_morning_stats(self, user_id: int) -> Dict[str, Any]:
         """Получает статистику утренних сообщений пользователя"""
