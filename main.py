@@ -6,6 +6,7 @@
 ИСПРАВЛЕНО: обработка вопросов без await для синхронных функций
 ДОБАВЛЕНО: FastAPI для мини-приложения
 ИСПРАВЛЕНО: f-strings quotes error (финальное решение)
+ИСПРАВЛЕНО: конфликт портов между health check и FastAPI
 """
 
 import os
@@ -318,11 +319,11 @@ async def get_ideas(user_id: int):
 
 @api_app.get("/health")
 async def health_check():
-    """Health check для Render"""
+    """Health check для Render (FastAPI)"""
     return {"status": "ok"}
 
 # ============================================
-# HEALTH CHECK ДЛЯ RENDER
+# HEALTH CHECK ДЛЯ RENDER (HTTP сервер)
 # ============================================
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -347,8 +348,9 @@ class HealthHandler(BaseHTTPRequestHandler):
         pass
 
 def run_health_server():
-    """Запускает HTTP сервер для health check"""
-    ports = [10000, 10001, 10002, 10003, 10004]
+    """Запускает HTTP сервер для health check на порту, отличном от основного"""
+    # Начинаем с порта 10001, чтобы не конфликтовать с FastAPI
+    ports = [10001, 10002, 10003, 10004, 10005]
     for port in ports:
         try:
             server = HTTPServer(('0.0.0.0', port), HealthHandler)
@@ -356,10 +358,12 @@ def run_health_server():
             server.serve_forever()
             return
         except OSError:
+            logger.warning(f"⚠️ Port {port} is busy, trying next...")
             continue
         except Exception as e:
             logger.error(f"❌ Error on port {port}: {e}")
             continue
+    logger.error("❌ Could not start health check server on any port")
 
 health_thread = threading.Thread(target=run_health_server, daemon=True)
 health_thread.start()
@@ -979,7 +983,8 @@ async def process_custom_goal_async(message: types.Message, user_id: int, text: 
 
 def run_fastapi():
     """Запускает FastAPI сервер в отдельном потоке"""
-    port = int(os.environ.get('PORT', 8000))
+    # Render сам назначает порт через переменную окружения PORT
+    port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск FastAPI на порту {port}")
     uvicorn.run(api_app, host="0.0.0.0", port=port)
 
