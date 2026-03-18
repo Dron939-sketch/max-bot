@@ -3,7 +3,7 @@
 """
 Утилиты для отправки сообщений в MAX
 Исправленная версия с поддержкой длинных сообщений и безопасной отправкой
-СИНХРОННАЯ ВЕРСИЯ - ДОБАВЛЕНА ПРИНУДИТЕЛЬНАЯ ШИРИНА
+СИНХРОННАЯ ВЕРСИЯ - ИСПОЛЬЗОВАНИЕ НЕВИДИМЫХ СИМВОЛОВ
 """
 
 import logging
@@ -30,6 +30,16 @@ MAX_HISTORY_PER_USER = 10
 
 # Максимальная длина сообщения (лимит MAX)
 MAX_MESSAGE_LENGTH = 4096
+
+# Невидимые символы для сброса форматирования
+ZERO_WIDTH_SPACE = "\u200B"           # Нулевой ширины пробел
+ZERO_WIDTH_NON_JOINER = "\u200C"      # Нулевой ширины разделитель
+ZERO_WIDTH_JOINER = "\u200D"           # Нулевой ширины соединитель
+LEFT_TO_RIGHT_MARK = "\u200E"          # Маркер направления слева направо
+INVISIBLE_SEPARATOR = "⠀"              # Брайлевский пробел (U+2800)
+
+# Комбинация невидимых символов для максимальной надежности
+INVISIBLE_PREFIX = ZERO_WIDTH_SPACE + ZERO_WIDTH_NON_JOINER + LEFT_TO_RIGHT_MARK
 
 
 def aggressive_clean_text(text: str) -> str:
@@ -65,7 +75,7 @@ def aggressive_clean_text(text: str) -> str:
 def force_full_width(text: str, is_first_in_chain: bool = False) -> str:
     """
     ПРИНУДИТЕЛЬНО гарантирует, что сообщение будет на всю ширину.
-    Добавляет невидимый символ или разделитель в начало.
+    Добавляет НЕВИДИМЫЙ символ в начало для сброса форматирования.
     
     Args:
         text: текст сообщения
@@ -81,21 +91,17 @@ def force_full_width(text: str, is_first_in_chain: bool = False) -> str:
     text = aggressive_clean_text(text)
     text = ensure_full_width(text)
     
-    # Для первого сообщения в цепочке не добавляем разделитель
+    # Для первого сообщения в цепочке не добавляем ничего
     if is_first_in_chain:
         return text
     
-    # Для всех остальных - добавляем невидимый символ или разделитель
-    # Символ-невидимка U+2800 (Брайлевский пробел)
-    invisible_char = "⠀"
+    # Проверяем, не начинается ли текст с нашего префикса
+    if text.startswith(INVISIBLE_PREFIX):
+        return text
     
-    # Проверяем, не начинается ли уже текст с этого символа
-    if not text.startswith(invisible_char):
-        # Добавляем невидимый символ + разделитель для надежности
-        separator = "─" * 40
-        text = f"{invisible_char}{separator}\n\n{text}"
-    
-    return text
+    # Добавляем комбинацию невидимых символов в самое начало
+    # Это сбрасывает режим "цитаты", но сами символы не видны пользователю
+    return f"{INVISIBLE_PREFIX}{text}"
 
 
 def safe_send_message(
@@ -135,7 +141,7 @@ def safe_send_message(
     # Определяем, первое ли это сообщение в цепочке
     is_first = delete_previous or (chat_id not in user_messages_history) or (chat_id is None)
     
-    # ✅ ПРИНУДИТЕЛЬНАЯ ОЧИСТКА
+    # ✅ ПРИНУДИТЕЛЬНАЯ ОЧИСТКА с невидимыми символами
     text = force_full_width(text, is_first)
     
     # ✅ Преобразуем HTML в Markdown
@@ -224,7 +230,7 @@ def safe_send_message(
             plain_text = re.sub(r'\*\*(.*?)\*\*', r'\1', markdown_text)
             plain_text = re.sub(r'\*(.*?)\*', r'\1', plain_text)
             
-            # Ещё раз агрессивно очищаем
+            # Ещё раз применяем невидимые символы
             plain_text = force_full_width(plain_text, is_first)
             
             if len(plain_text) > MAX_MESSAGE_LENGTH:
@@ -277,7 +283,7 @@ def send_with_status_cleanup(
     # Определяем, первое ли это сообщение в цепочке
     is_first = (status_msg is None)
     
-    # ✅ ПРИНУДИТЕЛЬНАЯ ОЧИСТКА
+    # ✅ ПРИНУДИТЕЛЬНАЯ ОЧИСТКА с невидимыми символами
     text = force_full_width(text, is_first)
     
     # Преобразуем HTML в Markdown
@@ -384,7 +390,7 @@ def safe_edit_message(
     Returns:
         отредактированное сообщение или None при ошибке
     """
-    # ✅ ПРИНУДИТЕЛЬНАЯ ОЧИСТКА
+    # При редактировании всегда добавляем невидимые символы (как не-первое)
     new_text = force_full_width(new_text, False)
     
     # Преобразуем HTML в Markdown
@@ -559,18 +565,16 @@ def split_and_send_long_message(
     parts = split_long_message(markdown_text, max_length)
     sent_messages = []
     
-    # Создаем разделитель на всю ширину
-    separator = "─" * 40
-    
     for i, part in enumerate(parts):
         # Определяем, является ли эта часть первой в цепочке
         is_first_part = (i == 0 and is_first_part_global)
         
-        # ✅ ПРИНУДИТЕЛЬНАЯ ОЧИСТКА каждой части
+        # ✅ ПРИНУДИТЕЛЬНАЯ ОЧИСТКА каждой части с невидимыми символами
         part = force_full_width(part, is_first_part)
         
-        # Для промежуточных частей - добавляем индикатор на всю ширину
+        # Для промежуточных частей добавляем индикатор (видимый, но после невидимых символов)
         if i < len(parts) - 1:
+            separator = "─" * 40
             part_text = f"{part}\n\n{separator}\n📄 Часть {i+1} из {len(parts)}\n{separator}"
             current_markup = None
         else:
