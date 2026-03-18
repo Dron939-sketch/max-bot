@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики профиля пользователя для MAX
-Версия 2.2 - ИСПРАВЛЕНО: убраны дублирующиеся и полупустые сообщения
+Версия 2.3 - ДОБАВЛЕНО ПЛАНИРОВАНИЕ УТРЕННИХ СООБЩЕНИЙ
 """
 
 import logging
@@ -15,13 +15,16 @@ from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 from bot_instance import bot
 from message_utils import safe_send_message, safe_delete_message, send_with_status_cleanup
-from state import user_data, user_contexts, get_state, set_state, TestStates
+from state import user_data, user_contexts, get_state, set_state, TestStates, get_user_name
 from services import generate_ai_profile, generate_psychologist_thought
 from profiles import VECTORS, DILTS_LEVELS, LEVEL_PROFILES
 from formatters import (
     bold, italic, format_profile_text, format_psychologist_text,
     clean_text_for_safe_display, ensure_full_width
 )
+
+# Импортируем morning_manager из main (чтобы не было циклических импортов)
+from main import morning_manager
 
 logger = logging.getLogger(__name__)
 
@@ -494,6 +497,30 @@ async def show_ai_profile_async(message: Message, user_id: int):
                     continue
             
             logger.info(f"🎉 Все {len(merged_parts)} частей профиля успешно отправлены")
+            
+            # ===== ПЛАНИРОВАНИЕ УТРЕННИХ СООБЩЕНИЙ =====
+            try:
+                # Получаем scores из данных
+                scores = {}
+                for k in VECTORS:
+                    levels = data.get("behavioral_levels", {}).get(k, [])
+                    scores[k] = sum(levels) / len(levels) if levels else 3.0
+                
+                profile_data = data.get("profile_data", {})
+                user_name_for_morning = get_user_name(user_id) or "друг"
+                
+                # Планируем серию из 3 утренних сообщений
+                await morning_manager.schedule_morning_message(
+                    user_id=user_id,
+                    user_name=user_name_for_morning,
+                    scores=scores,
+                    profile_data=profile_data
+                )
+                logger.info(f"📅 Запланированы утренние сообщения для пользователя {user_id}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка при планировании утренних сообщений: {e}")
+            # ===== КОНЕЦ БЛОКА =====
+            
             return
             
         else:
