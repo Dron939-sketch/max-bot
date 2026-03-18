@@ -10,7 +10,7 @@ let app = {
     userId: null,
     currentScreen: 'main',
     userData: {},
-    context: null
+    hasProfile: false
 };
 
 // ============================================
@@ -70,9 +70,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Загружаем данные пользователя
     await loadUserData();
     
-    // Показываем главный экран
-    showScreen('main');
-    
     // Настраиваем навигацию
     setupNavigation();
 });
@@ -87,69 +84,21 @@ async function loadUserData() {
         if (!response.ok) throw new Error('Ошибка загрузки');
         
         app.userData = await response.json();
+        app.hasProfile = app.userData.has_profile || false;
         
-        // Загружаем дополнительные данные
-        await Promise.all([
-            loadProfile(),
-            loadThought(),
-            loadGoals()
-        ]);
+        // Показываем соответствующий экран
+        if (app.hasProfile) {
+            // Если есть профиль - показываем главное меню
+            showScreen('main');
+        } else {
+            // Если нет профиля - показываем приветствие для новичков
+            showScreen('welcome');
+        }
         
     } catch (error) {
         console.error('Error loading user data:', error);
         showError('Не удалось загрузить данные пользователя');
     }
-}
-
-async function loadProfile() {
-    try {
-        const response = await fetch(`/api/profile?user_id=${userId}`);
-        if (!response.ok) throw new Error('Ошибка загрузки профиля');
-        
-        const data = await response.json();
-        app.userData.profile = data.profile;
-    } catch (error) {
-        console.error('Error loading profile:', error);
-    }
-}
-
-async function loadThought() {
-    try {
-        const response = await fetch(`/api/thought?user_id=${userId}`);
-        if (!response.ok) throw new Error('Ошибка загрузки мыслей');
-        
-        const data = await response.json();
-        app.userData.thought = data.thought;
-    } catch (error) {
-        console.error('Error loading thought:', error);
-    }
-}
-
-async function loadGoals() {
-    try {
-        const response = await fetch(`/api/goals?user_id=${userId}`);
-        if (!response.ok) throw new Error('Ошибка загрузки целей');
-        
-        const data = await response.json();
-        app.userData.goals = data.goals || [];
-    } catch (error) {
-        console.error('Error loading goals:', error);
-        app.userData.goals = getDefaultGoals();
-    }
-}
-
-// ============================================
-// ЦЕЛИ ПО УМОЛЧАНИЮ (ЕСЛИ API НЕ ОТВЕЧАЕТ)
-// ============================================
-
-function getDefaultGoals() {
-    return [
-        { id: 'boundaries', name: 'Научиться защищать границы', time: '2-3 недели', difficulty: 'medium' },
-        { id: 'income', name: 'Увеличить доход', time: '4-6 недель', difficulty: 'hard' },
-        { id: 'purpose', name: 'Найти предназначение', time: '5-7 недель', difficulty: 'hard' },
-        { id: 'relations', name: 'Улучшить отношения', time: '4-6 недель', difficulty: 'medium' },
-        { id: 'calm', name: 'Найти внутреннее спокойствие', time: '3-5 недель', difficulty: 'medium' }
-    ];
 }
 
 // ============================================
@@ -175,7 +124,7 @@ function setupNavigation() {
     const backBtn = document.getElementById('backBtn');
     if (backBtn) {
         backBtn.addEventListener('click', () => {
-            if (currentScreen === 'main') {
+            if (currentScreen === 'main' || currentScreen === 'welcome') {
                 // На главной - ничего не делаем или закрываем приложение
                 if (window.WebApp?.close) window.WebApp.close();
             } else {
@@ -195,6 +144,7 @@ function showScreen(screen) {
     // Обновляем заголовок
     const headerTitle = document.getElementById('header-title');
     const titles = {
+        'welcome': '👋 ФРЕДИ',
         'main': '🏠 ФРЕДИ',
         'profile': '📊 ПОРТРЕТ',
         'thought': '🧠 МЫСЛИ',
@@ -206,7 +156,7 @@ function showScreen(screen) {
     // Показываем/скрываем кнопку назад
     const backBtn = document.getElementById('backBtn');
     if (backBtn) {
-        backBtn.style.display = screen === 'main' ? 'none' : 'flex';
+        backBtn.style.display = (screen === 'main' || screen === 'welcome') ? 'none' : 'flex';
     }
     
     // Загружаем контент
@@ -215,6 +165,9 @@ function showScreen(screen) {
     
     setTimeout(() => {
         switch(screen) {
+            case 'welcome':
+                renderWelcomeScreen(content);
+                break;
             case 'main':
                 renderMainScreen(content);
                 break;
@@ -262,7 +215,73 @@ function showError(message) {
 }
 
 // ============================================
-// ГЛАВНЫЙ ЭКРАН (как после /start в Telegram)
+// ЭКРАН ПРИВЕТСТВИЯ (ДЛЯ НОВЫХ ПОЛЬЗОВАТЕЛЕЙ)
+// ============================================
+
+function renderWelcomeScreen(container) {
+    const userName = app.userData.user_name || 'Андрей';
+    
+    const html = `
+        <div class="welcome-screen">
+            <div class="welcome-message">
+                <p><strong>${userName}, привет! Ну, здравствуйте, дорогой человек! 👋</strong></p>
+                
+                <p>🧠 <strong>Я — Фреди, виртуальный психолог.</strong><br>
+                Оцифрованная версия Андрея Мейстера, если хотите — его цифровой слепок.</p>
+                
+                <p>🎭 Короче, я — это он, только батарейка дольше держит и пожрать не прошу.</p>
+                
+                <p>🕒 Нам нужно познакомиться, потому что я пока не экстрасенс.</p>
+                
+                <p>🧐 Чтобы я понимал, с кем имею дело и чем могу быть полезен —<br>
+                давайте-ка пройдём небольшой тест.</p>
+                
+                <p>📊 <strong>Всего 5 этапов:</strong></p>
+                
+                <div class="stages-list">
+                    <div class="stage-item">
+                        <span class="stage-number">1️⃣</span>
+                        <span class="stage-text">Конфигурация восприятия — как вы фильтруете реальность</span>
+                    </div>
+                    <div class="stage-item">
+                        <span class="stage-number">2️⃣</span>
+                        <span class="stage-text">Конфигурация мышления — как ваш мозг перерабатывает информацию</span>
+                    </div>
+                    <div class="stage-item">
+                        <span class="stage-number">3️⃣</span>
+                        <span class="stage-text">Конфигурация поведения — что вы делаете на автопилоте</span>
+                    </div>
+                    <div class="stage-item">
+                        <span class="stage-number">4️⃣</span>
+                        <span class="stage-text">Точка роста — куда двигаться, чтобы не топтаться на месте</span>
+                    </div>
+                    <div class="stage-item">
+                        <span class="stage-number">5️⃣</span>
+                        <span class="stage-text">Глубинные паттерны — что сформировало вас как личность</span>
+                    </div>
+                </div>
+                
+                <p>⏱ <strong>15 минут</strong> — и я буду знать о вас больше, чем вы думаете.</p>
+                
+                <p>🚀 <strong>Ну что, начнём наше знакомство?</strong></p>
+                
+                <div class="action-buttons">
+                    <button class="action-btn primary" onclick="startTest()">
+                        🚀 ДАВАЙ, ПОГНАЛИ!
+                    </button>
+                    <button class="action-btn secondary" onclick="showScreen('mode')">
+                        🔮 СНАЧАЛА ВЫБРАТЬ РЕЖИМ
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    container.innerHTML = html;
+}
+
+// ============================================
+// ГЛАВНЫЙ ЭКРАН (ДЛЯ ПОЛЬЗОВАТЕЛЕЙ С ПРОФИЛЕМ)
 // ============================================
 
 function renderMainScreen(container) {
@@ -530,6 +549,20 @@ function renderModeScreen(container) {
 }
 
 // ============================================
+// ЦЕЛИ ПО УМОЛЧАНИЮ (ЕСЛИ API НЕ ОТВЕЧАЕТ)
+// ============================================
+
+function getDefaultGoals() {
+    return [
+        { id: 'boundaries', name: 'Научиться защищать границы', time: '2-3 недели', difficulty: 'medium' },
+        { id: 'income', name: 'Увеличить доход', time: '4-6 недель', difficulty: 'hard' },
+        { id: 'purpose', name: 'Найти предназначение', time: '5-7 недель', difficulty: 'hard' },
+        { id: 'relations', name: 'Улучшить отношения', time: '4-6 недель', difficulty: 'medium' },
+        { id: 'calm', name: 'Найти внутреннее спокойствие', time: '3-5 недель', difficulty: 'medium' }
+    ];
+}
+
+// ============================================
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ============================================
 
@@ -559,6 +592,12 @@ function extractProfileCode(text) {
 // ============================================
 // ОБРАБОТЧИКИ ДЕЙСТВИЙ
 // ============================================
+
+function startTest() {
+    console.log('Starting test');
+    // Здесь будет переход к тесту
+    // В реальности нужно открыть чат с ботом или экран теста
+}
 
 function selectMode(mode) {
     console.log('Selected mode:', mode);
@@ -592,6 +631,7 @@ function askQuestion() {
 // ============================================
 
 window.showScreen = showScreen;
+window.startTest = startTest;
 window.selectMode = selectMode;
 window.setMode = setMode;
 window.selectGoal = selectGoal;
