@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики этапов тестирования (1-5) для MAX
-Версия 2.0 - ПОЛНАЯ с исправленными функциями
+Версия 2.1 - ДОБАВЛЕНО сохранение в PostgreSQL
 """
 
 import time
@@ -10,6 +10,7 @@ import logging
 import os
 import json
 import re
+import asyncio
 from typing import Dict, Any, Optional, List
 
 from bot_instance import bot
@@ -46,7 +47,63 @@ from state import (
     clear_state, TestStates
 )
 
+# Импортируем базу данных из main
+from main import db, save_user_to_db
+
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ БД
+# ============================================
+
+async def save_test_result_to_db(user_id: int, test_type: str):
+    """Сохраняет результаты теста в БД"""
+    data = user_data.get(user_id, {})
+    
+    # Получаем profile_code
+    profile_code = None
+    if data.get("profile_data"):
+        profile_code = data["profile_data"].get("display_name")
+    elif data.get("ai_generated_profile"):
+        # Пытаемся извлечь код из AI профиля
+        match = re.search(r'СБ-\d+_ТФ-\d+_УБ-\d+_ЧВ-\d+', data.get("ai_generated_profile", ""))
+        if match:
+            profile_code = match.group(0)
+    
+    # Сохраняем результат теста
+    test_id = await db.save_test_result(
+        user_id=user_id,
+        test_type=test_type,
+        results=data,
+        profile_code=profile_code,
+        perception_type=data.get("perception_type"),
+        thinking_level=data.get("thinking_level"),
+        vectors=data.get("behavioral_levels"),
+        deep_patterns=data.get("deep_patterns"),
+        confinement_model=data.get("confinement_model")
+    )
+    
+    # Сохраняем все ответы, если есть
+    all_answers = data.get("all_answers", [])
+    if all_answers and test_id:
+        for answer in all_answers:
+            await db.save_test_answer(
+                user_id=user_id,
+                test_result_id=test_id,
+                stage=answer.get('stage', 0),
+                question_index=answer.get('question_index', 0),
+                question_text=answer.get('question', ''),
+                answer_text=answer.get('answer', ''),
+                answer_value=answer.get('option', ''),
+                scores=answer.get('scores'),
+                measures=answer.get('measures'),
+                strategy=answer.get('strategy'),
+                dilts=answer.get('dilts'),
+                pattern=answer.get('pattern'),
+                target=answer.get('target')
+            )
+    
+    return test_id
 
 # ============================================
 # ДОБАВЛЕНА НЕДОСТАЮЩАЯ ФУНКЦИЯ
@@ -475,21 +532,8 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 1 complete, type={perception_type}")
     
-    # 💾 Сохраняем состояние в файл
-    try:
-        state_dir = '/tmp/user_states'
-        os.makedirs(state_dir, exist_ok=True)
-        state_file = os.path.join(state_dir, f'user_{user_id}_stage1.json')
-        
-        with open(state_file, 'w', encoding='utf-8') as f:
-            json.dump({
-                'perception_type': perception_type,
-                'perception_scores': perception_scores,
-                'timestamp': time.time()
-            }, f, ensure_ascii=False, indent=2)
-        logger.info(f"✅ Состояние пользователя {user_id} сохранено")
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения состояния: {e}")
+    # 💾 Сохраняем в БД
+    asyncio.create_task(save_user_to_db(user_id))
     
     result_text = STAGE_1_FEEDBACK.get(perception_type, STAGE_1_FEEDBACK["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"])
     
@@ -684,6 +728,9 @@ def finish_stage_2(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 2 complete, level={thinking_level}")
     
+    # 💾 Сохраняем в БД
+    asyncio.create_task(save_user_to_db(user_id))
+    
     result_text = STAGE_2_FEEDBACK.get((perception_type, level_group))
     if not result_text:
         result_text = STAGE_2_FEEDBACK[("СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ", "1-3")]
@@ -874,6 +921,9 @@ def finish_stage_3(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 3 complete, final_level={final_level}")
     
+    # 💾 Сохраняем в БД
+    asyncio.create_task(save_user_to_db(user_id))
+    
     result_text = STAGE_3_FEEDBACK.get(behavior_level, STAGE_3_FEEDBACK[1])
     
     text = f"{result_text}\n\n▶️ <b>Перейти к этапу 4</b>"
@@ -1046,6 +1096,9 @@ def finish_stage_4(message, user_id: int, state_data: dict):
     user_data[user_id]["confinement_model"] = model.to_dict()
     
     logger.info(f"✅ User {user_id}: Stage 4 complete, profile={profile_data.get('display_name', 'unknown')}")
+    
+    # 💾 Сохраняем в БД
+    asyncio.create_task(save_user_to_db(user_id))
     
     show_preliminary_profile(message, user_id)
 
@@ -1501,6 +1554,10 @@ def finish_stage_5(message, user_id: int, state_data: dict):
     user_data[user_id]["deep_patterns"] = deep_patterns
     
     logger.info(f"✅ User {user_id}: Stage 5 complete")
+    
+    # 💾 Сохраняем в БД полный результат теста
+    asyncio.create_task(save_test_result_to_db(user_id, 'full_profile'))
+    asyncio.create_task(save_user_to_db(user_id))
     
     try:
         from handlers.profile import show_final_profile
