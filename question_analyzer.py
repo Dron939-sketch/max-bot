@@ -3,16 +3,23 @@
 """
 МОДУЛЬ 7: АНАЛИЗ ВОПРОСОВ В КОНТЕКСТЕ КОНФАЙНМЕНТ-МОДЕЛИ
 Анализирует вопросы пользователя с учетом его психологического профиля
+ВЕРСИЯ 2.0 - ДОБАВЛЕНО КЭШИРОВАНИЕ В БД
 """
 
 import re
 import logging
+import json
+import time
+import asyncio
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 
 # Импорты из наших модулей
 from confinement_model import ConfinementModel9
 from loop_analyzer import LoopAnalyzer
+
+# ✅ ДОБАВЛЕНО: импорт для БД
+from db_instance import db
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +170,7 @@ class QuestionContextAnalyzer:
         Returns:
             dict: полный контекстный анализ вопроса
         """
-        # Проверяем кэш
+        # Проверяем in-memory кэш
         cache_key = hash(question) % 10000
         if not force_refresh and cache_key in self._analysis_cache:
             cache_age = (datetime.now() - self._cache_time.get(cache_key, datetime.now())).seconds
@@ -185,11 +192,135 @@ class QuestionContextAnalyzer:
             'reflection': self._generate_reflection(question)
         }
         
-        # Кэшируем результат
+        # ✅ Кэшируем в БД (асинхронно)
+        asyncio.create_task(self._cache_analysis_to_db(question, analysis))
+        
+        # Кэшируем в памяти
         self._analysis_cache[cache_key] = analysis
         self._cache_time[cache_key] = datetime.now()
         
         return analysis
+    
+    # ============================================
+    # ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
+    # ============================================
+    
+    async def _cache_analysis_to_db(self, question: str, analysis: Dict[str, Any]):
+        """Сохраняет анализ вопроса в кэш БД"""
+        try:
+            # Используем метод из database.py
+            await db.cache_question_analysis(0, question, analysis)  # user_id = 0 - общий кэш
+            logger.debug(f"💾 Анализ вопроса сохранен в БД")
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения анализа в БД: {e}")
+    
+    async def get_cached_analysis(self, question: str) -> Optional[Dict[str, Any]]:
+        """Получает кэшированный анализ из БД"""
+        try:
+            return await db.get_cached_question_analysis(0, question)
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения кэша из БД: {e}")
+            return None
+    
+    async def save_analysis_to_db(self, user_id: int, question: str, analysis: Dict[str, Any]):
+        """Сохраняет анализ вопроса для конкретного пользователя"""
+        try:
+            # Сохраняем как событие
+            await db.log_event(
+                user_id,
+                'question_analyzed',
+                {
+                    'question_preview': question[:100],
+                    'vectors': [v['vector'] for v in analysis.get('vectors', [])],
+                    'depth': analysis.get('depth', {}).get('type'),
+                    'emotion': analysis.get('emotion', {}).get('primary'),
+                    'timestamp': time.time()
+                }
+            )
+            
+            # Кэшируем с user_id
+            await db.cache_question_analysis(user_id, question, analysis)
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения анализа для {user_id}: {e}")
+    
+    async def get_user_analysis_history(self, user_id: int, limit: int = 10) -> List[Dict]:
+        """Получает историю анализов пользователя"""
+        try:
+            async with db.get_connection() as conn:
+                rows = await conn.fetch("""
+                    SELECT question_text, analysis, created_at
+                    FROM fredi_question_analysis_cache
+                    WHERE user_id = $1
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                """, user_id, limit)
+                
+                history = []
+                for row in rows:
+                    analysis = row['analysis']
+                    if isinstance(analysis, str):
+                        analysis = json.loads(analysis)
+                    
+                    history.append({
+                        'question': row['question_text'],
+                        'analysis': analysis,
+                        'time': row['created_at']
+                    })
+                return history
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения истории для {user_id}: {e}")
+            return []
+    
+    async def clear_user_analysis_cache(self, user_id: int):
+        """Очищает кэш анализов пользователя"""
+        try:
+            async with db.get_connection() as conn:
+                await conn.execute(
+                    "DELETE FROM fredi_question_analysis_cache WHERE user_id = $1",
+                    user_id
+                )
+            logger.info(f"🧹 Кэш анализов пользователя {user_id} очищен")
+            
+            # Очищаем in-memory кэш
+            self._analysis_cache.clear()
+            self._cache_time.clear()
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка очистки кэша для {user_id}: {e}")
+    
+    async def get_cache_stats(self, user_id: int = None) -> Dict[str, Any]:
+        """Получает статистику кэша"""
+        try:
+            async with db.get_connection() as conn:
+                if user_id:
+                    # Статистика для конкретного пользователя
+                    row = await conn.fetchrow("""
+                        SELECT 
+                            COUNT(*) as total,
+                            MAX(created_at) as last_analysis
+                        FROM fredi_question_analysis_cache
+                        WHERE user_id = $1
+                    """, user_id)
+                    
+                    return dict(row) if row else {}
+                else:
+                    # Общая статистика
+                    rows = await conn.fetch("""
+                        SELECT 
+                            COUNT(DISTINCT user_id) as users_with_cache,
+                            COUNT(*) as total_entries,
+                            AVG(EXTRACT(EPOCH FROM (expires_at - created_at))/60) as avg_cache_minutes
+                        FROM fredi_question_analysis_cache
+                    """)
+                    return dict(rows[0]) if rows else {}
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения статистики кэша: {e}")
+            return {}
+    
+    # ============================================
+    # МЕТОДЫ АНАЛИЗА (без изменений)
+    # ============================================
     
     def _analyze_vectors(self, question: str) -> List[Dict[str, Any]]:
         """
