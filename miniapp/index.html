@@ -5,23 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ФРЕДИ - Виртуальный психолог</title>
     
-    <!-- MAX Bridge -->
+    <!-- MAX Bridge (нужно для работы в MAX) -->
     <script src="https://max.ru/webapps/js/bridge.js"></script>
     
-    <!-- MAX UI библиотека -->
-    <link rel="stylesheet" href="https://max.ru/webapps/css/theme.css">
-    
+    <!-- ⚠️ ВЕСЬ CSS ВНУТРИ - НИКАКИХ ВНЕШНИХ ФАЙЛОВ! -->
     <style>
-        /* ========== ВЕСЬ ВАШ CSS ЗДЕСЬ ========== */
-        /* (весь тот огромный CSS, который у вас есть) */
-        
+        /* ========== ОСНОВНЫЕ ПЕРЕМЕННЫЕ ========== */
         :root {
+            /* Цвета MAX */
             --max-bg-light: #f0f2f5;
             --max-bg-dark: #0e1621;
             --max-surface-light: rgba(255, 255, 255, 0.9);
             --max-surface-dark: rgba(30, 37, 48, 0.9);
+            
+            /* Фирменные цвета ФРЕДИ */
             --fredi-blue: #40a7e3;
             --fredi-blue-light: rgba(64, 167, 227, 0.1);
+            
+            /* Размеры */
+            --header-height: 60px;
+            --nav-height: 70px;
+        }
+        
+        /* ========== БАЗОВЫЕ СТИЛИ ========== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
         }
         
         body {
@@ -29,12 +40,17 @@
             padding: 0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
             background: var(--max-bg-light);
+            color: #000000;
+            line-height: 1.5;
+            font-size: 16px;
+            -webkit-font-smoothing: antialiased;
+            height: 100vh;
+            overflow: hidden;
             position: relative;
-            min-height: 100vh;
-            transition: background-color 0.3s ease;
+            transition: background-color 0.3s ease, color 0.2s ease;
         }
         
-        /* Основной фон с паттерном "шум" */
+        /* ========== КРАСИВЫЙ ФОН С "ШУМОМ" ========== */
         body::before {
             content: "";
             position: fixed;
@@ -71,11 +87,12 @@
             z-index: 0;
         }
         
-        /* Темная тема */
+        /* ========== ТЕМНАЯ ТЕМА ========== */
         [data-max-theme="dark"] body,
         @media (prefers-color-scheme: dark) {
             body {
                 background: var(--max-bg-dark);
+                color: #ffffff;
             }
             
             body::before {
@@ -97,43 +114,197 @@
             }
         }
         
+        /* ========== КОНТЕЙНЕР ПРИЛОЖЕНИЯ ========== */
         #app {
             position: relative;
             z-index: 1;
             max-width: 600px;
             margin: 0 auto;
-            min-height: 100vh;
+            height: 100vh;
             display: flex;
             flex-direction: column;
-            padding-top: env(safe-area-inset-top);
-            padding-bottom: env(safe-area-inset-bottom);
+            background: transparent;
+            
+            /* Безопасные отступы для iOS */
+            padding-top: env(safe-area-inset-top, 0);
+            padding-bottom: env(safe-area-inset-bottom, 0);
             box-sizing: border-box;
         }
         
-        /* Стили для блоков */
-        .header, .nav-bar, .stages-list, .mode-header, .mode-card,
-        .profile-section, .thought-block, .goal-card, .examples-section,
-        .messages-container, .profile-badge, .menu-card, .weekend-hint,
-        .result-screen, .path-steps, .reality-check-screen, .custom-goal-screen,
-        .weekend-ideas-screen .ideas-container,
-        .content > div:not(.no-glass) {
-            background: var(--max-surface-light) !important;
+        /* ========== ШАПКА ========== */
+        .header {
+            height: var(--header-height);
+            padding: 0 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid rgba(224, 224, 224, 0.5);
+            background: var(--max-surface-light);
             backdrop-filter: blur(15px) saturate(180%);
             -webkit-backdrop-filter: blur(15px) saturate(180%);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            transition: background 0.3s ease, border-color 0.3s ease;
+        }
+        
+        [data-max-theme="dark"] .header {
+            background: var(--max-surface-dark);
+            border-bottom-color: rgba(58, 58, 58, 0.5);
+        }
+        
+        .back-btn {
+            width: 40px;
+            height: 40px;
+            border: none;
+            background: transparent;
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--fredi-blue);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: background 0.2s;
+        }
+        
+        .back-btn:hover {
+            background: rgba(64, 167, 227, 0.1);
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+            color: inherit;
+        }
+        
+        .header-placeholder {
+            width: 40px;
+        }
+        
+        /* ========== ОСНОВНОЙ КОНТЕНТ ========== */
+        .content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            padding-bottom: calc(var(--nav-height) + 16px);
+            scroll-behavior: smooth;
+            background: transparent;
+        }
+        
+        /* Стилизация скролла */
+        .content::-webkit-scrollbar {
+            width: 4px;
+        }
+        
+        .content::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .content::-webkit-scrollbar-thumb {
+            background: rgba(128, 128, 128, 0.5);
+            border-radius: 4px;
+        }
+        
+        /* ========== НИЖНЯЯ НАВИГАЦИЯ ========== */
+        .nav-bar {
+            height: var(--nav-height);
+            background: var(--max-surface-light);
+            backdrop-filter: blur(15px) saturate(180%);
+            -webkit-backdrop-filter: blur(15px) saturate(180%);
+            border-top: 1px solid rgba(224, 224, 224, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: space-around;
+            padding: 0 8px;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            max-width: 600px;
+            margin: 0 auto;
+            z-index: 100;
+            transition: background 0.3s ease, border-color 0.3s ease;
+        }
+        
+        [data-max-theme="dark"] .nav-bar {
+            background: var(--max-surface-dark);
+            border-top-color: rgba(58, 58, 58, 0.5);
+        }
+        
+        .nav-btn {
+            flex: 1;
+            height: 48px;
+            border: none;
+            background: transparent;
+            color: #8e8e93;
+            font-size: 14px;
+            font-weight: 500;
+            border-radius: 24px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+        }
+        
+        .nav-btn span {
+            font-size: 20px;
+        }
+        
+        .nav-btn.active {
+            color: var(--fredi-blue);
+            background: var(--fredi-blue-light);
+        }
+        
+        [data-max-theme="dark"] .nav-btn.active {
+            background: rgba(64, 167, 227, 0.2);
+        }
+        
+        /* ========== СТЕКЛЯННЫЕ КАРТОЧКИ ========== */
+        .welcome-screen,
+        .why-screen,
+        .mode-screen,
+        .profile-screen,
+        .thought-screen,
+        .goals-screen,
+        .ask-screen,
+        .stage-screen,
+        .result-screen,
+        .goal-path-screen,
+        .reality-check-screen,
+        .custom-goal-screen,
+        .weekend-ideas-screen {
+            background: transparent;
+        }
+        
+        .stages-list,
+        .mode-header,
+        .mode-card,
+        .profile-section,
+        .thought-block,
+        .goal-card,
+        .examples-section,
+        .messages-container,
+        .profile-badge,
+        .menu-card,
+        .weekend-hint,
+        .result-screen,
+        .path-steps,
+        .reality-check-screen,
+        .custom-goal-screen,
+        .weekend-ideas-screen .ideas-container {
+            background: var(--max-surface-light) !important;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
             border: 1px solid rgba(255, 255, 255, 0.5) !important;
             border-radius: 14px;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-            transition: background-color 0.3s ease, border-color 0.3s ease;
+            transition: background 0.3s ease, border-color 0.3s ease, transform 0.2s ease;
         }
         
-        .header, .nav-bar {
-            border-radius: 0;
-            border-left: none;
-            border-right: none;
-        }
-        
-        [data-max-theme="dark"] .header,
-        [data-max-theme="dark"] .nav-bar,
         [data-max-theme="dark"] .stages-list,
         [data-max-theme="dark"] .mode-header,
         [data-max-theme="dark"] .mode-card,
@@ -149,113 +320,535 @@
         [data-max-theme="dark"] .path-steps,
         [data-max-theme="dark"] .reality-check-screen,
         [data-max-theme="dark"] .custom-goal-screen,
-        [data-max-theme="dark"] .weekend-ideas-screen .ideas-container,
-        [data-max-theme="dark"] .content > div:not(.no-glass) {
+        [data-max-theme="dark"] .weekend-ideas-screen .ideas-container {
             background: var(--max-surface-dark) !important;
             border-color: rgba(255, 255, 255, 0.1) !important;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
         }
         
-        [data-max-theme="dark"] body {
-            color: #fff;
+        /* ========== ЭКРАН ПРИВЕТСТВИЯ ========== */
+        .welcome-screen {
+            animation: fadeIn 0.3s ease-out;
         }
         
-        .header {
+        .greeting {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: inherit;
+        }
+        
+        .welcome-text {
+            font-size: 16px;
+            line-height: 1.6;
+            margin-bottom: 24px;
+        }
+        
+        .welcome-text p {
+            margin-bottom: 16px;
+        }
+        
+        .stages-list {
+            border-radius: 14px;
+            padding: 16px;
+            margin: 20px 0;
+        }
+        
+        .stage-item {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        
+        .stage-number {
+            font-size: 18px;
+            min-width: 32px;
+        }
+        
+        .stage-text {
+            flex: 1;
+        }
+        
+        /* ========== КАРТОЧКИ МЕНЮ ========== */
+        .main-menu {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin: 20px 0;
+        }
+        
+        .menu-card {
+            padding: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            text-align: left;
+            border-radius: 14px;
+        }
+        
+        .menu-card:hover {
+            background: rgba(64, 167, 227, 0.1) !important;
+            transform: translateX(4px);
+        }
+        
+        .menu-emoji {
+            font-size: 32px;
+            min-width: 48px;
+            text-align: center;
+        }
+        
+        .menu-title {
+            font-weight: 600;
+            font-size: 16px;
+            margin-bottom: 4px;
+        }
+        
+        .menu-desc {
+            font-size: 13px;
+            color: #8e8e93;
+        }
+        
+        /* ========== КНОПКИ ========== */
+        .action-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 24px;
+        }
+        
+        .action-btn {
+            width: 100%;
+            height: 56px;
+            border: none;
+            border-radius: 14px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .action-btn.primary {
+            background: var(--fredi-blue);
+            color: white;
+        }
+        
+        .action-btn.primary:hover {
+            opacity: 0.9;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(64, 167, 227, 0.3);
+        }
+        
+        .action-btn.secondary {
+            background: var(--max-surface-light);
+            border: 1px solid rgba(224, 224, 224, 0.5);
+            color: inherit;
+        }
+        
+        [data-max-theme="dark"] .action-btn.secondary {
+            background: var(--max-surface-dark);
+        }
+        
+        .action-btn.secondary:hover {
+            background: rgba(64, 167, 227, 0.1);
+            border-color: var(--fredi-blue);
+        }
+        
+        /* ========== ПРОФИЛЬ ========== */
+        .profile-badge {
+            padding: 12px 16px;
+            margin: 16px 0;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 12px 16px;
-            position: sticky;
-            top: 0;
-            z-index: 100;
+            cursor: pointer;
+            border-radius: 30px;
         }
         
-        .back-btn {
-            background: none;
-            border: none;
-            font-size: 24px;
+        .profile-badge:hover {
+            background: rgba(64, 167, 227, 0.1) !important;
+            transform: translateY(-2px);
+        }
+        
+        .profile-code {
+            font-weight: 600;
+            font-size: 15px;
+        }
+        
+        .profile-arrow {
+            color: #8e8e93;
+            font-size: 18px;
+        }
+        
+        /* ========== ЭКРАН ВЫБОРА РЕЖИМА ========== */
+        .mode-card {
+            padding: 20px;
+            margin-bottom: 16px;
             cursor: pointer;
-            padding: 0 8px;
-            width: 40px;
-            height: 40px;
+            border-radius: 14px;
+        }
+        
+        .mode-card:hover {
+            background: rgba(64, 167, 227, 0.1) !important;
+            transform: translateY(-2px);
+        }
+        
+        .mode-card.active {
+            border-color: var(--fredi-blue) !important;
+            background: rgba(64, 167, 227, 0.15) !important;
+            transform: scale(1.02);
+        }
+        
+        .mode-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .mode-desc {
+            color: #8e8e93;
+            font-size: 14px;
+            line-height: 1.5;
+            margin-bottom: 12px;
+        }
+        
+        .mode-benefits {
+            list-style: none;
+            padding-left: 0;
+        }
+        
+        .mode-benefits li {
+            margin-bottom: 8px;
+            padding-left: 20px;
+            position: relative;
+        }
+        
+        .mode-benefits li::before {
+            content: "•";
+            color: var(--fredi-blue);
+            position: absolute;
+            left: 4px;
+            font-weight: bold;
+        }
+        
+        .apply-mode-btn {
+            width: 100%;
+            height: 56px;
+            background: var(--fredi-blue);
+            color: white;
+            border: none;
+            border-radius: 14px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 8px;
+        }
+        
+        .apply-mode-btn:hover {
+            opacity: 0.9;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(64, 167, 227, 0.3);
+        }
+        
+        /* ========== ЭКРАН ВОПРОСА ========== */
+        .ask-screen {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            min-height: 500px;
+        }
+        
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            border-radius: 14px;
+            margin-bottom: 16px;
+            min-height: 300px;
+            max-height: 400px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        .message {
+            max-width: 85%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            font-size: 15px;
+            line-height: 1.5;
+            word-wrap: break-word;
+            animation: messageIn 0.3s ease-out;
+        }
+        
+        @keyframes messageIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .message.user {
+            align-self: flex-end;
+            background: var(--fredi-blue);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        
+        .message.bot {
+            align-self: flex-start;
+            background: var(--max-surface-light);
+            border: 1px solid rgba(224, 224, 224, 0.5);
+            border-bottom-left-radius: 4px;
+        }
+        
+        [data-max-theme="dark"] .message.bot {
+            background: var(--max-surface-dark);
+        }
+        
+        .message.system {
+            align-self: center;
+            background: transparent;
+            color: #8e8e93;
+            font-size: 13px;
+            max-width: 90%;
+            text-align: center;
+            border: none;
+        }
+        
+        .message.typing {
+            background: transparent;
+            border: none;
+        }
+        
+        .typing-dots {
+            display: inline-block;
+            animation: typing 1.5s infinite;
+        }
+        
+        @keyframes typing {
+            0% { opacity: 0.3; }
+            50% { opacity: 1; }
+            100% { opacity: 0.3; }
+        }
+        
+        .input-panel {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            background: var(--max-surface-light);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(224, 224, 224, 0.5);
+            border-radius: 30px;
+            padding: 8px 12px;
+        }
+        
+        [data-max-theme="dark"] .input-panel {
+            background: var(--max-surface-dark);
+        }
+        
+        .text-input {
+            flex: 1;
+            border: none;
+            background: transparent;
+            padding: 10px 0;
+            font-size: 16px;
+            color: inherit;
+            outline: none;
+        }
+        
+        .text-input::placeholder {
+            color: #8e8e93;
+        }
+        
+        .voice-btn, .send-btn {
+            width: 48px;
+            height: 48px;
+            border: none;
+            background: var(--fredi-blue);
+            color: white;
+            border-radius: 50%;
+            cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
-            border-radius: 50%;
-            transition: background-color 0.2s;
-        }
-        
-        .back-btn:hover {
-            background: rgba(0, 0, 0, 0.05);
-        }
-        
-        [data-max-theme="dark"] .back-btn:hover {
-            background: rgba(255, 255, 255, 0.1);
-        }
-        
-        .header h1 {
-            margin: 0;
             font-size: 20px;
-            font-weight: 600;
+            transition: all 0.2s;
+            flex-shrink: 0;
         }
         
-        .header-placeholder {
-            width: 40px;
+        .voice-btn:hover, .send-btn:hover {
+            transform: scale(1.05);
+            opacity: 0.9;
+            box-shadow: 0 4px 12px rgba(64, 167, 227, 0.3);
         }
         
-        .content {
-            flex: 1;
+        .examples-section {
+            margin-top: 24px;
             padding: 16px;
+            border-radius: 14px;
         }
         
-        .nav-bar {
-            display: flex;
-            justify-content: space-around;
-            padding: 8px 16px;
-            position: sticky;
-            bottom: 0;
-            z-index: 100;
-            border-top: 1px solid rgba(0, 0, 0, 0.05);
-        }
-        
-        [data-max-theme="dark"] .nav-bar {
-            border-top-color: rgba(255, 255, 255, 0.05);
-        }
-        
-        .nav-btn {
-            background: none;
-            border: none;
+        .example-buttons {
             display: flex;
             flex-direction: column;
-            align-items: center;
-            gap: 4px;
-            padding: 8px 16px;
-            border-radius: 30px;
-            cursor: pointer;
-            font-size: 12px;
+            gap: 8px;
+        }
+        
+        .example-btn {
+            text-align: left;
+            padding: 12px 16px;
+            background: var(--max-surface-light);
+            border: 1px solid rgba(224, 224, 224, 0.5);
+            border-radius: 20px;
+            font-size: 14px;
             color: inherit;
-            transition: background-color 0.2s;
+            cursor: pointer;
+            transition: all 0.2s;
         }
         
-        .nav-btn span {
-            font-size: 20px;
+        [data-max-theme="dark"] .example-btn {
+            background: var(--max-surface-dark);
         }
         
-        .nav-btn.active {
-            background: var(--fredi-blue-light);
+        .example-btn:hover {
+            background: var(--fredi-blue);
+            color: white;
+            border-color: var(--fredi-blue);
+            transform: translateX(4px);
+        }
+        
+        /* ========== ЦЕЛИ ========== */
+        .goal-card {
+            padding: 16px;
+            margin-bottom: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border-radius: 14px;
+        }
+        
+        .goal-card:hover {
+            background: rgba(64, 167, 227, 0.1) !important;
+            transform: translateX(4px);
+        }
+        
+        .goal-difficulty {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+        }
+        
+        .goal-difficulty.easy { background: #c6f6d5; color: #22543d; }
+        .goal-difficulty.medium { background: #feebc8; color: #744210; }
+        .goal-difficulty.hard { background: #fed7d7; color: #742a2a; }
+        
+        .goal-info {
+            flex: 1;
+        }
+        
+        .goal-name {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        
+        .goal-desc {
+            font-size: 13px;
+            color: #8e8e93;
+            margin-bottom: 4px;
+        }
+        
+        .goal-time {
+            font-size: 12px;
+            color: #8e8e93;
+        }
+        
+        .custom-goal-btn {
+            width: 100%;
+            height: 56px;
+            border: 2px dashed rgba(224, 224, 224, 0.5);
+            background: var(--max-surface-light);
+            border-radius: 14px;
+            font-size: 16px;
+            color: #8e8e93;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 16px;
+        }
+        
+        [data-max-theme="dark"] .custom-goal-btn {
+            background: var(--max-surface-dark);
+        }
+        
+        .custom-goal-btn:hover {
+            border-color: var(--fredi-blue);
             color: var(--fredi-blue);
         }
         
-        [data-max-theme="dark"] .nav-btn.active {
-            background: rgba(64, 167, 227, 0.2);
+        /* ========== ИДЕИ НА ВЫХОДНЫЕ ========== */
+        .weekend-ideas-screen {
+            animation: fadeIn 0.3s ease-out;
         }
-
-        /* Добавьте минимальные стили для загрузки */
+        
+        .weekend-ideas-screen h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+        
+        .ideas-container {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            margin-bottom: 24px;
+            padding: 16px;
+            border-radius: 14px;
+        }
+        
+        .idea-card {
+            display: flex;
+            gap: 16px;
+            align-items: flex-start;
+        }
+        
+        .idea-emoji {
+            font-size: 32px;
+            min-width: 48px;
+            text-align: center;
+        }
+        
+        .idea-text {
+            flex: 1;
+            line-height: 1.6;
+        }
+        
+        .idea-text strong {
+            color: var(--fredi-blue);
+        }
+        
+        /* ========== ЗАГРУЗКА ========== */
         .loading-screen {
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
+            height: 100%;
             min-height: 300px;
         }
         
@@ -263,31 +856,99 @@
             width: 40px;
             height: 40px;
             border: 3px solid rgba(64, 167, 227, 0.3);
+            border-top-color: var(--fredi-blue);
             border-radius: 50%;
-            border-top-color: #40a7e3;
-            animation: spin 1s ease-in-out infinite;
+            animation: spin 1s linear infinite;
+            margin-bottom: 16px;
         }
         
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+        
+        /* ========== АНИМАЦИИ ========== */
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        .fade-out {
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .fade-in {
+            opacity: 1;
+            transition: opacity 0.3s;
+        }
+        
+        /* ========== АДАПТИВНОСТЬ ========== */
+        @media (max-width: 480px) {
+            .header h1 {
+                font-size: 18px;
+            }
+            
+            .greeting {
+                font-size: 20px;
+            }
+            
+            .mode-title {
+                font-size: 18px;
+            }
+            
+            .menu-emoji {
+                font-size: 28px;
+                min-width: 40px;
+            }
+            
+            .idea-emoji {
+                font-size: 28px;
+                min-width: 40px;
+            }
+            
+            .action-btn {
+                height: 48px;
+                font-size: 15px;
+            }
+            
+            .message {
+                max-width: 90%;
+                font-size: 14px;
+            }
+        }
+        
+        /* ========== УТИЛИТЫ ========== */
+        .hidden {
+            display: none !important;
+        }
+        
+        .text-center {
+            text-align: center;
+        }
+        
+        .mt-4 { margin-top: 16px; }
+        .mb-4 { margin-bottom: 16px; }
     </style>
-    
-    <!-- ⚠️ ВАЖНО: СТРОКУ С STYLES.CSS УДАЛИЛИ ПОЛНОСТЬЮ! -->
-    
 </head>
 <body>
     <div id="app">
+        <!-- Шапка -->
         <header class="header">
             <button class="back-btn" id="backBtn" style="display: none;">←</button>
             <h1 id="header-title">👋 ФРЕДИ</h1>
             <div class="header-placeholder"></div>
         </header>
         
+        <!-- Основной контент -->
         <main class="content" id="content">
             <!-- Контент будет загружаться через script.js -->
+            <div class="loading-screen">
+                <div class="spinner"></div>
+                <p>Загрузка ФРЕДИ...</p>
+            </div>
         </main>
         
+        <!-- Нижняя навигация -->
         <nav class="nav-bar" id="navBar" style="display: none;">
             <button class="nav-btn" onclick="showScreen('main')" data-screen="main">
                 <span>🏠</span> Главная
@@ -304,25 +965,41 @@
         </nav>
     </div>
     
-    <!-- ⚠️ ТУТ ТОЖЕ ПРОВЕРЬТЕ: script.js должен существовать! -->
+    <!-- Подключаем script.js (убедитесь, что файл существует!) -->
     <script src="script.js"></script>
     
+    <!-- Минимальная инициализация на случай если script.js не загрузится -->
     <script>
-        // Минимальная инициализация для теста
         (function() {
-            console.log('🚀 HTML загружен, ждем скрипты...');
+            console.log('📱 ФРЕДИ: HTML загружен');
             
             // Проверяем MAX
             if (window.MAX) {
                 console.log('✅ MAX Bridge найден');
-                document.body.parentElement.setAttribute('data-max-theme', window.MAX.theme || 'light');
+                try {
+                    const theme = window.MAX.theme || 'light';
+                    document.documentElement.setAttribute('data-max-theme', theme);
+                    
+                    window.MAX.onEvent('themeChanged', function(newTheme) {
+                        document.documentElement.setAttribute('data-max-theme', newTheme);
+                    });
+                    
+                    window.MAX.ready();
+                } catch (e) {
+                    console.log('⚠️ Ошибка MAX:', e);
+                }
             } else {
                 console.log('⚠️ MAX Bridge не найден');
+                // Определяем тему по системным настройкам
+                const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                document.documentElement.setAttribute('data-max-theme', prefersDark ? 'dark' : 'light');
             }
             
-            // Простая функция showScreen для теста
-            window.showScreen = function(screenName) {
-                console.log('📱 Переход на экран:', screenName);
+            // Базовая функция showScreen на случай отсутствия script.js
+            window.showScreen = window.showScreen || function(screenName) {
+                console.log('📱 Экран:', screenName);
+                
+                // Обновляем активную кнопку
                 document.querySelectorAll('.nav-btn').forEach(btn => {
                     btn.classList.remove('active');
                     if (btn.dataset.screen === screenName) {
@@ -333,15 +1010,22 @@
                 // Показываем тестовый контент
                 document.getElementById('content').innerHTML = `
                     <div style="padding: 20px; text-align: center;">
-                        <h2>🧠 Экран: ${screenName}</h2>
-                        <p>Если вы это видите - HTML и CSS работают!</p>
-                        <p>Теперь проверяем script.js...</p>
+                        <h2>🧠 ФРЕДИ</h2>
+                        <p>Экран: ${screenName}</p>
+                        <p style="color: #8e8e93; margin-top: 20px;">
+                            ⚡ Ожидание загрузки script.js<br>
+                            <small>Если это сообщение не исчезнет - проверьте наличие файла script.js</small>
+                        </p>
                     </div>
                 `;
             };
             
-            // Показываем главный экран
-            setTimeout(() => window.showScreen('main'), 100);
+            // Показываем главный экран через секунду
+            setTimeout(() => {
+                window.showScreen('main');
+                document.getElementById('navBar').style.display = 'flex';
+                document.getElementById('backBtn').style.display = 'none';
+            }, 1000);
         })();
     </script>
 </body>
