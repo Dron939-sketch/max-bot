@@ -1,16 +1,19 @@
 // ============================================
-// script.js - Вся логика мини-приложения
+// script.js - ФРЕДИ: ВИРТУАЛЬНЫЙ ПСИХОЛОГ
+// Все тексты взяты из Telegram-бота
 // ============================================
 
-// Глобальные переменные
-let userId = null;
-let currentScreen = 'main';
-let userData = {};
+// ============================================
+// ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
+// ============================================
+
 let app = {
     userId: null,
-    currentScreen: 'main',
+    currentScreen: 'welcome',
     userData: {},
-    hasProfile: false
+    hasProfile: false,
+    selectedMode: null,
+    messages: []
 };
 
 // ============================================
@@ -18,7 +21,7 @@ let app = {
 // ============================================
 
 function getUserId() {
-    // 1. Пробуем из URL параметров
+    // 1. Из URL параметров
     const urlParams = new URLSearchParams(window.location.search);
     const urlUserId = urlParams.get('user_id');
     
@@ -27,7 +30,7 @@ function getUserId() {
         return urlUserId;
     }
     
-    // 2. Пробуем из MAX WebApp
+    // 2. Из MAX WebApp
     try {
         if (window.WebApp?.initDataUnsafe?.user?.id) {
             const maxId = window.WebApp.initDataUnsafe.user.id;
@@ -58,20 +61,19 @@ function getTimeGreeting() {
 // ============================================
 
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('🚀 Mini-app initialized');
+    console.log('🚀 ФРЕДИ: Мини-приложение запущено');
     
     // Получаем ID пользователя
-    userId = getUserId();
-    app.userId = userId;
+    app.userId = getUserId();
     
-    // Показываем экран загрузки
+    // Показываем загрузку
     showLoading();
     
-    // Загружаем данные пользователя
+    // Загружаем данные
     await loadUserData();
     
-    // Настраиваем навигацию
-    setupNavigation();
+    // Настраиваем кнопку назад
+    setupBackButton();
 });
 
 // ============================================
@@ -80,7 +82,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function loadUserData() {
     try {
-        const response = await fetch(`/api/user-data?user_id=${userId}`);
+        const response = await fetch(`/api/user-data?user_id=${app.userId}`);
         if (!response.ok) throw new Error('Ошибка загрузки');
         
         app.userData = await response.json();
@@ -88,50 +90,44 @@ async function loadUserData() {
         
         // Показываем соответствующий экран
         if (app.hasProfile) {
-            // Если есть профиль - показываем главное меню
+            // У пользователя есть профиль - показываем главное меню
             showScreen('main');
+            // Показываем навигацию
+            document.getElementById('navBar').style.display = 'flex';
         } else {
-            // Если нет профиля - показываем приветствие для новичков
+            // Новый пользователь - показываем приветствие
             showScreen('welcome');
+            // Скрываем навигацию
+            document.getElementById('navBar').style.display = 'none';
         }
         
     } catch (error) {
-        console.error('Error loading user data:', error);
+        console.error('Ошибка загрузки данных:', error);
         showError('Не удалось загрузить данные пользователя');
     }
 }
 
 // ============================================
-// НАВИГАЦИЯ
+// НАСТРОЙКА КНОПКИ НАЗАД
 // ============================================
 
-function setupNavigation() {
-    const navButtons = document.querySelectorAll('.nav-btn');
-    navButtons.forEach(btn => {
-        btn.addEventListener('click', () => {
-            const screen = btn.dataset.screen;
-            
-            // Обновляем активную кнопку
-            navButtons.forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            
-            // Показываем экран
-            showScreen(screen);
-        });
-    });
-    
-    // Кнопка назад
+function setupBackButton() {
     const backBtn = document.getElementById('backBtn');
-    if (backBtn) {
-        backBtn.addEventListener('click', () => {
-            if (currentScreen === 'main' || currentScreen === 'welcome') {
-                // На главной - ничего не делаем или закрываем приложение
-                if (window.WebApp?.close) window.WebApp.close();
-            } else {
-                showScreen('main');
-            }
-        });
-    }
+    backBtn.addEventListener('click', () => {
+        if (app.currentScreen === 'welcome' || app.currentScreen === 'main') {
+            // На главной - закрываем приложение
+            if (window.WebApp?.close) window.WebApp.close();
+        } else if (app.currentScreen === 'why') {
+            // С экрана "А ты кто" возвращаемся к приветствию
+            showScreen('welcome');
+        } else if (app.currentScreen === 'mode') {
+            // С выбора режима возвращаемся к главному меню
+            showScreen('main');
+        } else {
+            // По умолчанию - на главную
+            showScreen('main');
+        }
+    });
 }
 
 // ============================================
@@ -139,25 +135,25 @@ function setupNavigation() {
 // ============================================
 
 function showScreen(screen) {
-    currentScreen = screen;
+    app.currentScreen = screen;
     
     // Обновляем заголовок
     const headerTitle = document.getElementById('header-title');
     const titles = {
         'welcome': '👋 ФРЕДИ',
+        'why': '🧐 ФРЕДИ',
         'main': '🏠 ФРЕДИ',
+        'mode': '🔮 ФРЕДИ',
         'profile': '📊 ПОРТРЕТ',
         'thought': '🧠 МЫСЛИ',
         'goals': '🎯 ЦЕЛИ',
-        'mode': '🔮 РЕЖИМ'
+        'ask': '❓ ВОПРОС'
     };
     headerTitle.textContent = titles[screen] || '🧠 ФРЕДИ';
     
     // Показываем/скрываем кнопку назад
     const backBtn = document.getElementById('backBtn');
-    if (backBtn) {
-        backBtn.style.display = (screen === 'main' || screen === 'welcome') ? 'none' : 'flex';
-    }
+    backBtn.style.display = (screen === 'welcome' || screen === 'main') ? 'none' : 'flex';
     
     // Загружаем контент
     const content = document.getElementById('content');
@@ -168,8 +164,14 @@ function showScreen(screen) {
             case 'welcome':
                 renderWelcomeScreen(content);
                 break;
+            case 'why':
+                renderWhyScreen(content);
+                break;
             case 'main':
                 renderMainScreen(content);
+                break;
+            case 'mode':
+                renderModeScreen(content);
                 break;
             case 'profile':
                 renderProfileScreen(content);
@@ -180,8 +182,8 @@ function showScreen(screen) {
             case 'goals':
                 renderGoalsScreen(content);
                 break;
-            case 'mode':
-                renderModeScreen(content);
+            case 'ask':
+                renderAskScreen(content);
                 break;
         }
         
@@ -189,29 +191,6 @@ function showScreen(screen) {
         content.classList.add('fade-in');
         setTimeout(() => content.classList.remove('fade-in'), 300);
     }, 300);
-}
-
-// ============================================
-// ЗАГРУЗКА
-// ============================================
-
-function showLoading() {
-    const content = document.getElementById('content');
-    content.innerHTML = `
-        <div class="loading-screen">
-            <div class="spinner"></div>
-            <p>Загрузка...</p>
-        </div>
-    `;
-}
-
-function showError(message) {
-    const content = document.getElementById('content');
-    content.innerHTML = `
-        <div class="error-screen">
-            ❌ ${message}
-        </div>
-    `;
 }
 
 // ============================================
@@ -223,7 +202,7 @@ function renderWelcomeScreen(container) {
     
     const html = `
         <div class="welcome-screen">
-            <div class="welcome-message">
+            <div class="welcome-text">
                 <p><strong>${userName}, привет! Ну, здравствуйте, дорогой человек! 👋</strong></p>
                 
                 <p>🧠 <strong>Я — Фреди, виртуальный психолог.</strong><br>
@@ -237,42 +216,98 @@ function renderWelcomeScreen(container) {
                 давайте-ка пройдём небольшой тест.</p>
                 
                 <p>📊 <strong>Всего 5 этапов:</strong></p>
-                
-                <div class="stages-list">
-                    <div class="stage-item">
-                        <span class="stage-number">1️⃣</span>
-                        <span class="stage-text">Конфигурация восприятия — как вы фильтруете реальность</span>
-                    </div>
-                    <div class="stage-item">
-                        <span class="stage-number">2️⃣</span>
-                        <span class="stage-text">Конфигурация мышления — как ваш мозг перерабатывает информацию</span>
-                    </div>
-                    <div class="stage-item">
-                        <span class="stage-number">3️⃣</span>
-                        <span class="stage-text">Конфигурация поведения — что вы делаете на автопилоте</span>
-                    </div>
-                    <div class="stage-item">
-                        <span class="stage-number">4️⃣</span>
-                        <span class="stage-text">Точка роста — куда двигаться, чтобы не топтаться на месте</span>
-                    </div>
-                    <div class="stage-item">
-                        <span class="stage-number">5️⃣</span>
-                        <span class="stage-text">Глубинные паттерны — что сформировало вас как личность</span>
-                    </div>
+            </div>
+            
+            <div class="stages-list">
+                <div class="stage-item">
+                    <span class="stage-number">1️⃣</span>
+                    <span class="stage-text">Конфигурация восприятия — как вы фильтруете реальность</span>
                 </div>
-                
+                <div class="stage-item">
+                    <span class="stage-number">2️⃣</span>
+                    <span class="stage-text">Конфигурация мышления — как ваш мозг перерабатывает информацию</span>
+                </div>
+                <div class="stage-item">
+                    <span class="stage-number">3️⃣</span>
+                    <span class="stage-text">Конфигурация поведения — что вы делаете на автопилоте</span>
+                </div>
+                <div class="stage-item">
+                    <span class="stage-number">4️⃣</span>
+                    <span class="stage-text">Точка роста — куда двигаться, чтобы не топтаться на месте</span>
+                </div>
+                <div class="stage-item">
+                    <span class="stage-number">5️⃣</span>
+                    <span class="stage-text">Глубинные паттерны — что сформировало вас как личность</span>
+                </div>
+            </div>
+            
+            <div class="welcome-text">
                 <p>⏱ <strong>15 минут</strong> — и я буду знать о вас больше, чем вы думаете.</p>
                 
                 <p>🚀 <strong>Ну что, начнём наше знакомство?</strong></p>
+            </div>
+            
+            <div class="action-buttons">
+                <button class="action-btn primary" onclick="startContext()">
+                    🚀 ДАВАЙ, ПОГНАЛИ!
+                </button>
+                <button class="action-btn secondary" onclick="showScreen('why')">
+                    🤨 А ТЫ ВООБЩЕ КТО?
+                </button>
+            </div>
+        </div>
+    `;
+    
+    container.innerHTML = html;
+}
+
+// ============================================
+// ЭКРАН "А ТЫ ВООБЩЕ КТО?"
+// ============================================
+
+function renderWhyScreen(container) {
+    const html = `
+        <div class="why-screen">
+            <div class="why-text">
+                <p>🎭 <strong>Ну, вопрос хороший. Давайте по существу.</strong></p>
                 
-                <div class="action-buttons">
-                    <button class="action-btn primary" onclick="startTest()">
-                        🚀 ДАВАЙ, ПОГНАЛИ!
-                    </button>
-                    <button class="action-btn secondary" onclick="showScreen('mode')">
-                        🔮 СНАЧАЛА ВЫБРАТЬ РЕЖИМ
-                    </button>
-                </div>
+                <p>Видите ли, дорогой человек, я — экспериментальная модель.<br>
+                Андрей Мейстер однажды подумал: "А что, если я создам свою цифровую копию?<br>
+                Пусть работает, пока я сплю, ем или просто ленюсь".</p>
+                
+                <p>Так я и появился. 🧠</p>
+                
+                <p>🧐 <strong>Что я умею:</strong></p>
+                
+                <ul class="why-list">
+                    <li>Вижу паттерны там, где вы видите просто день сурка</li>
+                    <li>Нахожу систему в ваших "случайных" решениях</li>
+                    <li>Понимаю, почему вы выбираете одних и тех же "не тех" людей</li>
+                    <li>Я реально беспристрастен — у меня нет плохого настроения</li>
+                </ul>
+                
+                <p>🎯 <strong>Конкретно по тесту:</strong></p>
+                
+                <ul class="why-list">
+                    <li>1️⃣ Восприятие — поймём, какую линзу вы носите</li>
+                    <li>2️⃣ Мышление — узнаем, как вы пережёвываете реальность</li>
+                    <li>3️⃣ Поведение — посмотрим, что вы делаете "на автомате"</li>
+                    <li>4️⃣ Точка роста — я скажу, куда вам двигаться</li>
+                    <li>5️⃣ Глубинные паттерны — заглянем в детство и подсознание</li>
+                </ul>
+                
+                <p>⏱ <strong>15 минут</strong> — и я составлю ваш профиль.</p>
+                
+                <p>👌 Погнали?</p>
+            </div>
+            
+            <div class="action-buttons">
+                <button class="action-btn primary" onclick="startContext()">
+                    🚀 ПОГНАЛИ!
+                </button>
+                <button class="action-btn secondary" onclick="showScreen('welcome')">
+                    ◀️ НАЗАД
+                </button>
             </div>
         </div>
     `;
@@ -288,7 +323,7 @@ function renderMainScreen(container) {
     const greeting = getTimeGreeting();
     const userName = app.userData.user_name || 'друг';
     
-    // Эмодзи погоды (заглушка, в реальности придет из API)
+    // Погода (заглушка)
     const weatherEmoji = '☁️';
     const weatherDesc = 'пасмурно';
     const weatherTemp = '+5°C';
@@ -340,12 +375,69 @@ function renderMainScreen(container) {
             </div>
             
             <div class="menu-buttons">
-                <button class="menu-btn" onclick="showScreen('benefits')">
+                <button class="menu-btn" onclick="showBenefits()">
                     📖 ЧТО ДАЕТ ТЕСТ
                 </button>
-                <button class="menu-btn" onclick="askQuestion()">
+                <button class="menu-btn" onclick="showScreen('ask')">
                     ❓ ЗАДАТЬ ВОПРОС
                 </button>
+            </div>
+        </div>
+    `;
+    
+    container.innerHTML = html;
+}
+
+// ============================================
+// ЭКРАН ВЫБОРА РЕЖИМА
+// ============================================
+
+function renderModeScreen(container) {
+    const profileCode = app.userData.profile_code || 'СБ-4_ТФ-4_УБ-4_ЧВ-4';
+    
+    const html = `
+        <div class="mode-screen">
+            <div class="mode-header">
+                <div class="mode-profile">
+                    <span class="mode-profile-label">Твой профиль:</span>
+                    <span class="mode-profile-code">${profileCode}</span>
+                </div>
+            </div>
+            
+            <div class="mode-card ${app.selectedMode === 'coach' ? 'active' : ''}" onclick="setMode('coach')">
+                <div class="mode-title">🔮 КОУЧ</div>
+                <div class="mode-desc">
+                    Если хочешь, чтобы я помог тебе самому найти решения.
+                </div>
+                <ul class="mode-benefits">
+                    <li>• Жить станет легче — перестанешь закапываться в сомнениях</li>
+                    <li>• Появится больше радости от простых вещей</li>
+                    <li>• Начнёшь замечать возможности вместо проблем</li>
+                </ul>
+            </div>
+            
+            <div class="mode-card ${app.selectedMode === 'psychologist' ? 'active' : ''}" onclick="setMode('psychologist')">
+                <div class="mode-title">🧠 ПСИХОЛОГ</div>
+                <div class="mode-desc">
+                    Если хочешь копнуть вглубь, разобраться с причинами, а не следствиями.
+                </div>
+                <ul class="mode-benefits">
+                    <li>• Перестанешь реагировать на триггеры</li>
+                    <li>• Исчезнут старые сценарии, которые портили жизнь</li>
+                    <li>• Внутри станет легче и спокойнее</li>
+                </ul>
+            </div>
+            
+            <div class="mode-card ${app.selectedMode === 'trainer' ? 'active' : ''}" onclick="setMode('trainer')">
+                <div class="mode-title">⚡ ТРЕНЕР</div>
+                <div class="mode-desc">
+                    Если нужны чёткие инструменты, навыки и результат.
+                </div>
+                <ul class="mode-benefits">
+                    <li>• Научишься чётко формулировать мысли</li>
+                    <li>• Освоишь алгоритмы ведения переговоров</li>
+                    <li>• Сформируешь полезные привычки</li>
+                </ul>
             </div>
         </div>
     `;
@@ -358,60 +450,43 @@ function renderMainScreen(container) {
 // ============================================
 
 function renderProfileScreen(container) {
-    if (!app.userData.profile) {
-        container.innerHTML = `
-            <div class="error-screen">
-                ❌ Профиль не найден. Пройдите тест в чате.
+    // Заглушка для профиля
+    const html = `
+        <div class="profile-screen">
+            <div class="profile-header">
+                <div class="profile-code">СБ-5_ТФ-5_УБ-5_ЧВ-3</div>
             </div>
-        `;
-        return;
-    }
-    
-    // Парсим профиль из текста
-    const profile = app.userData.profile;
-    const sections = profile.split('\n\n');
-    
-    // Код профиля (СБ-5_ТФ-5_УБ-5_ЧВ-3)
-    const profileCode = extractProfileCode(profile) || 'СБ-4_ТФ-4_УБ-4_ЧВ-4';
-    
-    let html = `
-        <div class="profile-header">
-            <div class="profile-code">${profileCode}</div>
+            
+            <div class="profile-section">
+                <h2><span>🔑</span> КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА</h2>
+                <p>Вы — командир крепости с тревожным сердцем. Снаружи — неприступные стены, отлаженные системы управления.</p>
+            </div>
+            
+            <div class="profile-section">
+                <h2><span>💪</span> СИЛЬНЫЕ СТОРОНЫ</h2>
+                <ul>
+                    <li>Высокоразвитые социальные навыки</li>
+                    <li>Системное мышление</li>
+                    <li>Устойчивость к стрессу</li>
+                    <li>Прагматизм</li>
+                </ul>
+            </div>
+            
+            <div class="profile-section">
+                <h2><span>🎯</span> ЗОНЫ РОСТА</h2>
+                <ul>
+                    <li>Страх конфликтов</li>
+                    <li>Энергией</li>
+                    <li>Временем</li>
+                </ul>
+            </div>
+            
+            <div class="profile-section">
+                <h2><span>⚠️</span> ГЛАВНАЯ ЛОВУШКА</h2>
+                <p>⚡ Поведение</p>
+            </div>
         </div>
     `;
-    
-    // Добавляем каждую секцию
-    sections.forEach((section, index) => {
-        if (section.includes('КЛЮЧЕВАЯ')) {
-            html += `
-                <div class="profile-section" style="animation-delay: ${index * 0.1}s">
-                    <h2><span>🔑</span> КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА</h2>
-                    <p>${cleanSection(section, 'КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА')}</p>
-                </div>
-            `;
-        } else if (section.includes('СИЛЬНЫЕ')) {
-            html += `
-                <div class="profile-section" style="animation-delay: ${index * 0.1}s">
-                    <h2><span>💪</span> СИЛЬНЫЕ СТОРОНЫ</h2>
-                    ${formatList(cleanSection(section, 'СИЛЬНЫЕ СТОРОНЫ'))}
-                </div>
-            `;
-        } else if (section.includes('ЗОНЫ')) {
-            html += `
-                <div class="profile-section" style="animation-delay: ${index * 0.1}s">
-                    <h2><span>🎯</span> ЗОНЫ РОСТА</h2>
-                    ${formatList(cleanSection(section, 'ЗОНЫ РОСТА'))}
-                </div>
-            `;
-        } else if (section.includes('ЛОВУШКА')) {
-            html += `
-                <div class="profile-section" style="animation-delay: ${index * 0.1}s">
-                    <h2><span>⚠️</span> ГЛАВНАЯ ЛОВУШКА</h2>
-                    <p>${cleanSection(section, 'ГЛАВНАЯ ЛОВУШКА')}</p>
-                </div>
-            `;
-        }
-    });
     
     container.innerHTML = html;
 }
@@ -421,51 +496,29 @@ function renderProfileScreen(container) {
 // ============================================
 
 function renderThoughtScreen(container) {
-    if (!app.userData.thought) {
-        container.innerHTML = `
-            <div class="error-screen">
-                ❌ Мысли психолога не найдены.
+    const html = `
+        <div class="thought-screen">
+            <div class="thought-block">
+                <div class="thought-title">🔐 КЛЮЧЕВОЙ ЭЛЕМЕНТ</div>
+                <p>Ключ ко всей системе — твоя «Реакция на угрозу». Это как бронированная дверь, которая всегда на замке.</p>
             </div>
-        `;
-        return;
-    }
-    
-    const thought = app.userData.thought;
-    const sections = thought.split('\n\n');
-    
-    let html = '';
-    
-    sections.forEach((section, index) => {
-        if (section.includes('КЛЮЧЕВОЙ')) {
-            html += `
-                <div class="thought-block" style="animation-delay: ${index * 0.1}s">
-                    <div class="thought-title">🔐 КЛЮЧЕВОЙ ЭЛЕМЕНТ</div>
-                    <p>${cleanSection(section, 'КЛЮЧЕВОЙ ЭЛЕМЕНТ')}</p>
-                </div>
-            `;
-        } else if (section.includes('ПЕТЛЯ')) {
-            html += `
-                <div class="thought-block" style="animation-delay: ${index * 0.1}s">
-                    <div class="thought-title">🔄 ПЕТЛЯ</div>
-                    <p>${cleanSection(section, 'ПЕТЛЯ')}</p>
-                </div>
-            `;
-        } else if (section.includes('ТОЧКА')) {
-            html += `
-                <div class="thought-block" style="animation-delay: ${index * 0.1}s">
-                    <div class="thought-title">🚪 ТОЧКА ВХОДА</div>
-                    <p>${cleanSection(section, 'ТОЧКА ВХОДА')}</p>
-                </div>
-            `;
-        } else if (section.includes('ПРОГНОЗ')) {
-            html += `
-                <div class="thought-block" style="animation-delay: ${index * 0.1}s">
-                    <div class="thought-title">📊 ПРОГНОЗ</div>
-                    <p>${cleanSection(section, 'ПРОГНОЗ')}</p>
-                </div>
-            `;
-        }
-    });
+            
+            <div class="thought-block">
+                <div class="thought-title">🔄 ПЕТЛЯ</div>
+                <p>Анализ → Сомнения → Ещё больший анализ</p>
+            </div>
+            
+            <div class="thought-block">
+                <div class="thought-title">🚪 ТОЧКА ВХОДА</div>
+                <p>Спроси себя: "Что я чувствую прямо сейчас?"</p>
+            </div>
+            
+            <div class="thought-block">
+                <div class="thought-title">📊 ПРОГНОЗ</div>
+                <p>Если продолжишь в том же духе, рискуешь упустить несколько хороших возможностей.</p>
+            </div>
+        </div>
+    `;
     
     container.innerHTML = html;
 }
@@ -475,25 +528,31 @@ function renderThoughtScreen(container) {
 // ============================================
 
 function renderGoalsScreen(container) {
-    const goals = app.userData.goals || getDefaultGoals();
+    const goals = [
+        { id: 'boundaries', name: 'Научиться защищать границы', time: '2-3 недели', difficulty: 'medium' },
+        { id: 'income', name: 'Увеличить доход', time: '4-6 недель', difficulty: 'hard' },
+        { id: 'purpose', name: 'Найти предназначение', time: '5-7 недель', difficulty: 'hard' },
+        { id: 'relations', name: 'Улучшить отношения', time: '4-6 недель', difficulty: 'medium' },
+        { id: 'calm', name: 'Найти внутреннее спокойствие', time: '3-5 недель', difficulty: 'medium' }
+    ];
     
     let html = '<div class="goals-screen">';
     html += '<h2>👇 Выберите цель:</h2>';
     
     goals.forEach(goal => {
-        const difficultyClass = goal.difficulty || 'medium';
+        const difficultyClass = goal.difficulty;
         const difficultyEmoji = {
             'easy': '🟢',
             'medium': '🟡',
             'hard': '🔴'
-        }[difficultyClass] || '⚪';
+        }[difficultyClass];
         
         html += `
             <div class="goal-card" onclick="selectGoal('${goal.id}')">
                 <div class="goal-difficulty ${difficultyClass}">${difficultyEmoji}</div>
                 <div class="goal-info">
                     <div class="goal-name">${goal.name}</div>
-                    <div class="goal-time">${goal.time || '3-4 недели'}</div>
+                    <div class="goal-time">${goal.time}</div>
                 </div>
             </div>
         `;
@@ -509,37 +568,46 @@ function renderGoalsScreen(container) {
 }
 
 // ============================================
-// ЭКРАН ВЫБОРА РЕЖИМА
+// ЭКРАН ВОПРОСА
 // ============================================
 
-function renderModeScreen(container) {
-    const profileCode = extractProfileCode(app.userData.profile) || 'СБ-4_ТФ-4_УБ-4_ЧВ-4';
+function renderAskScreen(container) {
+    const examples = [
+        "Как найти своё предназначение?",
+        "Что делать с неопределённостью?",
+        "Как перестать сомневаться?",
+        "Почему я реагирую на одни и те же триггеры?",
+        "Как проработать детскую травму?"
+    ];
     
     const html = `
-        <div class="mode-screen">
-            <div style="margin-bottom: 24px;">
-                <div style="color: var(--tg-hint); font-size: 14px; margin-bottom: 4px;">Твой профиль:</div>
-                <div style="font-weight: 600;">${profileCode}</div>
+        <div class="ask-screen">
+            <div class="ask-header">
+                <h2>Задайте вопрос</h2>
+                <p>Напишите текст или отправьте голосовое сообщение</p>
             </div>
             
-            <div class="mode-detail-card" onclick="setMode('coach')">
-                <div style="font-size: 20px; margin-bottom: 8px;">🔮 КОУЧ</div>
-                <div style="color: var(--tg-hint); font-size: 14px;">
-                    Помогаю найти ответы внутри тебя через открытые вопросы
+            <div class="messages-container" id="messagesContainer">
+                <div class="message system">
+                    👋 Задайте любой вопрос, и я отвечу с учётом вашего профиля
                 </div>
             </div>
             
-            <div class="mode-detail-card" onclick="setMode('psychologist')">
-                <div style="font-size: 20px; margin-bottom: 8px;">🧠 ПСИХОЛОГ</div>
-                <div style="color: var(--tg-hint); font-size: 14px;">
-                    Исследую глубинные паттерны, работаю с подсознанием
-                </div>
+            <div class="input-panel">
+                <input type="text" class="text-input" id="messageInput" 
+                       placeholder="Напишите вопрос..." onkeypress="handleKeyPress(event)">
+                <button class="voice-btn" onclick="toggleRecording()">🎤</button>
+                <button class="send-btn" onclick="sendMessage()">➤</button>
             </div>
             
-            <div class="mode-detail-card" onclick="setMode('trainer')">
-                <div style="font-size: 20px; margin-bottom: 8px;">⚡ ТРЕНЕР</div>
-                <div style="color: var(--tg-hint); font-size: 14px;">
-                    Даю чёткие инструкции, структуру, план действий
+            <div class="examples-section">
+                <h3>Примеры вопросов:</h3>
+                <div class="example-buttons">
+                    ${examples.map(ex => `
+                        <button class="example-btn" onclick="setExampleQuestion('${ex}')">
+                            ${ex}
+                        </button>
+                    `).join('')}
                 </div>
             </div>
         </div>
@@ -549,81 +617,131 @@ function renderModeScreen(container) {
 }
 
 // ============================================
-// ЦЕЛИ ПО УМОЛЧАНИЮ (ЕСЛИ API НЕ ОТВЕЧАЕТ)
+// ЗАГРУЗКА
 // ============================================
 
-function getDefaultGoals() {
-    return [
-        { id: 'boundaries', name: 'Научиться защищать границы', time: '2-3 недели', difficulty: 'medium' },
-        { id: 'income', name: 'Увеличить доход', time: '4-6 недель', difficulty: 'hard' },
-        { id: 'purpose', name: 'Найти предназначение', time: '5-7 недель', difficulty: 'hard' },
-        { id: 'relations', name: 'Улучшить отношения', time: '4-6 недель', difficulty: 'medium' },
-        { id: 'calm', name: 'Найти внутреннее спокойствие', time: '3-5 недель', difficulty: 'medium' }
-    ];
+function showLoading() {
+    const content = document.getElementById('content');
+    content.innerHTML = `
+        <div class="loading-screen">
+            <div class="spinner"></div>
+            <p>Загрузка...</p>
+        </div>
+    `;
 }
 
-// ============================================
-// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-// ============================================
-
-function cleanSection(section, title) {
-    return section.replace(title, '').replace(/^[:\s]+/, '').trim();
-}
-
-function formatList(text) {
-    if (text.includes('•')) {
-        const items = text.split('•').filter(item => item.trim());
-        let html = '<ul>';
-        items.forEach(item => {
-            if (item.trim()) html += `<li>${item.trim()}</li>`;
-        });
-        html += '</ul>';
-        return html;
-    }
-    return `<p>${text}</p>`;
-}
-
-function extractProfileCode(text) {
-    if (!text) return null;
-    const match = text.match(/[СБТФУБЧВ]-?\d+[_\s][СБТФУБЧВ]-?\d+[_\s][СБТФУБЧВ]-?\d+[_\s][СБТФУБЧВ]-?\d+/);
-    return match ? match[0] : null;
+function showError(message) {
+    const content = document.getElementById('content');
+    content.innerHTML = `
+        <div class="error-screen">
+            ❌ ${message}
+        </div>
+    `;
 }
 
 // ============================================
 // ОБРАБОТЧИКИ ДЕЙСТВИЙ
 // ============================================
 
-function startTest() {
-    console.log('Starting test');
+function startContext() {
+    console.log('🚀 Начинаем тест');
     // Здесь будет переход к тесту
-    // В реальности нужно открыть чат с ботом или экран теста
+    // Пока просто показываем уведомление
+    alert('Функция теста будет доступна в следующей версии!');
+}
+
+function showBenefits() {
+    console.log('📖 Показываем преимущества теста');
+    showScreen('why');
 }
 
 function selectMode(mode) {
-    console.log('Selected mode:', mode);
-    // Здесь будет вызов API для установки режима
+    console.log('🎯 Выбран режим:', mode);
+    
+    // Маппинг
+    const modeMap = {
+        'hard': 'trainer',
+        'medium': 'coach',
+        'soft': 'psychologist'
+    };
+    
+    app.selectedMode = modeMap[mode];
     showScreen('mode');
 }
 
 function setMode(mode) {
-    console.log('Setting mode:', mode);
-    // Здесь будет вызов API
+    console.log('✅ Установлен режим:', mode);
+    app.selectedMode = mode;
+    
+    // Здесь будет вызов API для сохранения режима
     showScreen('main');
 }
 
 function selectGoal(goalId) {
-    console.log('Selected goal:', goalId);
-    // Здесь будет переход к деталям цели
+    console.log('🎯 Выбрана цель:', goalId);
+    alert('Функция выбора цели будет доступна в следующей версии!');
 }
 
 function customGoal() {
-    console.log('Custom goal');
-    // Здесь будет открытие формы
+    console.log('✏️ Пользователь хочет сформулировать свою цель');
+    alert('Функция будет доступна в следующей версии!');
 }
 
-function askQuestion() {
-    console.log('Ask question');
-    // Здесь будет переход к чату
+function setExampleQuestion(question) {
+    const input = document.getElementById('messageInput');
+    if (input) {
+        input.value = question;
+        input.focus();
+    }
+}
+
+function handleKeyPress(event) {
+    if (event.key === 'Enter') {
+        sendMessage();
+    }
+}
+
+function sendMessage() {
+    const input = document.getElementById('messageInput');
+    const text = input.value.trim();
+    
+    if (!text) return;
+    
+    console.log('📤 Отправляем вопрос:', text);
+    
+    // Добавляем сообщение пользователя
+    const messagesContainer = document.getElementById('messagesContainer');
+    messagesContainer.innerHTML += `
+        <div class="message user">${escapeHtml(text)}</div>
+    `;
+    
+    // Очищаем поле
+    input.value = '';
+    
+    // Прокручиваем вниз
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    
+    // Имитируем ответ бота
+    setTimeout(() => {
+        messagesContainer.innerHTML += `
+            <div class="message bot">
+                Спасибо за вопрос! Чтобы ответить точнее, мне нужно знать ваш профиль. 
+                Пройдите тест — это займёт 15 минут.
+            </div>
+        `;
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }, 1000);
+}
+
+function toggleRecording() {
+    console.log('🎤 Запись голоса');
+    alert('Голосовой ввод будет доступен в следующей версии!');
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 // ============================================
@@ -631,9 +749,13 @@ function askQuestion() {
 // ============================================
 
 window.showScreen = showScreen;
-window.startTest = startTest;
+window.startContext = startContext;
 window.selectMode = selectMode;
 window.setMode = setMode;
 window.selectGoal = selectGoal;
 window.customGoal = customGoal;
-window.askQuestion = askQuestion;
+window.setExampleQuestion = setExampleQuestion;
+window.handleKeyPress = handleKeyPress;
+window.sendMessage = sendMessage;
+window.toggleRecording = toggleRecording;
+window.showBenefits = showBenefits;
