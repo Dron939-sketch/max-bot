@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Фреди - Психологический портрет</title>
+    
+    <!-- MAX Web App Bridge -->
+    <script src="https://st.max.ru/js/max-web-app.js"></script>
+    
+    <!-- Подключаем CSS -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app" class="container">
+        <!-- Заголовок с именем пользователя -->
+        <div class="header">
+            <h1 id="user-greeting">🧠 Фреди</h1>
+        </div>
+        
+        <!-- Контент будет загружаться сюда -->
+        <div id="content" class="content">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>Загружаю ваш портрет...</p>
+            </div>
+        </div>
+        
+        <!-- Навигационные кнопки -->
+        <div class="nav-buttons" id="nav-buttons">
+            <button class="nav-btn active" data-view="profile">📊 Портрет</button>
+            <button class="nav-btn" data-view="thought">🧠 Мысли</button>
+            <button class="nav-btn" data-view="ideas">🌟 Идеи</button>
+        </div>
+    </div>
+    
+    <!-- Подключаем JavaScript -->
+    <script src="script.js"></script>
+</body>
+</html>
