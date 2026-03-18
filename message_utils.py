@@ -3,7 +3,7 @@
 """
 Утилиты для отправки сообщений в MAX
 Исправленная версия с поддержкой длинных сообщений и безопасной отправкой
-СИНХРОННАЯ ВЕРСИЯ - ДОБАВЛЕНА АГРЕССИВНАЯ ОЧИСТКА ОТ ПРОБЕЛОВ
+СИНХРОННАЯ ВЕРСИЯ - ДОБАВЛЕНА ПРИНУДИТЕЛЬНАЯ ШИРИНА
 """
 
 import logging
@@ -62,6 +62,42 @@ def aggressive_clean_text(text: str) -> str:
     return result
 
 
+def force_full_width(text: str, is_first_in_chain: bool = False) -> str:
+    """
+    ПРИНУДИТЕЛЬНО гарантирует, что сообщение будет на всю ширину.
+    Добавляет невидимый символ или разделитель в начало.
+    
+    Args:
+        text: текст сообщения
+        is_first_in_chain: является ли это сообщение первым в цепочке
+    
+    Returns:
+        текст с гарантированной шириной
+    """
+    if not text:
+        return text
+    
+    # Сначала стандартная очистка
+    text = aggressive_clean_text(text)
+    text = ensure_full_width(text)
+    
+    # Для первого сообщения в цепочке не добавляем разделитель
+    if is_first_in_chain:
+        return text
+    
+    # Для всех остальных - добавляем невидимый символ или разделитель
+    # Символ-невидимка U+2800 (Брайлевский пробел)
+    invisible_char = "⠀"
+    
+    # Проверяем, не начинается ли уже текст с этого символа
+    if not text.startswith(invisible_char):
+        # Добавляем невидимый символ + разделитель для надежности
+        separator = "─" * 40
+        text = f"{invisible_char}{separator}\n\n{text}"
+    
+    return text
+
+
 def safe_send_message(
     message: Optional[Union[types.Message, int]],
     text: str,
@@ -96,13 +132,13 @@ def safe_send_message(
         logger.error("❌ Попытка отправить пустое сообщение")
         return None
     
-    # ✅ ШАГ 1: Агрессивная очистка от пробелов в начале строк
-    text = aggressive_clean_text(text)
+    # Определяем, первое ли это сообщение в цепочке
+    is_first = delete_previous or (chat_id not in user_messages_history) or (chat_id is None)
     
-    # ✅ ШАГ 2: Очищаем текст от пробелов в начале каждой строки (штатная функция)
-    text = ensure_full_width(text)
+    # ✅ ПРИНУДИТЕЛЬНАЯ ОЧИСТКА
+    text = force_full_width(text, is_first)
     
-    # ✅ ШАГ 3: Преобразуем HTML в Markdown
+    # ✅ Преобразуем HTML в Markdown
     markdown_text = html_to_markdown(text)
     
     # Проверяем длину текста
@@ -189,7 +225,7 @@ def safe_send_message(
             plain_text = re.sub(r'\*(.*?)\*', r'\1', plain_text)
             
             # Ещё раз агрессивно очищаем
-            plain_text = aggressive_clean_text(plain_text)
+            plain_text = force_full_width(plain_text, is_first)
             
             if len(plain_text) > MAX_MESSAGE_LENGTH:
                 plain_text = plain_text[:MAX_MESSAGE_LENGTH - 3] + "..."
@@ -238,9 +274,11 @@ def send_with_status_cleanup(
     """
     chat_id = message.chat.id
     
-    # ✅ Агрессивная очистка текста
-    text = aggressive_clean_text(text)
-    text = ensure_full_width(text)
+    # Определяем, первое ли это сообщение в цепочке
+    is_first = (status_msg is None)
+    
+    # ✅ ПРИНУДИТЕЛЬНАЯ ОЧИСТКА
+    text = force_full_width(text, is_first)
     
     # Преобразуем HTML в Markdown
     markdown_text = html_to_markdown(text)
@@ -307,7 +345,7 @@ def send_with_status_cleanup(
         try:
             plain_text = re.sub(r'\*\*(.*?)\*\*', r'\1', markdown_text)
             plain_text = re.sub(r'\*(.*?)\*', r'\1', plain_text)
-            plain_text = aggressive_clean_text(plain_text)
+            plain_text = force_full_width(plain_text, is_first)
             
             sent_msg = bot.send_message(
                 chat_id, 
@@ -346,9 +384,8 @@ def safe_edit_message(
     Returns:
         отредактированное сообщение или None при ошибке
     """
-    # ✅ Агрессивная очистка текста
-    new_text = aggressive_clean_text(new_text)
-    new_text = ensure_full_width(new_text)
+    # ✅ ПРИНУДИТЕЛЬНАЯ ОЧИСТКА
+    new_text = force_full_width(new_text, False)
     
     # Преобразуем HTML в Markdown
     markdown_text = html_to_markdown(new_text)
@@ -500,6 +537,18 @@ def split_and_send_long_message(
     """
     from handlers.profile import split_long_message
     
+    # Определяем chat_id для последующего использования
+    cid = None
+    if isinstance(message, int):
+        cid = message
+    elif hasattr(message, 'chat') and hasattr(message.chat, 'id'):
+        cid = message.chat.id
+    elif hasattr(message, 'chat_id'):
+        cid = message.chat_id
+    
+    # Определяем, первая ли это часть в цепочке
+    is_first_part_global = delete_previous
+    
     # ✅ Агрессивная очистка текста
     text = aggressive_clean_text(text)
     text = ensure_full_width(text)
@@ -514,9 +563,11 @@ def split_and_send_long_message(
     separator = "─" * 40
     
     for i, part in enumerate(parts):
-        # ✅ Каждую часть дополнительно очищаем
-        part = aggressive_clean_text(part)
-        part = ensure_full_width(part)
+        # Определяем, является ли эта часть первой в цепочке
+        is_first_part = (i == 0 and is_first_part_global)
+        
+        # ✅ ПРИНУДИТЕЛЬНАЯ ОЧИСТКА каждой части
+        part = force_full_width(part, is_first_part)
         
         # Для промежуточных частей - добавляем индикатор на всю ширину
         if i < len(parts) - 1:
@@ -532,13 +583,14 @@ def split_and_send_long_message(
         
         # Отправляем часть
         sent = safe_send_message(
-            message,
+            message if i == 0 else None,  # для первой части передаем message, для остальных None
             part_text,
             reply_markup=current_markup,
             parse_mode=parse_mode,
             delete_previous=(i == 0 and delete_previous),
             keep_last=keep_last,
-            silent=True
+            silent=True,
+            chat_id=cid if i > 0 else None
         )
         
         if sent:
@@ -565,5 +617,6 @@ __all__ = [
     'clear_user_history',
     'get_user_history',
     'split_and_send_long_message',
-    'aggressive_clean_text'
+    'aggressive_clean_text',
+    'force_full_width'
 ]
