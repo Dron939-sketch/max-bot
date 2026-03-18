@@ -3,7 +3,7 @@
 """
 Модуль клавиатур для MAX-бота
 Все клавиатуры возвращаются в формате, понятном для maxibot
-ИСПРАВЛЕНО: заменены ReplyKeyboardMarkup на InlineKeyboardMarkup
+ИСПРАВЛЕНО: удалена create_reply_keyboard
 """
 from maxibot import types
 from typing import List, Optional, Dict, Any
@@ -34,9 +34,6 @@ def create_inline_keyboard(buttons: List[List[Dict[str, str]]]) -> types.InlineK
             )
         keyboard.row(*row_buttons)
     return keyboard
-
-
-# Функция create_reply_keyboard удалена, так как ReplyKeyboardMarkup не поддерживается в MAX
 
 
 # ============================================
@@ -263,7 +260,7 @@ def get_restart_keyboard() -> types.InlineKeyboardMarkup:
 
 
 def get_start_context_keyboard() -> types.InlineKeyboardMarkup:
-    """Клавиатура для начала сбора контекста (исправлено: 🤨 -> 🧐)"""
+    """Клавиатура для начала сбора контекста"""
     buttons = [
         [
             {"text": "🚀 ДАВАЙ, ПОГНАЛИ!", "callback_data": "start_context"},
@@ -292,7 +289,7 @@ def get_why_details_keyboard() -> types.InlineKeyboardMarkup:
 # ============================================
 
 def get_profile_keyboard() -> types.InlineKeyboardMarkup:
-    """Клавиатура для страницы профиля (исправлено: 💭 -> 🧐)"""
+    """Клавиатура для страницы профиля"""
     buttons = [
         [
             {"text": "🧠 AI-ПРОФИЛЬ", "callback_data": "show_ai_profile"},
@@ -310,7 +307,7 @@ def get_profile_keyboard() -> types.InlineKeyboardMarkup:
 
 
 def get_ai_profile_keyboard() -> types.InlineKeyboardMarkup:
-    """Клавиатура под AI-профилем (исправлено: 💭 -> 🧐)"""
+    """Клавиатура под AI-профилем"""
     buttons = [
         [
             {"text": "🧐 МЫСЛИ ПСИХОЛОГА", "callback_data": "show_psychologist_thought"},
@@ -325,7 +322,7 @@ def get_ai_profile_keyboard() -> types.InlineKeyboardMarkup:
 
 
 def get_psychologist_thought_keyboard() -> types.InlineKeyboardMarkup:
-    """Клавиатура под мыслями психолога (исправлено: 💭 -> 🧐)"""
+    """Клавиатура под мыслями психолога"""
     buttons = [
         [
             {"text": "🧐 МЫСЛИ ПСИХОЛОГА", "callback_data": "show_psychologist_thought"},
@@ -392,7 +389,7 @@ def get_goal_details_keyboard(goal_id: str) -> types.InlineKeyboardMarkup:
 # ============================================
 
 def get_gender_keyboard() -> types.InlineKeyboardMarkup:
-    """Клавиатура для выбора пола (Inline версия)"""
+    """Клавиатура для выбора пола"""
     buttons = [
         [
             {"text": "👨 Мужской", "callback_data": "set_gender_male"},
@@ -406,7 +403,7 @@ def get_gender_keyboard() -> types.InlineKeyboardMarkup:
 
 
 def get_age_keyboard() -> types.InlineKeyboardMarkup:
-    """Клавиатура для выбора возраста (Inline версия)"""
+    """Клавиатура для выбора возраста"""
     buttons = [
         [
             {"text": "18-25", "callback_data": "age_18_25"},
@@ -425,7 +422,7 @@ def get_age_keyboard() -> types.InlineKeyboardMarkup:
 
 
 def get_skip_keyboard() -> types.InlineKeyboardMarkup:
-    """Клавиатура с кнопкой пропуска (Inline версия)"""
+    """Клавиатура с кнопкой пропуска"""
     buttons = [
         [{"text": "⏭️ ПРОПУСТИТЬ", "callback_data": "skip_context"}]
     ]
@@ -456,7 +453,7 @@ def get_back_keyboard(callback_data: str = "back_to_mode_selected") -> types.Inl
 
 
 def get_cancel_keyboard() -> types.InlineKeyboardMarkup:
-    """Клавиатура для отмены действия (Inline версия)"""
+    """Клавиатура для отмены действия"""
     buttons = [
         [{"text": "❌ ОТМЕНА", "callback_data": "cancel_action"}]
     ]
