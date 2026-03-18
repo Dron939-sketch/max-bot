@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики профиля пользователя для MAX
-Версия 2.3 - ДОБАВЛЕНО ПЛАНИРОВАНИЕ УТРЕННИХ СООБЩЕНИЙ
+Версия 2.4 - ИСПРАВЛЕН ЦИКЛИЧЕСКИЙ ИМПОРТ
 """
 
 import logging
@@ -23,8 +23,14 @@ from formatters import (
     clean_text_for_safe_display, ensure_full_width
 )
 
-# Импортируем morning_manager из main (чтобы не было циклических импортов)
-from main import morning_manager
+# Убираем прямой импорт из main, создаем глобальную переменную
+morning_manager = None
+
+def set_morning_manager(manager):
+    """Устанавливает экземпляр morning_manager (вызывается из main)"""
+    global morning_manager
+    morning_manager = manager
+    logger.info("✅ morning_manager установлен в profile.py")
 
 logger = logging.getLogger(__name__)
 
@@ -500,23 +506,26 @@ async def show_ai_profile_async(message: Message, user_id: int):
             
             # ===== ПЛАНИРОВАНИЕ УТРЕННИХ СООБЩЕНИЙ =====
             try:
-                # Получаем scores из данных
-                scores = {}
-                for k in VECTORS:
-                    levels = data.get("behavioral_levels", {}).get(k, [])
-                    scores[k] = sum(levels) / len(levels) if levels else 3.0
-                
-                profile_data = data.get("profile_data", {})
-                user_name_for_morning = get_user_name(user_id) or "друг"
-                
-                # Планируем серию из 3 утренних сообщений
-                await morning_manager.schedule_morning_message(
-                    user_id=user_id,
-                    user_name=user_name_for_morning,
-                    scores=scores,
-                    profile_data=profile_data
-                )
-                logger.info(f"📅 Запланированы утренние сообщения для пользователя {user_id}")
+                if morning_manager is None:
+                    logger.warning(f"⚠️ morning_manager не инициализирован для пользователя {user_id}")
+                else:
+                    # Получаем scores из данных
+                    scores = {}
+                    for k in VECTORS:
+                        levels = data.get("behavioral_levels", {}).get(k, [])
+                        scores[k] = sum(levels) / len(levels) if levels else 3.0
+                    
+                    profile_data = data.get("profile_data", {})
+                    user_name_for_morning = get_user_name(user_id) or "друг"
+                    
+                    # Планируем серию из 3 утренних сообщений
+                    await morning_manager.schedule_morning_message(
+                        user_id=user_id,
+                        user_name=user_name_for_morning,
+                        scores=scores,
+                        profile_data=profile_data
+                    )
+                    logger.info(f"📅 Запланированы утренние сообщения для пользователя {user_id}")
             except Exception as e:
                 logger.error(f"❌ Ошибка при планировании утренних сообщений: {e}")
             # ===== КОНЕЦ БЛОКА =====
@@ -950,5 +959,6 @@ __all__ = [
     'show_psychologist_thought',
     'show_final_profile',
     'show_old_final_profile',
-    'show_preliminary_profile'
+    'show_preliminary_profile',
+    'set_morning_manager'  # ✅ Добавлено для установки из main
 ]
