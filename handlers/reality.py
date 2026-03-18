@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики проверки реальности для MAX
-Версия 2.0 - ДОБАВЛЕНО СОХРАНЕНИЕ В БД
+Версия 2.1 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
 ИСПРАВЛЕНО: убраны await перед синхронными функциями safe_send_message
 И ДОБАВЛЕНЫ ПРОВЕРКИ ТИПОВ ДЛЯ state_data
 """
@@ -11,6 +11,7 @@ import logging
 import re
 import time
 import asyncio
+import threading  # ✅ ДОБАВЛЕНО
 from typing import Dict, Any, Optional
 
 from bot_instance import bot
@@ -35,6 +36,27 @@ from state import user_data, user_state_data, user_contexts, user_states, user_n
 from db_instance import db, save_user_to_db
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# ============================================
+
+def run_async_task(coro_func, *args, **kwargs):
+    """
+    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
+    """
+    def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            coro = coro_func(*args, **kwargs)
+            loop.run_until_complete(coro)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+        finally:
+            loop.close()
+    
+    threading.Thread(target=_wrapper, daemon=True).start()
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -133,8 +155,8 @@ async def show_reality_check(call: CallbackQuery, state_data: Dict = None):
     state_data = ensure_state_dict(state_data, user_id)
     context = get_user_context(user_id)
     
-    # ✅ ЛОГИРУЕМ НАЧАЛО ПРОВЕРКИ
-    asyncio.create_task(db.log_event(user_id, 'reality_check_started', {}))
+    # ✅ ИСПРАВЛЕНО: Логируем начало проверки через run_async_task
+    run_async_task(db.log_event, user_id, 'reality_check_started', {})
     
     # ✅ Получаем данные из user_data, если в state_data нет
     if not state_data.get("current_destination"):
@@ -281,8 +303,8 @@ async def process_life_context(message: Message, user_id: int, text: str):
     
     context.life_context_complete = True
     
-    # ✅ СОХРАНЯЕМ В БД
-    asyncio.create_task(save_life_context_to_db(user_id))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_life_context_to_db, user_id)
     
     # Получаем сохранённую цель
     state_data = get_user_state_data(user_id)
@@ -332,8 +354,8 @@ async def process_goal_context(message: Message, user_id: int, text: str):
     
     update_user_state_data(user_id, goal_context=goal_context)
     
-    # ✅ СОХРАНЯЕМ В БД
-    asyncio.create_task(save_goal_context_to_db(user_id, goal_context))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_goal_context_to_db, user_id, goal_context)
     
     # Переходим к расчёту
     from maxibot.types import CallbackQuery
@@ -392,8 +414,8 @@ async def calculate_and_show_feasibility(call: CallbackQuery, user_id: int):
     # Сохраняем результат
     update_user_state_data(user_id, feasibility_result=result)
     
-    # ✅ СОХРАНЯЕМ РЕЗУЛЬТАТ В БД
-    asyncio.create_task(save_reality_check_to_db(user_id, goal, result))
+    # ✅ ИСПРАВЛЕНО: Сохраняем результат в БД через run_async_task
+    run_async_task(save_reality_check_to_db, user_id, goal, result)
     
     # Определяем статус
     status_emoji = "✅" if result['deficit'] < 30 else "⚠️" if result['deficit'] < 60 else "❌"
@@ -440,8 +462,8 @@ async def skip_life_context(call: CallbackQuery, state_data: Dict = None):
     state_data = ensure_state_dict(state_data, user_id)
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
-    # ✅ ЛОГИРУЕМ ПРОПУСК
-    asyncio.create_task(db.log_event(user_id, 'life_context_skipped', {'goal_id': goal.get('id') if goal else None}))
+    # ✅ ИСПРАВЛЕНО: Логируем пропуск через run_async_task
+    run_async_task(db.log_event, user_id, 'life_context_skipped', {'goal_id': goal.get('id') if goal else None})
     
     text = f"""
 🧠 **ФРЕДИ: БУДЕТ НЕТОЧНО**
@@ -468,15 +490,15 @@ async def skip_goal_questions(call: CallbackQuery, state_data: Dict = None):
     state_data = ensure_state_dict(state_data, user_id)
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
-    # ✅ ЛОГИРУЕМ ПРОПУСК
-    asyncio.create_task(db.log_event(user_id, 'goal_questions_skipped', {'goal_id': goal.get('id') if goal else None}))
+    # ✅ ИСПРАВЛЕНО: Логируем пропуск через run_async_task
+    run_async_task(db.log_event, user_id, 'goal_questions_skipped', {'goal_id': goal.get('id') if goal else None})
     
     # Используем данные по умолчанию
     default_context = {"time_per_week": 5, "budget": 0}
     update_user_state_data(user_id, goal_context=default_context)
     
-    # ✅ СОХРАНЯЕМ В БД
-    asyncio.create_task(save_goal_context_to_db(user_id, default_context))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_goal_context_to_db, user_id, default_context)
     
     await calculate_and_show_feasibility(call, user_id)
 
@@ -496,8 +518,8 @@ async def skip_to_route(call: CallbackQuery, state_data: Dict = None):
         safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
         return
     
-    # ✅ ЛОГИРУЕМ ПРОПУСК
-    asyncio.create_task(db.log_event(user_id, 'reality_check_skipped', {'goal_id': goal.get('id')}))
+    # ✅ ИСПРАВЛЕНО: Логируем пропуск через run_async_task
+    run_async_task(db.log_event, user_id, 'reality_check_skipped', {'goal_id': goal.get('id')})
     
     # Отправляем статусное сообщение (без await!)
     status_msg = safe_send_message(
@@ -542,12 +564,12 @@ async def accept_feasibility_plan(call: CallbackQuery, state_data: Dict = None):
         safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
         return
     
-    # ✅ ЛОГИРУЕМ ПРИНЯТИЕ ПЛАНА
-    asyncio.create_task(db.log_event(
+    # ✅ ИСПРАВЛЕНО: Логируем принятие плана через run_async_task
+    run_async_task(db.log_event,
         user_id, 
         'feasibility_plan_accepted', 
         {'goal_id': goal.get('id'), 'goal_name': goal.get('name')}
-    ))
+    )
     
     # Отправляем статусное сообщение (без await!)
     status_msg = safe_send_message(
@@ -580,8 +602,8 @@ async def adjust_timeline(call: CallbackQuery, state_data: Dict = None):
     state_data = ensure_state_dict(state_data, user_id)
     goal = state_data.get("current_destination")
     
-    # ✅ ЛОГИРУЕМ КОРРЕКТИРОВКУ
-    asyncio.create_task(db.log_event(user_id, 'timeline_adjustment_started', {'goal_id': goal.get('id') if goal else None}))
+    # ✅ ИСПРАВЛЕНО: Логируем корректировку через run_async_task
+    run_async_task(db.log_event, user_id, 'timeline_adjustment_started', {'goal_id': goal.get('id') if goal else None})
     
     text = f"""
 🧠 **ФРЕДИ: КОРРЕКТИРОВКА СРОКОВ**
@@ -615,8 +637,8 @@ async def reduce_goal(call: CallbackQuery, state_data: Dict = None):
     state_data = ensure_state_dict(state_data, user_id)
     goal = state_data.get("current_destination")
     
-    # ✅ ЛОГИРУЕМ СНИЖЕНИЕ ПЛАНКИ
-    asyncio.create_task(db.log_event(user_id, 'goal_reduction_started', {'goal_id': goal.get('id') if goal else None}))
+    # ✅ ИСПРАВЛЕНО: Логируем снижение планки через run_async_task
+    run_async_task(db.log_event, user_id, 'goal_reduction_started', {'goal_id': goal.get('id') if goal else None})
     
     text = f"""
 🧠 **ФРЕДИ: СНИЖЕНИЕ ПЛАНКИ**
@@ -645,8 +667,8 @@ async def apply_extended_timeline(call: CallbackQuery, state_data: Dict = None):
     """
     user_id = call.from_user.id
     
-    # ✅ ЛОГИРУЕМ ПРИМЕНЕНИЕ
-    asyncio.create_task(db.log_event(user_id, 'extended_timeline_applied', {}))
+    # ✅ ИСПРАВЛЕНО: Логируем применение через run_async_task
+    run_async_task(db.log_event, user_id, 'extended_timeline_applied', {})
     
     # Пока просто принимаем план
     await accept_feasibility_plan(call, state_data)
@@ -670,12 +692,12 @@ async def select_goal_50(call: CallbackQuery, state_data: Dict = None):
     
     update_user_state_data(user_id, current_destination=new_goal)
     
-    # ✅ ЛОГИРУЕМ ВЫБОР
-    asyncio.create_task(db.log_event(
+    # ✅ ИСПРАВЛЕНО: Логируем выбор через run_async_task
+    run_async_task(db.log_event,
         user_id, 
         'goal_reduced_to_50', 
         {'original_goal': state_data.get("current_destination", {}).get('id')}
-    ))
+    )
     
     # Показываем теоретический путь
     from handlers.goals import show_theoretical_path
@@ -699,12 +721,12 @@ async def select_goal_30(call: CallbackQuery, state_data: Dict = None):
     
     update_user_state_data(user_id, current_destination=new_goal)
     
-    # ✅ ЛОГИРУЕМ ВЫБОР
-    asyncio.create_task(db.log_event(
+    # ✅ ИСПРАВЛЕНО: Логируем выбор через run_async_task
+    run_async_task(db.log_event,
         user_id, 
         'goal_reduced_to_30', 
         {'original_goal': state_data.get("current_destination", {}).get('id')}
-    ))
+    )
     
     from handlers.goals import show_theoretical_path
     await show_theoretical_path(call, state_data, new_goal)
@@ -727,12 +749,12 @@ async def select_goal_blocks(call: CallbackQuery, state_data: Dict = None):
     
     update_user_state_data(user_id, current_destination=new_goal)
     
-    # ✅ ЛОГИРУЕМ ВЫБОР
-    asyncio.create_task(db.log_event(
+    # ✅ ИСПРАВЛЕНО: Логируем выбор через run_async_task
+    run_async_task(db.log_event,
         user_id, 
         'goal_changed_to_blocks', 
         {'original_goal': state_data.get("current_destination", {}).get('id')}
-    ))
+    )
     
     from handlers.goals import show_theoretical_path
     await show_theoretical_path(call, state_data, new_goal)
