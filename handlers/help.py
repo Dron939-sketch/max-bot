@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики помощи и сказок для MAX
-Версия 2.0 - ДОБАВЛЕНО СОХРАНЕНИЕ В БД
+Версия 2.1 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
 Восстановлено из оригинального bot3.py и адаптировано
 """
 
@@ -10,6 +10,7 @@ import logging
 import random
 import asyncio
 import time
+import threading  # ✅ ДОБАВЛЕНО
 from typing import Dict, Any, Optional
 
 from bot_instance import bot
@@ -32,6 +33,27 @@ from state import (
 from db_instance import db, save_user_to_db
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# ============================================
+
+def run_async_task(coro_func, *args, **kwargs):
+    """
+    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
+    """
+    def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            coro = coro_func(*args, **kwargs)
+            loop.run_until_complete(coro)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+        finally:
+            loop.close()
+    
+    threading.Thread(target=_wrapper, daemon=True).start()
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -178,8 +200,8 @@ def show_help(call: CallbackQuery):
     user_id = call.from_user.id
     context = get_user_context_obj(user_id)
     
-    # ✅ ЛОГИРУЕМ СОБЫТИЕ
-    asyncio.create_task(log_help_event(user_id, 'menu_opened'))
+    # ✅ ИСПРАВЛЕНО: Логируем событие через run_async_task
+    run_async_task(log_help_event, user_id, 'menu_opened')
     
     # Проверяем, есть ли контекст для персонализации
     greeting = ""
@@ -223,8 +245,8 @@ def handle_help_category(call: CallbackQuery, category: str):
     user_id = call.from_user.id
     context = get_user_context_obj(user_id)
     
-    # ✅ ЛОГИРУЕМ ВЫБОР КАТЕГОРИИ
-    asyncio.create_task(log_help_event(user_id, 'category_selected', category))
+    # ✅ ИСПРАВЛЕНО: Логируем выбор категории через run_async_task
+    run_async_task(log_help_event, user_id, 'category_selected', category)
     
     # Тексты для разных категорий
     category_texts = {
@@ -388,8 +410,8 @@ def show_tale(call: CallbackQuery):
             "text": "Жил-был человек, который искал ответы. Он ходил по миру, спрашивал мудрецов, читал книги. И однажды понял, что все ответы уже были внутри него. Просто нужно было время, чтобы их услышать."
         }
     
-    # ✅ ЛОГИРУЕМ ПРОСМОТР СКАЗКИ
-    asyncio.create_task(log_tale_event(user_id, tale_title, issue))
+    # ✅ ИСПРАВЛЕНО: Логируем просмотр сказки через run_async_task
+    run_async_task(log_tale_event, user_id, tale_title, issue)
     
     # Формируем текст
     text = f"📖 <b>{tale['title']}</b>\n\n{tale['text']}"
@@ -420,8 +442,8 @@ def show_benefits(call: CallbackQuery):
     """
     user_id = call.from_user.id
     
-    # ✅ ЛОГИРУЕМ ПРОСМОТР
-    asyncio.create_task(log_benefits_view(user_id))
+    # ✅ ИСПРАВЛЕНО: Логируем просмотр через run_async_task
+    run_async_task(log_benefits_view, user_id)
     
     text = f"""
 🔍 **ЧТО ВЫ УЗНАЕТЕ О СЕБЕ:**
@@ -478,8 +500,8 @@ def show_weekend_ideas(call: CallbackQuery):
     user_name = get_user_name(user_id)
     user_data_dict = get_user_data_dict(user_id)
     
-    # ✅ ЛОГИРУЕМ ПРОСМОТР
-    asyncio.create_task(log_weekend_ideas_view(user_id))
+    # ✅ ИСПРАВЛЕНО: Логируем просмотр через run_async_task
+    run_async_task(log_weekend_ideas_view, user_id)
     
     # Проверяем, есть ли профиль
     if not is_test_completed_check(user_data_dict):
@@ -532,8 +554,8 @@ def process_help_question(message, user_id: int, text: str, category: str):
     """
     user_data_dict = get_user_data_dict(user_id)
     
-    # ✅ ЛОГИРУЕМ ВОПРОС
-    asyncio.create_task(log_help_event(user_id, 'question_asked', category))
+    # ✅ ИСПРАВЛЕНО: Логируем вопрос через run_async_task
+    run_async_task(log_help_event, user_id, 'question_asked', category)
     
     # Проверяем, завершен ли тест
     if not is_test_completed_check(user_data_dict):
