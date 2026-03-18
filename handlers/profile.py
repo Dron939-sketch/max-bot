@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики профиля пользователя для MAX
-Версия 2.4 - ИСПРАВЛЕН ЦИКЛИЧЕСКИЙ ИМПОРТ
+Версия 2.5 - ДОБАВЛЕНО СОХРАНЕНИЕ В БД
 """
 
 import logging
@@ -22,6 +22,9 @@ from formatters import (
     bold, italic, format_profile_text, format_psychologist_text,
     clean_text_for_safe_display, ensure_full_width
 )
+
+# ✅ ИМПОРТ ДЛЯ БАЗЫ ДАННЫХ
+from db_instance import save_user_to_db, save_test_result_to_db
 
 # Убираем прямой импорт из main, создаем глобальную переменную
 morning_manager = None
@@ -386,6 +389,25 @@ def show_preliminary_profile(message: Message, user_id: int):
     set_state(user_id, TestStates.profile_confirmation)
 
 # ============================================
+# ✅ ДОБАВЛЕНО: ФУНКЦИЯ СОХРАНЕНИЯ ПРОФИЛЯ В БД
+# ============================================
+
+async def save_profile_to_db(user_id: int):
+    """Сохраняет профиль пользователя в БД"""
+    try:
+        # Сохраняем как результат теста
+        await save_test_result_to_db(user_id, 'full_profile', user_data)
+        
+        # Сохраняем пользователя целиком
+        await save_user_to_db(user_id, user_data, user_contexts, {})
+        
+        logger.info(f"💾 Профиль пользователя {user_id} сохранен в БД")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения профиля {user_id} в БД: {e}")
+        return False
+
+# ============================================
 # АСИНХРОННЫЕ ВЕРСИИ ФУНКЦИЙ
 # ============================================
 
@@ -395,7 +417,7 @@ async def show_ai_profile_async(message: Message, user_id: int):
     context = user_contexts.get(user_id)
     user_name = context.name if context and context.name else ""
     
-    status_msg = safe_send_message(
+    status_msg = await safe_send_message(
         message,
         "🧠 Анализирую данные и генерирую ваш психологический портрет...\n\nЭто займёт несколько секунд.",
         delete_previous=True
@@ -415,10 +437,13 @@ async def show_ai_profile_async(message: Message, user_id: int):
                 if user_id not in user_data:
                     user_data[user_id] = {}
                 user_data[user_id]["ai_generated_profile"] = ai_profile
+                
+                # ✅ СОХРАНЯЕМ В БД
+                asyncio.create_task(save_profile_to_db(user_id))
         
         if status_msg:
             try:
-                safe_delete_message(message.chat.id, status_msg.message_id)
+                await safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
@@ -476,7 +501,7 @@ async def show_ai_profile_async(message: Message, user_id: int):
                 try:
                     if i == len(merged_parts) - 1:
                         # Последняя часть с кнопками
-                        safe_send_message(
+                        await safe_send_message(
                             message if i == 0 else None,
                             part,
                             reply_markup=keyboard,
@@ -487,7 +512,7 @@ async def show_ai_profile_async(message: Message, user_id: int):
                         logger.info(f"✅ Отправлена последняя часть {i+1} с кнопками")
                     else:
                         # Промежуточные части без кнопок
-                        safe_send_message(
+                        await safe_send_message(
                             None,
                             part,
                             parse_mode=None,
@@ -564,7 +589,7 @@ async def show_ai_profile_async(message: Message, user_id: int):
         
         if status_msg:
             try:
-                safe_delete_message(message.chat.id, status_msg.message_id)
+                await safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
@@ -585,7 +610,7 @@ async def show_ai_profile_async(message: Message, user_id: int):
     )
     keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
     
-    safe_send_message(
+    await safe_send_message(
         message,
         text,
         reply_markup=keyboard,
@@ -600,7 +625,7 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
     context = user_contexts.get(user_id)
     user_name = context.name if context and context.name else ""
     
-    status_msg = safe_send_message(
+    status_msg = await safe_send_message(
         message,
         "🧠 Анализирую ваш профиль и формирую мысли психолога...\n\nЭто займёт несколько секунд.",
         delete_previous=True
@@ -619,7 +644,7 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
         
         if status_msg:
             try:
-                safe_delete_message(message.chat.id, status_msg.message_id)
+                await safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
@@ -671,7 +696,7 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                 try:
                     if i == len(merged_parts) - 1:
                         # Последняя часть с кнопками
-                        safe_send_message(
+                        await safe_send_message(
                             message if i == 0 else None,
                             part,
                             reply_markup=keyboard,
@@ -682,7 +707,7 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                         logger.info(f"✅ Отправлена последняя часть мысли {i+1} с кнопками")
                     else:
                         # Промежуточные части
-                        safe_send_message(
+                        await safe_send_message(
                             None,
                             part,
                             parse_mode=None,
@@ -696,6 +721,12 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                 except Exception as e:
                     logger.error(f"❌ Ошибка при отправке части мысли {i+1}: {e}")
                     continue
+            
+            # ✅ СОХРАНЯЕМ МЫСЛЬ В БД
+            if user_id not in user_data:
+                user_data[user_id] = {}
+            user_data[user_id]["psychologist_thought"] = thought
+            asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, {}))
             
             logger.info(f"🎉 Все {len(merged_parts)} частей мысли успешно отправлены")
             return
@@ -722,7 +753,7 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
         
         if status_msg:
             try:
-                safe_delete_message(message.chat.id, status_msg.message_id)
+                await safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
@@ -740,7 +771,7 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
     keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
     
-    safe_send_message(
+    await safe_send_message(
         message,
         text,
         reply_markup=keyboard,
@@ -755,7 +786,7 @@ async def show_final_profile_async(message: Message, user_id: int):
     
     if user_id in _profile_generation_in_progress and _profile_generation_in_progress[user_id]:
         logger.info(f"⏳ Генерация профиля уже выполняется для пользователя {user_id}")
-        safe_send_message(
+        await safe_send_message(
             message,
             "⏳ Ваш профиль уже генерируется, пожалуйста, подождите...",
             delete_previous=True
@@ -769,7 +800,7 @@ async def show_final_profile_async(message: Message, user_id: int):
         await show_ai_profile_async(message, user_id)
         return
     
-    status_msg = safe_send_message(
+    status_msg = await safe_send_message(
         message,
         "🧠 Анализирую данные...\n\n"
         "Собираю воедино результаты 5 этапов тестирования.\n"
@@ -803,9 +834,12 @@ async def show_final_profile_async(message: Message, user_id: int):
             user_data[user_id] = {}
         user_data[user_id]["ai_generated_profile"] = ai_profile
         
+        # ✅ СОХРАНЯЕМ В БД
+        asyncio.create_task(save_profile_to_db(user_id))
+        
         if status_msg:
             try:
-                safe_delete_message(message.chat.id, status_msg.message_id)
+                await safe_delete_message(message.chat.id, status_msg.message_id)
             except:
                 pass
         
@@ -960,5 +994,6 @@ __all__ = [
     'show_final_profile',
     'show_old_final_profile',
     'show_preliminary_profile',
-    'set_morning_manager'  # ✅ Добавлено для установки из main
+    'set_morning_manager',
+    'save_profile_to_db'  # ✅ Добавлено для вызова из других модулей
 ]
