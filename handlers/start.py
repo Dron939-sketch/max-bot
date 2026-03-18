@@ -2,12 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики команды /start и начальных экранов для MAX
-ВЕРСИЯ 2.0 - ПОЛНАЯ ИНТЕГРАЦИЯ С PostgreSQL
+ВЕРСИЯ 2.1 - ИСПРАВЛЕНА ПРОБЛЕМА С АСИНХРОННЫМИ ВЫЗОВАМИ
 ДОБАВЛЕНО: Загрузка пользователей из БД, автосохранение
+ИСПРАВЛЕНО: Все асинхронные вызовы обернуты в отдельные потоки с новым циклом событий
 """
 import logging
 import time
 import asyncio
+import threading
 from typing import Optional, Dict, Any
 
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
@@ -92,8 +94,18 @@ class Stats:
     
     def register_start(self, user_id):
         self.starts[user_id] = time.time()
-        # Логируем событие в БД
-        asyncio.create_task(db.log_event(user_id, 'start', {'timestamp': time.time()}))
+        # Логируем событие в БД (в отдельном потоке)
+        def run_log():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(db.log_event(user_id, 'start', {'timestamp': time.time()}))
+            except Exception as e:
+                logger.error(f"❌ Ошибка логирования старта для {user_id}: {e}")
+            finally:
+                loop.close()
+        
+        threading.Thread(target=run_log, daemon=True).start()
     
     def get_starts(self):
         return self.starts
@@ -139,31 +151,48 @@ def cmd_start(message: Message):
     user_names[user_id] = user_name
     clear_state(user_id)
     
-    # Сохраняем пользователя в БД (асинхронно)
-    asyncio.create_task(db.save_telegram_user(
-        user_id=user_id,
-        first_name=user_name,
-        username=message.from_user.username,
-        last_name=message.from_user.last_name,
-        language_code=message.from_user.language_code
-    ))
+    # ✅ ИСПРАВЛЕНО: Сохраняем пользователя в БД в отдельном потоке
+    def run_save_user():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(db.save_telegram_user(
+                user_id=user_id,
+                first_name=user_name,
+                username=message.from_user.username,
+                last_name=message.from_user.last_name,
+                language_code=message.from_user.language_code
+            ))
+            logger.debug(f"💾 Пользователь {user_id} сохранен в БД")
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
+        finally:
+            loop.close()
     
-    # ✅ ПРОВЕРЯЕМ, ЕСТЬ ЛИ ПОЛЬЗОВАТЕЛЬ В БД
+    threading.Thread(target=run_save_user, daemon=True).start()
+    
+    # ✅ ИСПРАВЛЕНО: Проверяем наличие пользователя в БД в отдельном потоке
     def run_load_check():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loaded = loop.run_until_complete(ensure_user_loaded(user_id, user_name))
-        loop.close()
-        
-        # После загрузки продолжаем обработку
-        continue_start(message, user_id, user_name, loaded)
+        try:
+            loaded = loop.run_until_complete(ensure_user_loaded(user_id, user_name))
+            # После загрузки продолжаем обработку в основном потоке
+            # Но так как мы в отдельном потоке, используем bot.send_message напрямую
+            continue_start_in_thread(message, user_id, user_name, loaded)
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки пользователя {user_id}: {e}")
+        finally:
+            loop.close()
     
     threading.Thread(target=run_load_check, daemon=True).start()
 
 
-def continue_start(message: Message, user_id: int, user_name: str, loaded_from_db: bool):
-    """Продолжает обработку /start после проверки БД"""
-    
+def continue_start_in_thread(message: Message, user_id: int, user_name: str, loaded_from_db: bool):
+    """
+    Продолжает обработку /start в отдельном потоке
+    (вызывается из потока, поэтому используем bot.send_message напрямую)
+    """
     # Получаем или создаем контекст
     if user_id not in user_contexts:
         user_contexts[user_id] = UserContext(user_id)
@@ -171,7 +200,7 @@ def continue_start(message: Message, user_id: int, user_name: str, loaded_from_d
     context = user_contexts[user_id]
     context.name = user_name
     
-    # Регистрируем старт (событие в БД)
+    # Регистрируем старт (событие в БД) - уже в отдельном потоке
     stats.register_start(user_id)
     
     # Проверяем, есть ли уже профиль
@@ -203,7 +232,17 @@ def continue_start(message: Message, user_id: int, user_name: str, loaded_from_d
 """
         
         keyboard = get_restart_keyboard()
-        safe_send_message(message, text, reply_markup=keyboard)
+        
+        # Используем bot.send_message напрямую, так как мы в потоке
+        try:
+            bot.send_message(
+                message.chat.id,
+                text,
+                reply_markup=keyboard,
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка отправки сообщения: {e}")
         return
     
     # Проверяем, заполнен ли контекст (город, пол, возраст)
@@ -241,12 +280,70 @@ def continue_start(message: Message, user_id: int, user_name: str, loaded_from_d
             InlineKeyboardButton("🤨 А ты вообще кто такой?", callback_data="why_details")
         )
         
-        safe_send_message(message, welcome_text, reply_markup=keyboard)
+        try:
+            bot.send_message(
+                message.chat.id,
+                welcome_text,
+                reply_markup=keyboard,
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка отправки сообщения: {e}")
         return
     
     # Если контекст уже заполнен, показываем меню
-    from handlers.modes import show_main_menu_after_mode
-    show_main_menu_after_mode(message, context)
+    try:
+        from handlers.modes import show_main_menu_after_mode
+        # Создаем фейковый объект message для передачи в функцию
+        # Так как мы в потоке, нужно использовать bot.send_message напрямую
+        context.update_weather()
+        day_context = context.get_day_context()
+        mode_config = COMMUNICATION_MODES.get(context.communication_mode, COMMUNICATION_MODES["coach"])
+        
+        mode_display_name = mode_config["display_name"]
+        text = f"{mode_config['emoji']} {bold(f'РЕЖИМ {mode_display_name}')}\n\n"
+        text += context.get_greeting(context.name) + "\n"
+        text += f"📅 Сегодня {day_context['weekday']}, {day_context['day']} {day_context['month']}, {day_context['time_str']}\n"
+        
+        if context.weather_cache:
+            weather = context.weather_cache
+            text += f"{weather['icon']} {weather['description']}, {weather['temp']}°C\n\n"
+        
+        text += f"🧠 {bold('ЧЕМ ЗАЙМЁМСЯ?')}\n\n"
+        
+        if context.communication_mode == "coach":
+            text += "• Задать вопрос — я помогу найти ответ внутри себя\n"
+        elif context.communication_mode == "psychologist":
+            text += "• Расскажите, что у вас на душе — я помогу исследовать глубинные паттерны\n"
+        elif context.communication_mode == "trainer":
+            text += "• Поставьте задачу — я дам конкретные шаги\n"
+        
+        text += "• Выбрать тему — отношения, деньги, самоощущение\n"
+        text += "• Послушать сказку — для глубокой работы\n"
+        
+        # Проверяем, есть ли профиль
+        has_profile = False
+        if profile_data or user_data_dict.get("ai_generated_profile"):
+            has_profile = True
+        else:
+            required_minimal = ["perception_type", "thinking_level", "behavioral_levels"]
+            if all(field in user_data_dict for field in required_minimal):
+                has_profile = True
+        
+        if has_profile:
+            text += "• Посмотреть портрет — напомнить себе, кто вы"
+        
+        from keyboards import get_main_menu_after_mode_keyboard
+        keyboard = get_main_menu_after_mode_keyboard(has_profile)
+        
+        bot.send_message(
+            message.chat.id,
+            text,
+            reply_markup=keyboard,
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка при показе меню: {e}")
 
 
 @bot.message_handler(commands=['menu'])
@@ -339,11 +436,19 @@ def callback_restart_test(call: CallbackQuery):
         if hasattr(context, 'confinement_model'):
             context.confinement_model = {}
     
-    # Сохраняем изменения в БД
-    asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
+    # ✅ ИСПРАВЛЕНО: Сохраняем изменения в БД в отдельном потоке
+    def run_save():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(save_user_to_db(user_id, user_data, user_contexts, user_routes))
+            loop.run_until_complete(db.log_event(user_id, 'restart_test', {}))
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения при перезапуске: {e}")
+        finally:
+            loop.close()
     
-    # Логируем событие в БД
-    asyncio.create_task(db.log_event(user_id, 'restart_test', {}))
+    threading.Thread(target=run_save, daemon=True).start()
     
     # Показываем приветствие
     text = f"""
