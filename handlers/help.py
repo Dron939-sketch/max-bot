@@ -2,11 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики помощи и сказок для MAX
+Версия 2.0 - ДОБАВЛЕНО СОХРАНЕНИЕ В БД
 Восстановлено из оригинального bot3.py и адаптировано
 """
 
 import logging
 import random
+import asyncio
+import time
 from typing import Dict, Any, Optional
 
 from bot_instance import bot
@@ -24,6 +27,9 @@ from state import (
     user_data, user_state_data, user_contexts, user_names, user_states,
     get_state, set_state, get_state_data, update_state_data, clear_state
 )
+
+# ✅ ДОБАВЛЕНО: импорт для БД
+from db_instance import db, save_user_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +67,66 @@ def is_test_completed_check(user_data_dict: dict) -> bool:
     if all(field in user_data_dict for field in required_minimal):
         return True
     return False
+
+# ============================================
+# ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
+# ============================================
+
+async def log_help_event(user_id: int, action: str, category: str = None):
+    """Логирует события помощи в БД"""
+    try:
+        await db.log_event(
+            user_id,
+            f'help_{action}',
+            {
+                'category': category,
+                'timestamp': time.time()
+            }
+        )
+        logger.debug(f"💾 Событие помощи {action} для {user_id} сохранено в БД")
+    except Exception as e:
+        logger.error(f"❌ Ошибка логирования события помощи для {user_id}: {e}")
+
+async def log_tale_event(user_id: int, tale_title: str, issue: str):
+    """Логирует просмотр сказки в БД"""
+    try:
+        await db.log_event(
+            user_id,
+            'tale_viewed',
+            {
+                'tale_title': tale_title,
+                'issue': issue,
+                'timestamp': time.time()
+            }
+        )
+        logger.debug(f"💾 Просмотр сказки для {user_id} сохранен в БД")
+    except Exception as e:
+        logger.error(f"❌ Ошибка логирования просмотра сказки для {user_id}: {e}")
+
+async def log_benefits_view(user_id: int):
+    """Логирует просмотр преимуществ теста"""
+    try:
+        await db.log_event(
+            user_id,
+            'benefits_viewed',
+            {'timestamp': time.time()}
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка логирования просмотра преимуществ для {user_id}: {e}")
+
+async def log_weekend_ideas_view(user_id: int, idea_type: str = None):
+    """Логирует просмотр идей на выходные"""
+    try:
+        await db.log_event(
+            user_id,
+            'weekend_ideas_viewed',
+            {
+                'idea_type': idea_type,
+                'timestamp': time.time()
+            }
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка логирования просмотра идей для {user_id}: {e}")
 
 # ============================================
 # КЛАВИАТУРА ДЛЯ ПОМОЩИ
@@ -112,6 +178,9 @@ def show_help(call: CallbackQuery):
     user_id = call.from_user.id
     context = get_user_context_obj(user_id)
     
+    # ✅ ЛОГИРУЕМ СОБЫТИЕ
+    asyncio.create_task(log_help_event(user_id, 'menu_opened'))
+    
     # Проверяем, есть ли контекст для персонализации
     greeting = ""
     if context and context.name:
@@ -153,6 +222,9 @@ def handle_help_category(call: CallbackQuery, category: str):
     """
     user_id = call.from_user.id
     context = get_user_context_obj(user_id)
+    
+    # ✅ ЛОГИРУЕМ ВЫБОР КАТЕГОРИИ
+    asyncio.create_task(log_help_event(user_id, 'category_selected', category))
     
     # Тексты для разных категорий
     category_texts = {
@@ -304,8 +376,10 @@ def show_tale(call: CallbackQuery):
     # Получаем сказку
     try:
         tale = tales.get_tale_for_issue(issue)
+        tale_title = tale.get("title", "Сказка на ночь")
     except:
         tale = None
+        tale_title = "Сказка на ночь"
     
     if not tale:
         # Если сказка не найдена, используем заглушку
@@ -313,6 +387,9 @@ def show_tale(call: CallbackQuery):
             "title": "Сказка на ночь",
             "text": "Жил-был человек, который искал ответы. Он ходил по миру, спрашивал мудрецов, читал книги. И однажды понял, что все ответы уже были внутри него. Просто нужно было время, чтобы их услышать."
         }
+    
+    # ✅ ЛОГИРУЕМ ПРОСМОТР СКАЗКИ
+    asyncio.create_task(log_tale_event(user_id, tale_title, issue))
     
     # Формируем текст
     text = f"📖 <b>{tale['title']}</b>\n\n{tale['text']}"
@@ -341,6 +418,11 @@ def show_benefits(call: CallbackQuery):
     """
     Показывает преимущества прохождения теста
     """
+    user_id = call.from_user.id
+    
+    # ✅ ЛОГИРУЕМ ПРОСМОТР
+    asyncio.create_task(log_benefits_view(user_id))
+    
     text = f"""
 🔍 **ЧТО ВЫ УЗНАЕТЕ О СЕБЕ:**
 
@@ -396,6 +478,9 @@ def show_weekend_ideas(call: CallbackQuery):
     user_name = get_user_name(user_id)
     user_data_dict = get_user_data_dict(user_id)
     
+    # ✅ ЛОГИРУЕМ ПРОСМОТР
+    asyncio.create_task(log_weekend_ideas_view(user_id))
+    
     # Проверяем, есть ли профиль
     if not is_test_completed_check(user_data_dict):
         safe_send_message(
@@ -447,6 +532,9 @@ def process_help_question(message, user_id: int, text: str, category: str):
     """
     user_data_dict = get_user_data_dict(user_id)
     
+    # ✅ ЛОГИРУЕМ ВОПРОС
+    asyncio.create_task(log_help_event(user_id, 'question_asked', category))
+    
     # Проверяем, завершен ли тест
     if not is_test_completed_check(user_data_dict):
         # Если тест не пройден, предлагаем пройти
@@ -482,8 +570,8 @@ def process_help_question(message, user_id: int, text: str, category: str):
         return
     
     # Если тест пройден, используем режим для ответа
-    from handlers.questions import process_text_question
-    process_text_question(message, user_id, text)
+    from handlers.questions import process_text_question_sync
+    process_text_question_sync(message, user_id, text)
 
 
 # ============================================
@@ -497,5 +585,10 @@ __all__ = [
     'show_benefits',
     'show_weekend_ideas',  # ✅ ДОБАВЛЕНО
     'process_help_question',
-    'get_help_keyboard'
+    'get_help_keyboard',
+    # ✅ ДОБАВЛЕНО: функции для БД
+    'log_help_event',
+    'log_tale_event',
+    'log_benefits_view',
+    'log_weekend_ideas_view'
 ]
