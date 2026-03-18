@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики выбора и подтверждения режима для MAX
+Версия 2.0 - ДОБАВЛЕНО СОХРАНЕНИЕ В БД
 ИСПРАВЛЕНО: все f-строки с кавычками
 """
 import logging
@@ -33,7 +34,35 @@ from state import (
     TestStates
 )
 
+# ✅ ДОБАВЛЕНО: импорт для БД
+from db_instance import db, save_user_to_db
+
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
+# ============================================
+
+async def save_mode_to_db(user_id: int, mode: str):
+    """Сохраняет выбранный режим в БД"""
+    try:
+        # Логируем событие
+        await db.log_event(
+            user_id,
+            'mode_selected',
+            {
+                'mode': mode,
+                'mode_name': COMMUNICATION_MODES.get(mode, {}).get('display_name', mode),
+                'timestamp': time.time()
+            }
+        )
+        
+        # Сохраняем пользователя целиком (контекст уже должен быть обновлен)
+        await save_user_to_db(user_id, user_data, user_contexts, {})
+        
+        logger.debug(f"💾 Режим {mode} для пользователя {user_id} сохранен в БД")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения режима для {user_id}: {e}")
 
 # ============================================
 # ОБРАБОТЧИКИ КОМАНД
@@ -191,6 +220,9 @@ def set_mode_coach(call: types.CallbackQuery):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
+    # ✅ СОХРАНЯЕМ В БД
+    asyncio.create_task(save_mode_to_db(user_id, "coach"))
+    
     # Показываем подтверждение
     show_mode_selected(call.message, "coach")
     
@@ -217,6 +249,9 @@ def set_mode_psychologist(call: types.CallbackQuery):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
+    # ✅ СОХРАНЯЕМ В БД
+    asyncio.create_task(save_mode_to_db(user_id, "psychologist"))
+    
     # Показываем подтверждение
     show_mode_selected(call.message, "psychologist")
     
@@ -242,6 +277,9 @@ def set_mode_trainer(call: types.CallbackQuery):
     context.communication_mode = "trainer"
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
+    
+    # ✅ СОХРАНЯЕМ В БД
+    asyncio.create_task(save_mode_to_db(user_id, "trainer"))
     
     # Показываем подтверждение
     show_mode_selected(call.message, "trainer")
@@ -278,6 +316,9 @@ def choose_mode(call: types.CallbackQuery, mode: str):
     context.communication_mode = new_mode
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
+    
+    # ✅ СОХРАНЯЕМ В БД
+    asyncio.create_task(save_mode_to_db(user_id, new_mode))
     
     mode_info = COMMUNICATION_MODES.get(new_mode, COMMUNICATION_MODES["coach"])
     
@@ -649,5 +690,7 @@ __all__ = [
     'callback_back_to_mode_selected',
     'callback_start_test',
     'callback_main_menu',
-    'callback_back_to_main'
+    'callback_back_to_main',
+    # ✅ ДОБАВЛЕНО: функция для БД
+    'save_mode_to_db'
 ]
