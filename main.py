@@ -5,9 +5,7 @@
 ВЕРСИЯ ДЛЯ MAX
 ИСПРАВЛЕНО: обработка вопросов без await для синхронных функций
 ДОБАВЛЕНО: FastAPI для мини-приложения
-ИСПРАВЛЕНО: f-strings quotes error (финальное решение)
-ИСПРАВЛЕНО: конфликт портов между health check и FastAPI
-ИСПРАВЛЕНО: добавлены недостающие импорты для API
+ДОБАВЛЕНО: PostgreSQL для постоянного хранения данных
 """
 
 import os
@@ -23,7 +21,7 @@ import socket
 import asyncio
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, List, Any, Tuple, Union
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ========== ИМПОРТЫ ДЛЯ FASTAPI ==========
 from fastapi import FastAPI, Request
@@ -31,6 +29,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 import uvicorn
 # =========================================
+
+# ========== ИМПОРТЫ ДЛЯ БАЗЫ ДАННЫХ ==========
+from database import BotDatabase
+import asyncpg
+# =============================================
 
 # ========== ЗАЩИТА ОТ ДВОЙНОГО ЗАПУСКА ==========
 PID_FILE = '/tmp/max-bot.pid'
@@ -181,6 +184,156 @@ morning_manager.set_bot(bot)
 morning_manager.set_contexts(user_contexts, user_data)
 
 # ============================================
+# ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ
+# ============================================
+
+# URL базы данных из переменных окружения Render
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://variatica:Ben9BvM0OnppX1EVSabWQQSwTCrqkahh@dpg-d639vucr85hc73b2ge00-a.oregon-postgres.render.com/variatica"
+)
+
+db = BotDatabase(DATABASE_URL)
+
+async def init_database():
+    """Инициализация базы данных"""
+    try:
+        # Подключаемся к базе
+        await db.connect()
+        logger.info("✅ Подключение к PostgreSQL установлено")
+        
+        # Загружаем всех пользователей из БД в память
+        await load_all_users_from_db()
+        
+        # Запускаем фоновые задачи
+        asyncio.create_task(periodic_save_to_db())
+        asyncio.create_task(periodic_cleanup_db())
+        
+        logger.info("✅ База данных инициализирована")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка инициализации БД: {e}")
+
+async def load_all_users_from_db():
+    """Загружает всех пользователей из БД в словари памяти"""
+    global user_data, user_names, user_contexts, user_routes
+    
+    logger.info("🔄 Загрузка данных из PostgreSQL...")
+    
+    try:
+        # Загружаем пользователей из таблицы fredi_users
+        async with db.get_connection() as conn:
+            rows = await conn.fetch("SELECT user_id, first_name FROM fredi_users")
+            for row in rows:
+                user_names[row['user_id']] = row['first_name'] or f"user_{row['user_id']}"
+        
+        # Загружаем контексты
+        async with db.get_connection() as conn:
+            rows = await conn.fetch("SELECT user_id, context FROM fredi_user_contexts")
+            for row in rows:
+                context_data = row['context']
+                if isinstance(context_data, str):
+                    context_data = json.loads(context_data)
+                
+                # Восстанавливаем объект UserContext
+                context = UserContext(row['user_id'])
+                for key, value in context_data.items():
+                    if hasattr(context, key) and key != 'user_id':
+                        setattr(context, key, value)
+                
+                user_contexts[row['user_id']] = context
+        
+        # Загружаем user_data
+        async with db.get_connection() as conn:
+            rows = await conn.fetch("SELECT user_id, data FROM fredi_user_data")
+            for row in rows:
+                data = row['data']
+                if isinstance(data, str):
+                    data = json.loads(data)
+                user_data[row['user_id']] = data
+        
+        # Загружаем активные маршруты
+        async with db.get_connection() as conn:
+            rows = await conn.fetch("""
+                SELECT user_id, route_data, current_step, progress 
+                FROM fredi_user_routes 
+                WHERE is_active = TRUE
+            """)
+            for row in rows:
+                route_data = row['route_data']
+                if isinstance(route_data, str):
+                    route_data = json.loads(route_data)
+                
+                user_routes[row['user_id']] = {
+                    'route_data': route_data,
+                    'current_step': row['current_step'],
+                    'progress': json.loads(row['progress']) if row['progress'] else []
+                }
+        
+        logger.info(f"✅ Загружено: {len(user_data)} пользователей, "
+                   f"{len(user_contexts)} контекстов, "
+                   f"{len(user_routes)} маршрутов")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки данных из БД: {e}")
+
+async def save_user_to_db(user_id: int):
+    """Сохраняет данные конкретного пользователя в БД"""
+    try:
+        # Сохраняем user_data
+        if user_id in user_data:
+            await db.save_user_data(user_id, user_data[user_id])
+        
+        # Сохраняем контекст
+        if user_id in user_contexts:
+            await db.save_user_context(user_id, user_contexts[user_id])
+            # Также сохраняем pickled версию как резерв
+            await db.save_pickled_context(user_id, user_contexts[user_id])
+        
+        # Сохраняем маршрут
+        if user_id in user_routes:
+            route = user_routes[user_id]
+            await db.save_user_route(
+                user_id=user_id,
+                route_data=route.get('route_data', {}),
+                current_step=route.get('current_step', 1),
+                progress=route.get('progress', [])
+            )
+        
+        logger.debug(f"💾 Данные пользователя {user_id} сохранены в БД")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения пользователя {user_id} в БД: {e}")
+
+async def periodic_save_to_db():
+    """Периодически сохраняет всех пользователей в БД"""
+    while True:
+        await asyncio.sleep(300)  # Каждые 5 минут
+        
+        logger.info("🔄 Периодическое сохранение данных в БД...")
+        
+        saved_count = 0
+        for user_id in list(user_data.keys()):
+            try:
+                await save_user_to_db(user_id)
+                saved_count += 1
+            except Exception as e:
+                logger.error(f"❌ Ошибка сохранения {user_id}: {e}")
+        
+        logger.info(f"✅ Сохранено {saved_count} пользователей")
+
+async def periodic_cleanup_db():
+    """Периодическая очистка старых данных"""
+    while True:
+        await asyncio.sleep(86400)  # 24 часа
+        
+        try:
+            await db.cleanup_old_data(days=30)
+            logger.info("🧹 Очистка старых данных выполнена")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при очистке данных: {e}")
+
+# ============================================
 # FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
 # ============================================
 
@@ -274,8 +427,9 @@ async def get_user_data(user_id: int):
         
         return {
             "user_id": user_id,
-            "user_name": context.name if context else "друг",
-            "has_profile": bool(user_data.get(user_id, {}).get("ai_generated_profile"))
+            "user_name": context.name if context else user_names.get(user_id, "друг"),
+            "has_profile": bool(user_data.get(user_id, {}).get("ai_generated_profile")) or 
+                          bool(user_data.get(user_id, {}).get("profile_data"))
         }
     except Exception as e:
         logger.error(f"API error in get_user_data: {e}")
@@ -334,6 +488,8 @@ async def get_thought(user_id: int):
                 if user_id not in user_data:
                     user_data[user_id] = {}
                 user_data[user_id]["psychologist_thought"] = thought
+                # Сразу сохраняем в БД
+                asyncio.create_task(save_user_to_db(user_id))
             else:
                 thought = "Мысли психолога еще не сгенерированы."
         
@@ -352,7 +508,12 @@ async def get_ideas(user_id: int):
         user_id = int(user_id)
         data = user_data.get(user_id, {})
         context = user_contexts.get(user_id)
-        user_name = context.name if context else "друг"
+        user_name = context.name if context else user_names.get(user_id, "друг")
+        
+        # Проверяем кэш в БД
+        cached_ideas = await db.get_cached_weekend_ideas(user_id)
+        if cached_ideas:
+            return {"ideas": [{"title": "Идеи на выходные", "description": cached_ideas}]}
         
         scores = {}
         for k in VECTORS:
@@ -369,7 +530,13 @@ async def get_ideas(user_id: int):
             context=context
         )
         
-        # Преобразуем текст в структурированные идеи (упрощенно)
+        # Сохраняем в кэш БД
+        if scores:
+            main_vector = max(scores.items(), key=lambda x: x[1])[0]
+            main_level = int(scores.get(main_vector, 3))
+            asyncio.create_task(db.cache_weekend_ideas(user_id, ideas_text, main_vector, main_level))
+        
+        # Преобразуем текст в структурированные идеи
         ideas = []
         paragraphs = ideas_text.split('\n\n')
         for p in paragraphs:
@@ -1096,6 +1263,21 @@ def run_async_tasks():
     
     loop.close()
 
+async def shutdown_handler():
+    """Обработчик завершения работы - сохраняет все данные в БД"""
+    logger.info("🛑 Завершение работы, сохраняем данные в БД...")
+    
+    saved_count = 0
+    for user_id in list(user_data.keys()):
+        try:
+            await save_user_to_db(user_id)
+            saved_count += 1
+        except Exception as e:
+            logger.error(f"❌ Ошибка финального сохранения {user_id}: {e}")
+    
+    await db.disconnect()
+    logger.info(f"✅ Сохранено {saved_count} пользователей. Бот завершает работу.")
+
 def main():
     print("\n" + "="*80)
     print("🚀 ВИРТУАЛЬНЫЙ ПСИХОЛОГ - МАТРИЦА ПОВЕДЕНИЙ 4×6 v9.6 (MAX)")
@@ -1113,9 +1295,21 @@ def main():
     print("🎨 Идеи на выходные: ✅")
     print("🔬 Глубинный анализ вопросов: ✅")
     print("📱 Мини-приложение: ✅ (FastAPI)")
+    print("🗄️ Постоянное хранение: ✅ (PostgreSQL)")
     print("="*80 + "\n")
     
     logger.info("🚀 Бот для MAX запущен!")
+    
+    # Создаем новый event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Инициализируем базу данных
+    try:
+        loop.run_until_complete(init_database())
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка при инициализации БД: {e}")
+        sys.exit(1)
     
     # Запускаем планировщик
     scheduler.start()
@@ -1129,6 +1323,15 @@ def main():
     api_thread.start()
     logger.info("✅ FastAPI сервер запущен")
     
+    # Добавляем обработчик сигналов для корректного завершения
+    try:
+        import signal
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown_handler()))
+    except (ImportError, NotImplementedError):
+        # Windows или другая платформа без сигналов
+        pass
+    
     is_render = os.environ.get('RENDER') is not None
     retry_count = 0
     max_retries = 5 if not is_render else 1
@@ -1139,6 +1342,8 @@ def main():
                 bot.polling()
             except KeyboardInterrupt:
                 logger.info("👋 Бот остановлен пользователем")
+                # Сохраняем данные перед выходом
+                loop.run_until_complete(shutdown_handler())
                 break
             except Exception as e:
                 retry_count += 1
@@ -1150,6 +1355,8 @@ def main():
                     time.sleep(delay)
                 else:
                     logger.error("❌ Превышено количество попыток")
+                    # Сохраняем данные перед выходом
+                    loop.run_until_complete(shutdown_handler())
     finally:
         cleanup_resources()
 
