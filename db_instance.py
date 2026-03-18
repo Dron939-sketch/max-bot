@@ -3,7 +3,7 @@
 """
 Централизованный доступ к экземпляру базы данных
 ИСПРАВЛЕНИЕ: Устранение циклического импорта с main.py
-ВЕРСИЯ 2.0: Полная интеграция со state.py
+ВЕРСИЯ 2.1 - ДОБАВЛЕНО: ensure_db_connection для проверки соединения
 """
 
 import os
@@ -43,6 +43,35 @@ async def close_db():
         logger.error(f"❌ Ошибка при закрытии подключения: {e}")
 
 # ============================================
+# ✅ ДОБАВЛЕНО: ФУНКЦИЯ ПРОВЕРКИ СОЕДИНЕНИЯ С БД
+# ============================================
+
+async def ensure_db_connection():
+    """Проверяет, установлено ли соединение с БД, и подключается если нет"""
+    try:
+        # Проверяем, существует ли пул
+        if db.pool is None:
+            logger.info("🔄 Пул соединений не инициализирован, подключаемся...")
+            await db.connect()
+            return True
+        
+        # Проверяем, работает ли соединение
+        async with db.get_connection() as conn:
+            await conn.execute("SELECT 1")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка при проверке соединения с БД: {e}")
+        # Пробуем переподключиться
+        try:
+            logger.info("🔄 Пробуем переподключиться к БД...")
+            await db.disconnect()
+            await db.connect()
+            return True
+        except Exception as e2:
+            logger.error(f"❌ Не удалось переподключиться к БД: {e2}")
+            return False
+
+# ============================================
 # ФУНКЦИИ ДЛЯ СОХРАНЕНИЯ ДАННЫХ
 # ============================================
 
@@ -57,6 +86,9 @@ async def save_user_to_db(
     Универсальная функция, которая принимает данные из state.py
     """
     try:
+        # ✅ Проверяем соединение с БД перед сохранением
+        await ensure_db_connection()
+        
         # Если данные не переданы, пытаемся импортировать из state
         if user_data_dict is None or user_contexts_dict is None or user_routes_dict is None:
             try:
@@ -117,6 +149,9 @@ async def save_test_result_to_db(
 ):
     """Сохраняет результаты теста в БД"""
     try:
+        # ✅ Проверяем соединение с БД перед сохранением
+        await ensure_db_connection()
+        
         data = user_data_dict.get(user_id, {})
         
         # Получаем profile_code из данных
@@ -171,5 +206,6 @@ __all__ = [
     'init_db',
     'close_db',
     'save_user_to_db',
-    'save_test_result_to_db'
+    'save_test_result_to_db',
+    'ensure_db_connection'  # ✅ ДОБАВЛЕНО
 ]
