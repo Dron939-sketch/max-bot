@@ -6,6 +6,7 @@
 ИСПРАВЛЕНО: обработка вопросов без await для синхронных функций
 ДОБАВЛЕНО: FastAPI для мини-приложения
 ДОБАВЛЕНО: PostgreSQL для постоянного хранения данных
+ИСПРАВЛЕНО: Импорты БД, загрузка данных из таблиц
 """
 
 import os
@@ -31,7 +32,8 @@ import uvicorn
 # =========================================
 
 # ========== ИМПОРТЫ ДЛЯ БАЗЫ ДАННЫХ ==========
-from database import BotDatabase
+# ✅ ИСПРАВЛЕНО: импортируем из db_instance
+from db_instance import db, init_db, close_db, save_user_to_db as save_user_to_db_wrapper
 import asyncpg
 # =============================================
 
@@ -187,19 +189,14 @@ morning_manager.set_contexts(user_contexts, user_data)
 # ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ
 # ============================================
 
-# URL базы данных из переменных окружения Render
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://variatica:Ben9BvM0OnppX1EVSabWQQSwTCrqkahh@dpg-d639vucr85hc73b2ge00-a.oregon-postgres.render.com/variatica"
-)
-
-db = BotDatabase(DATABASE_URL)
+# ✅ УБРАНО: db создается в db_instance.py, не нужно создавать здесь
+# db = BotDatabase(DATABASE_URL)
 
 async def init_database():
     """Инициализация базы данных"""
     try:
-        # Подключаемся к базе
-        await db.connect()
+        # Подключаемся к базе через db_instance
+        await init_db()
         logger.info("✅ Подключение к PostgreSQL установлено")
         
         # Загружаем всех пользователей из БД в память
@@ -223,25 +220,54 @@ async def load_all_users_from_db():
     try:
         # Загружаем пользователей из таблицы fredi_users
         async with db.get_connection() as conn:
-            rows = await conn.fetch("SELECT user_id, first_name FROM fredi_users")
+            rows = await conn.fetch("SELECT user_id, first_name, username FROM fredi_users")
             for row in rows:
-                user_names[row['user_id']] = row['first_name'] or f"user_{row['user_id']}"
+                user_names[row['user_id']] = row['first_name'] or row['username'] or f"user_{row['user_id']}"
         
-        # Загружаем контексты
+        # ✅ ИСПРАВЛЕНО: Загружаем контексты из полей таблицы, а не из поля 'context'
         async with db.get_connection() as conn:
-            rows = await conn.fetch("SELECT user_id, context FROM fredi_user_contexts")
+            rows = await conn.fetch("SELECT * FROM fredi_user_contexts")
             for row in rows:
-                context_data = row['context']
-                if isinstance(context_data, str):
-                    context_data = json.loads(context_data)
+                user_id = row['user_id']
                 
                 # Восстанавливаем объект UserContext
-                context = UserContext(row['user_id'])
-                for key, value in context_data.items():
-                    if hasattr(context, key) and key != 'user_id':
-                        setattr(context, key, value)
+                context = UserContext(user_id)
                 
-                user_contexts[row['user_id']] = context
+                # Заполняем поля из строки БД
+                context.name = row.get('name')
+                context.age = row.get('age')
+                context.gender = row.get('gender')
+                context.city = row.get('city')
+                context.birth_date = row.get('birth_date')
+                context.timezone = row.get('timezone', 'Europe/Moscow')
+                context.timezone_offset = row.get('timezone_offset', 3)
+                context.communication_mode = row.get('communication_mode', 'coach')
+                context.last_context_update = row.get('last_context_update')
+                
+                # Погода (JSON)
+                if row.get('weather_cache'):
+                    context.weather_cache = json.loads(row['weather_cache'])
+                context.weather_cache_time = row.get('weather_cache_time')
+                
+                # Жизненный контекст
+                context.family_status = row.get('family_status')
+                context.has_children = row.get('has_children', False)
+                context.children_ages = row.get('children_ages')
+                context.work_schedule = row.get('work_schedule')
+                context.job_title = row.get('job_title')
+                context.commute_time = row.get('commute_time')
+                context.housing_type = row.get('housing_type')
+                context.has_private_space = row.get('has_private_space', False)
+                context.has_car = row.get('has_car', False)
+                context.support_people = row.get('support_people')
+                context.resistance_people = row.get('resistance_people')
+                context.energy_level = row.get('energy_level')
+                context.life_context_complete = row.get('life_context_complete', False)
+                
+                # Состояние сбора
+                context.awaiting_context = row.get('awaiting_context')
+                
+                user_contexts[user_id] = context
         
         # Загружаем user_data
         async with db.get_connection() as conn:
@@ -264,11 +290,30 @@ async def load_all_users_from_db():
                 if isinstance(route_data, str):
                     route_data = json.loads(route_data)
                 
+                progress = row['progress']
+                if isinstance(progress, str):
+                    progress = json.loads(progress)
+                
                 user_routes[row['user_id']] = {
                     'route_data': route_data,
                     'current_step': row['current_step'],
-                    'progress': json.loads(row['progress']) if row['progress'] else []
+                    'progress': progress
                 }
+        
+        # Также пробуем загрузить из pickled контекстов (резерв)
+        async with db.get_connection() as conn:
+            rows = await conn.fetch("SELECT user_id, context_data FROM fredi_context_objects")
+            for row in rows:
+                user_id = row['user_id']
+                # Если контекст еще не загружен из основной таблицы
+                if user_id not in user_contexts:
+                    try:
+                        import pickle
+                        context = pickle.loads(row['context_data'])
+                        user_contexts[user_id] = context
+                        logger.debug(f"📦 Загружен pickled контекст для {user_id}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Не удалось загрузить pickled контекст для {user_id}: {e}")
         
         logger.info(f"✅ Загружено: {len(user_data)} пользователей, "
                    f"{len(user_contexts)} контекстов, "
@@ -276,34 +321,13 @@ async def load_all_users_from_db():
         
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки данных из БД: {e}")
+        import traceback
+        traceback.print_exc()
 
+# ✅ ИСПРАВЛЕНО: используем обертку из db_instance
 async def save_user_to_db(user_id: int):
     """Сохраняет данные конкретного пользователя в БД"""
-    try:
-        # Сохраняем user_data
-        if user_id in user_data:
-            await db.save_user_data(user_id, user_data[user_id])
-        
-        # Сохраняем контекст
-        if user_id in user_contexts:
-            await db.save_user_context(user_id, user_contexts[user_id])
-            # Также сохраняем pickled версию как резерв
-            await db.save_pickled_context(user_id, user_contexts[user_id])
-        
-        # Сохраняем маршрут
-        if user_id in user_routes:
-            route = user_routes[user_id]
-            await db.save_user_route(
-                user_id=user_id,
-                route_data=route.get('route_data', {}),
-                current_step=route.get('current_step', 1),
-                progress=route.get('progress', [])
-            )
-        
-        logger.debug(f"💾 Данные пользователя {user_id} сохранены в БД")
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения пользователя {user_id} в БД: {e}")
+    await save_user_to_db_wrapper(user_id, user_data, user_contexts, user_routes)
 
 async def periodic_save_to_db():
     """Периодически сохраняет всех пользователей в БД"""
@@ -1275,7 +1299,7 @@ async def shutdown_handler():
         except Exception as e:
             logger.error(f"❌ Ошибка финального сохранения {user_id}: {e}")
     
-    await db.disconnect()
+    await close_db()
     logger.info(f"✅ Сохранено {saved_count} пользователей. Бот завершает работу.")
 
 def main():
