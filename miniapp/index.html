@@ -5,22 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ФРЕДИ - Виртуальный психолог</title>
     
-    <!-- MAX Bridge вместо Telegram WebApp -->
+    <!-- MAX Bridge -->
     <script src="https://max.ru/webapps/js/bridge.js"></script>
     
-    <!-- MAX UI библиотека (опционально) -->
+    <!-- MAX UI библиотека -->
     <link rel="stylesheet" href="https://max.ru/webapps/css/theme.css">
     
     <style>
-        /* ========== КРАСИВЫЙ ФОН ДЛЯ MAX ========== */
+        /* ========== ВЕСЬ ВАШ CSS ЗДЕСЬ ========== */
+        /* (весь тот огромный CSS, который у вас есть) */
+        
         :root {
-            /* Цвета MAX из документации */
             --max-bg-light: #f0f2f5;
             --max-bg-dark: #0e1621;
             --max-surface-light: rgba(255, 255, 255, 0.9);
             --max-surface-dark: rgba(30, 37, 48, 0.9);
-            
-            /* Ваши фирменные цвета */
             --fredi-blue: #40a7e3;
             --fredi-blue-light: rgba(64, 167, 227, 0.1);
         }
@@ -32,8 +31,6 @@
             background: var(--max-bg-light);
             position: relative;
             min-height: 100vh;
-            
-            /* Плавный переход между темами */
             transition: background-color 0.3s ease;
         }
         
@@ -74,7 +71,7 @@
             z-index: 0;
         }
         
-        /* Темная тема MAX */
+        /* Темная тема */
         [data-max-theme="dark"] body,
         @media (prefers-color-scheme: dark) {
             body {
@@ -108,14 +105,12 @@
             min-height: 100vh;
             display: flex;
             flex-direction: column;
-            
-            /* Безопасные отступы для MAX */
             padding-top: env(safe-area-inset-top);
             padding-bottom: env(safe-area-inset-bottom);
             box-sizing: border-box;
         }
         
-        /* ===== Единый стиль для всех блоков ===== */
+        /* Стили для блоков */
         .header, .nav-bar, .stages-list, .mode-header, .mode-card,
         .profile-section, .thought-block, .goal-card, .examples-section,
         .messages-container, .profile-badge, .menu-card, .weekend-hint,
@@ -128,19 +123,15 @@
             border: 1px solid rgba(255, 255, 255, 0.5) !important;
             border-radius: 14px;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-            
-            /* Плавные переходы */
             transition: background-color 0.3s ease, border-color 0.3s ease;
         }
         
-        /* Специально для шапки и навигации */
         .header, .nav-bar {
             border-radius: 0;
             border-left: none;
             border-right: none;
         }
         
-        /* Темная тема для блоков */
         [data-max-theme="dark"] .header,
         [data-max-theme="dark"] .nav-bar,
         [data-max-theme="dark"] .stages-list,
@@ -165,12 +156,10 @@
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
         }
         
-        /* Текст с учетом темы */
         [data-max-theme="dark"] body {
             color: #fff;
         }
         
-        /* Стили для шапки */
         .header {
             display: flex;
             align-items: center;
@@ -214,13 +203,11 @@
             width: 40px;
         }
         
-        /* Контент */
         .content {
             flex: 1;
             padding: 16px;
         }
         
-        /* Навигация */
         .nav-bar {
             display: flex;
             justify-content: space-around;
@@ -262,26 +249,45 @@
         [data-max-theme="dark"] .nav-btn.active {
             background: rgba(64, 167, 227, 0.2);
         }
+
+        /* Добавьте минимальные стили для загрузки */
+        .loading-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 300px;
+        }
+        
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(64, 167, 227, 0.3);
+            border-radius: 50%;
+            border-top-color: #40a7e3;
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
     </style>
     
-    <!-- 👋 СТРОКУ С STYLES.CSS УДАЛИЛИ! -->
+    <!-- ⚠️ ВАЖНО: СТРОКУ С STYLES.CSS УДАЛИЛИ ПОЛНОСТЬЮ! -->
     
 </head>
 <body>
     <div id="app">
-        <!-- Шапка -->
         <header class="header">
             <button class="back-btn" id="backBtn" style="display: none;">←</button>
             <h1 id="header-title">👋 ФРЕДИ</h1>
             <div class="header-placeholder"></div>
         </header>
         
-        <!-- Основной контент -->
         <main class="content" id="content">
             <!-- Контент будет загружаться через script.js -->
         </main>
         
-        <!-- Нижняя навигация -->
         <nav class="nav-bar" id="navBar" style="display: none;">
             <button class="nav-btn" onclick="showScreen('main')" data-screen="main">
                 <span>🏠</span> Главная
@@ -298,45 +304,25 @@
         </nav>
     </div>
     
+    <!-- ⚠️ ТУТ ТОЖЕ ПРОВЕРЬТЕ: script.js должен существовать! -->
     <script src="script.js"></script>
+    
     <script>
-        // ===== Инициализация MAX =====
+        // Минимальная инициализация для теста
         (function() {
-            // Ждем загрузки MAX Bridge
+            console.log('🚀 HTML загружен, ждем скрипты...');
+            
+            // Проверяем MAX
             if (window.MAX) {
-                initMAX();
+                console.log('✅ MAX Bridge найден');
+                document.body.parentElement.setAttribute('data-max-theme', window.MAX.theme || 'light');
             } else {
-                window.addEventListener('load', function() {
-                    if (window.MAX) initMAX();
-                });
+                console.log('⚠️ MAX Bridge не найден');
             }
             
-            function initMAX() {
-                console.log('MAX WebApp инициализирован');
-                
-                // Получаем тему MAX
-                const theme = MAX.theme || 'light';
-                document.body.parentElement.setAttribute('data-max-theme', theme);
-                
-                // Слушаем изменения темы
-                MAX.onEvent('themeChanged', function(newTheme) {
-                    document.body.parentElement.setAttribute('data-max-theme', newTheme);
-                });
-                
-                // Сообщаем MAX, что приложение готово
-                MAX.ready();
-                
-                // Получаем данные пользователя (если нужно)
-                const user = MAX.getUserData();
-                if (user) {
-                    console.log('Пользователь:', user);
-                    // Можно сохранить в localStorage или глобальную переменную
-                }
-            }
-            
-            // Функция для навигации
+            // Простая функция showScreen для теста
             window.showScreen = function(screenName) {
-                // Обновляем активную кнопку
+                console.log('📱 Переход на экран:', screenName);
                 document.querySelectorAll('.nav-btn').forEach(btn => {
                     btn.classList.remove('active');
                     if (btn.dataset.screen === screenName) {
@@ -344,9 +330,18 @@
                     }
                 });
                 
-                // Здесь будет ваш код переключения экранов
-                console.log('Переход на экран:', screenName);
+                // Показываем тестовый контент
+                document.getElementById('content').innerHTML = `
+                    <div style="padding: 20px; text-align: center;">
+                        <h2>🧠 Экран: ${screenName}</h2>
+                        <p>Если вы это видите - HTML и CSS работают!</p>
+                        <p>Теперь проверяем script.js...</p>
+                    </div>
+                `;
             };
+            
+            // Показываем главный экран
+            setTimeout(() => window.showScreen('main'), 100);
         })();
     </script>
 </body>
