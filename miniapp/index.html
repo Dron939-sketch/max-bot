@@ -5,26 +5,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ФРЕДИ - Виртуальный психолог</title>
     
-    <!-- Telegram WebApp -->
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- MAX Bridge вместо Telegram WebApp -->
+    <script src="https://max.ru/webapps/js/bridge.js"></script>
+    
+    <!-- MAX UI библиотека (опционально) -->
+    <link rel="stylesheet" href="https://max.ru/webapps/css/theme.css">
     
     <style>
-        /* ========== КРАСИВЫЙ ФОН КАК В TELEGRAM ========== */
+        /* ========== КРАСИВЫЙ ФОН ДЛЯ MAX ========== */
         :root {
-            --tg-bg-light: #f5f7fa;
-            --tg-bg-dark: #0a0f14;
+            /* Цвета MAX из документации */
+            --max-bg-light: #f0f2f5;
+            --max-bg-dark: #0e1621;
+            --max-surface-light: rgba(255, 255, 255, 0.9);
+            --max-surface-dark: rgba(30, 37, 48, 0.9);
+            
+            /* Ваши фирменные цвета */
+            --fredi-blue: #40a7e3;
+            --fredi-blue-light: rgba(64, 167, 227, 0.1);
         }
         
         body {
             margin: 0;
             padding: 0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--tg-bg-light);
+            background: var(--max-bg-light);
             position: relative;
             min-height: 100vh;
+            
+            /* Плавный переход между темами */
+            transition: background-color 0.3s ease;
         }
         
-        /* Текстура "шум" как в Telegram */
+        /* Основной фон с паттерном "шум" */
         body::before {
             content: "";
             position: fixed;
@@ -48,7 +61,7 @@
             z-index: 0;
         }
         
-        /* Дополнительный градиент поверх */
+        /* Градиентный слой */
         body::after {
             content: "";
             position: fixed;
@@ -56,32 +69,34 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: radial-gradient(circle at 20% 50%, rgba(64, 167, 227, 0.03) 0%, transparent 50%);
+            background: radial-gradient(circle at 20% 50%, rgba(64, 167, 227, 0.05) 0%, transparent 60%);
             pointer-events: none;
             z-index: 0;
         }
         
+        /* Темная тема MAX */
+        [data-max-theme="dark"] body,
         @media (prefers-color-scheme: dark) {
             body {
-                background-color: var(--tg-bg-dark);
+                background: var(--max-bg-dark);
             }
             
             body::before {
                 background-image: 
                     repeating-linear-gradient(45deg, 
-                        rgba(255, 255, 255, 0.02) 0px, 
-                        rgba(255, 255, 255, 0.02) 1px, 
+                        rgba(255, 255, 255, 0.03) 0px, 
+                        rgba(255, 255, 255, 0.03) 1px, 
                         transparent 1px, 
                         transparent 12px),
                     repeating-linear-gradient(135deg, 
-                        rgba(255, 255, 255, 0.02) 0px, 
-                        rgba(255, 255, 255, 0.02) 1px, 
+                        rgba(255, 255, 255, 0.03) 0px, 
+                        rgba(255, 255, 255, 0.03) 1px, 
                         transparent 1px, 
                         transparent 12px);
             }
             
             body::after {
-                background: radial-gradient(circle at 20% 50%, rgba(64, 167, 227, 0.05) 0%, transparent 50%);
+                background: radial-gradient(circle at 20% 50%, rgba(64, 167, 227, 0.08) 0%, transparent 60%);
             }
         }
         
@@ -93,47 +108,163 @@
             min-height: 100vh;
             display: flex;
             flex-direction: column;
+            
+            /* Безопасные отступы для MAX */
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+            box-sizing: border-box;
         }
         
-        /* Стеклянные элементы */
-        .glass-effect {
-            background: rgba(255, 255, 255, 0.8) !important;
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.5) !important;
-        }
-        
-        @media (prefers-color-scheme: dark) {
-            .glass-effect {
-                background: rgba(31, 31, 31, 0.8) !important;
-                border-color: rgba(255, 255, 255, 0.1) !important;
-            }
-        }
-        
-        /* Убираем лишние фоны */
+        /* ===== Единый стиль для всех блоков ===== */
         .header, .nav-bar, .stages-list, .mode-header, .mode-card,
         .profile-section, .thought-block, .goal-card, .examples-section,
         .messages-container, .profile-badge, .menu-card, .weekend-hint,
         .result-screen, .path-steps, .reality-check-screen, .custom-goal-screen,
-        .weekend-ideas-screen .ideas-container {
-            background: rgba(255, 255, 255, 0.8) !important;
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
+        .weekend-ideas-screen .ideas-container,
+        .content > div:not(.no-glass) {
+            background: var(--max-surface-light) !important;
+            backdrop-filter: blur(15px) saturate(180%);
+            -webkit-backdrop-filter: blur(15px) saturate(180%);
             border: 1px solid rgba(255, 255, 255, 0.5) !important;
+            border-radius: 14px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+            
+            /* Плавные переходы */
+            transition: background-color 0.3s ease, border-color 0.3s ease;
         }
         
-        @media (prefers-color-scheme: dark) {
-            .header, .nav-bar, .stages-list, .mode-header, .mode-card,
-            .profile-section, .thought-block, .goal-card, .examples-section,
-            .messages-container, .profile-badge, .menu-card, .weekend-hint,
-            .result-screen, .path-steps, .reality-check-screen, .custom-goal-screen,
-            .weekend-ideas-screen .ideas-container {
-                background: rgba(31, 31, 31, 0.8) !important;
-                border-color: rgba(255, 255, 255, 0.1) !important;
-            }
+        /* Специально для шапки и навигации */
+        .header, .nav-bar {
+            border-radius: 0;
+            border-left: none;
+            border-right: none;
+        }
+        
+        /* Темная тема для блоков */
+        [data-max-theme="dark"] .header,
+        [data-max-theme="dark"] .nav-bar,
+        [data-max-theme="dark"] .stages-list,
+        [data-max-theme="dark"] .mode-header,
+        [data-max-theme="dark"] .mode-card,
+        [data-max-theme="dark"] .profile-section,
+        [data-max-theme="dark"] .thought-block,
+        [data-max-theme="dark"] .goal-card,
+        [data-max-theme="dark"] .examples-section,
+        [data-max-theme="dark"] .messages-container,
+        [data-max-theme="dark"] .profile-badge,
+        [data-max-theme="dark"] .menu-card,
+        [data-max-theme="dark"] .weekend-hint,
+        [data-max-theme="dark"] .result-screen,
+        [data-max-theme="dark"] .path-steps,
+        [data-max-theme="dark"] .reality-check-screen,
+        [data-max-theme="dark"] .custom-goal-screen,
+        [data-max-theme="dark"] .weekend-ideas-screen .ideas-container,
+        [data-max-theme="dark"] .content > div:not(.no-glass) {
+            background: var(--max-surface-dark) !important;
+            border-color: rgba(255, 255, 255, 0.1) !important;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        /* Текст с учетом темы */
+        [data-max-theme="dark"] body {
+            color: #fff;
+        }
+        
+        /* Стили для шапки */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .back-btn {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0 8px;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: background-color 0.2s;
+        }
+        
+        .back-btn:hover {
+            background: rgba(0, 0, 0, 0.05);
+        }
+        
+        [data-max-theme="dark"] .back-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+        }
+        
+        .header-placeholder {
+            width: 40px;
+        }
+        
+        /* Контент */
+        .content {
+            flex: 1;
+            padding: 16px;
+        }
+        
+        /* Навигация */
+        .nav-bar {
+            display: flex;
+            justify-content: space-around;
+            padding: 8px 16px;
+            position: sticky;
+            bottom: 0;
+            z-index: 100;
+            border-top: 1px solid rgba(0, 0, 0, 0.05);
+        }
+        
+        [data-max-theme="dark"] .nav-bar {
+            border-top-color: rgba(255, 255, 255, 0.05);
+        }
+        
+        .nav-btn {
+            background: none;
+            border: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            padding: 8px 16px;
+            border-radius: 30px;
+            cursor: pointer;
+            font-size: 12px;
+            color: inherit;
+            transition: background-color 0.2s;
+        }
+        
+        .nav-btn span {
+            font-size: 20px;
+        }
+        
+        .nav-btn.active {
+            background: var(--fredi-blue-light);
+            color: var(--fredi-blue);
+        }
+        
+        [data-max-theme="dark"] .nav-btn.active {
+            background: rgba(64, 167, 227, 0.2);
         }
     </style>
     
+    <!-- Ваши стили -->
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -152,21 +283,71 @@
         
         <!-- Нижняя навигация -->
         <nav class="nav-bar" id="navBar" style="display: none;">
-            <button class="nav-btn" onclick="showScreen('main')">
+            <button class="nav-btn" onclick="showScreen('main')" data-screen="main">
                 <span>🏠</span> Главная
             </button>
-            <button class="nav-btn" onclick="showScreen('profile')">
+            <button class="nav-btn" onclick="showScreen('profile')" data-screen="profile">
                 <span>📊</span> Профиль
             </button>
-            <button class="nav-btn" onclick="showScreen('goals')">
+            <button class="nav-btn" onclick="showScreen('goals')" data-screen="goals">
                 <span>🎯</span> Цели
             </button>
-            <button class="nav-btn" onclick="showScreen('ask')">
+            <button class="nav-btn" onclick="showScreen('ask')" data-screen="ask">
                 <span>❓</span> Чат
             </button>
         </nav>
     </div>
     
     <script src="script.js"></script>
+    <script>
+        // ===== Инициализация MAX =====
+        (function() {
+            // Ждем загрузки MAX Bridge
+            if (window.MAX) {
+                initMAX();
+            } else {
+                window.addEventListener('load', function() {
+                    if (window.MAX) initMAX();
+                });
+            }
+            
+            function initMAX() {
+                console.log('MAX WebApp инициализирован');
+                
+                // Получаем тему MAX
+                const theme = MAX.theme || 'light';
+                document.body.parentElement.setAttribute('data-max-theme', theme);
+                
+                // Слушаем изменения темы
+                MAX.onEvent('themeChanged', function(newTheme) {
+                    document.body.parentElement.setAttribute('data-max-theme', newTheme);
+                });
+                
+                // Сообщаем MAX, что приложение готово
+                MAX.ready();
+                
+                // Получаем данные пользователя (если нужно)
+                const user = MAX.getUserData();
+                if (user) {
+                    console.log('Пользователь:', user);
+                    // Можно сохранить в localStorage или глобальную переменную
+                }
+            }
+            
+            // Функция для навигации
+            window.showScreen = function(screenName) {
+                // Обновляем активную кнопку
+                document.querySelectorAll('.nav-btn').forEach(btn => {
+                    btn.classList.remove('active');
+                    if (btn.dataset.screen === screenName) {
+                        btn.classList.add('active');
+                    }
+                });
+                
+                // Здесь будет ваш код переключения экранов
+                console.log('Переход на экран:', screenName);
+            };
+        })();
+    </script>
 </body>
 </html>
