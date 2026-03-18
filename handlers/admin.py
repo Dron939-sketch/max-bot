@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Административные обработчики для MAX
-Версия 2.0 - ПОЛНАЯ ИНТЕГРАЦИЯ С PostgreSQL
+Версия 2.1 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
 Восстановлено из оригинального bot3.py и адаптировано
 """
 
@@ -10,6 +10,7 @@ import logging
 import time
 import datetime
 import asyncio
+import threading  # ✅ УЖЕ ЕСТЬ
 from typing import Dict, Any, List, Optional
 
 from bot_instance import bot
@@ -31,9 +32,33 @@ from state import (
 from models import Statistics
 
 # ✅ ДОБАВЛЕНО: импорт для БД
-from db_instance import db, save_user_to_db
+from db_instance import db, save_user_to_db, ensure_db_connection
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# ============================================
+
+def run_async_task(coro_func, *args, **kwargs):
+    """
+    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
+    """
+    def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            # Проверяем соединение с БД перед выполнением
+            if 'db' in str(coro_func) or 'save' in str(coro_func) or 'log' in str(coro_func):
+                loop.run_until_complete(ensure_db_connection())
+            coro = coro_func(*args, **kwargs)
+            loop.run_until_complete(coro)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+        finally:
+            loop.close()
+    
+    threading.Thread(target=_wrapper, daemon=True).start()
 
 # ============================================
 # СОЗДАЕМ ЭКЗЕМПЛЯР STATISTICS
@@ -77,6 +102,8 @@ def is_admin(user_id: int) -> bool:
 async def get_db_stats() -> Dict[str, Any]:
     """Получает статистику из БД"""
     try:
+        # ✅ Проверяем соединение с БД
+        await ensure_db_connection()
         return await db.get_stats(days=30)
     except Exception as e:
         logger.error(f"❌ Ошибка получения статистики из БД: {e}")
@@ -85,6 +112,8 @@ async def get_db_stats() -> Dict[str, Any]:
 async def sync_user_to_db(user_id: int):
     """Синхронизирует конкретного пользователя с БД"""
     try:
+        # ✅ Проверяем соединение с БД
+        await ensure_db_connection()
         await save_user_to_db(user_id, user_data, user_contexts, user_routes)
         return True
     except Exception as e:
@@ -93,12 +122,16 @@ async def sync_user_to_db(user_id: int):
 
 async def sync_all_users_to_db() -> Dict[str, int]:
     """Синхронизирует всех пользователей с БД"""
+    # ✅ Проверяем соединение с БД
+    await ensure_db_connection()
     saved = await save_all_users_to_db(db)
     return {"saved": saved}
 
 async def get_db_size() -> Dict[str, int]:
     """Получает размер таблиц в БД"""
     try:
+        # ✅ Проверяем соединение с БД
+        await ensure_db_connection()
         async with db.get_connection() as conn:
             # Количество пользователей
             users_count = await conn.fetchval("SELECT COUNT(*) FROM fredi_users")
@@ -195,32 +228,34 @@ def cmd_dbstats(message: Message):
     def run_async():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
-        # Получаем размер таблиц
-        db_sizes = loop.run_until_complete(get_db_size())
-        
-        # Получаем статистику из памяти
-        memory_stats = get_memory_stats()
-        
-        loop.close()
-        
-        text = f"📊 <b>СТАТИСТИКА БАЗЫ ДАННЫХ</b>\n\n"
-        
-        text += f"<b>PostgreSQL:</b>\n"
-        text += f"• Пользователей: {db_sizes.get('users', 0)}\n"
-        text += f"• Контекстов: {db_sizes.get('contexts', 0)}\n"
-        text += f"• Данных: {db_sizes.get('data', 0)}\n"
-        text += f"• Маршрутов: {db_sizes.get('routes', 0)}\n"
-        text += f"• Результатов тестов: {db_sizes.get('tests', 0)}\n"
-        text += f"• Событий (30 дн): {db_sizes.get('events_30d', 0)}\n\n"
-        
-        text += f"<b>Память (кэш):</b>\n"
-        text += f"• user_data: {memory_stats.get('users_in_data', 0)}\n"
-        text += f"• user_contexts: {memory_stats.get('users_in_contexts', 0)}\n"
-        text += f"• user_routes: {memory_stats.get('users_in_routes', 0)}\n"
-        text += f"• user_states: {memory_stats.get('users_in_states', 0)}\n"
-        
-        safe_send_message(message, text, parse_mode='HTML', delete_previous=True)
+        try:
+            # Получаем размер таблиц
+            db_sizes = loop.run_until_complete(get_db_size())
+            
+            # Получаем статистику из памяти
+            memory_stats = get_memory_stats()
+            
+            text = f"📊 <b>СТАТИСТИКА БАЗЫ ДАННЫХ</b>\n\n"
+            
+            text += f"<b>PostgreSQL:</b>\n"
+            text += f"• Пользователей: {db_sizes.get('users', 0)}\n"
+            text += f"• Контекстов: {db_sizes.get('contexts', 0)}\n"
+            text += f"• Данных: {db_sizes.get('data', 0)}\n"
+            text += f"• Маршрутов: {db_sizes.get('routes', 0)}\n"
+            text += f"• Результатов тестов: {db_sizes.get('tests', 0)}\n"
+            text += f"• Событий (30 дн): {db_sizes.get('events_30d', 0)}\n\n"
+            
+            text += f"<b>Память (кэш):</b>\n"
+            text += f"• user_data: {memory_stats.get('users_in_data', 0)}\n"
+            text += f"• user_contexts: {memory_stats.get('users_in_contexts', 0)}\n"
+            text += f"• user_routes: {memory_stats.get('users_in_routes', 0)}\n"
+            text += f"• user_states: {memory_stats.get('users_in_states', 0)}\n"
+            
+            safe_send_message(message, text, parse_mode='HTML', delete_previous=True)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в dbstats: {e}")
+        finally:
+            loop.close()
     
     threading.Thread(target=run_async, daemon=True).start()
 
@@ -295,28 +330,30 @@ def cmd_sync(message: Message):
     def run_sync():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
-        status_msg = safe_send_message(
-            message,
-            "🔄 Синхронизация с базой данных...",
-            delete_previous=True
-        )
-        
-        result = loop.run_until_complete(sync_all_users_to_db())
-        
-        if status_msg:
-            try:
-                safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
-                pass
-        
-        safe_send_message(
-            message,
-            f"✅ Синхронизировано пользователей: {result.get('saved', 0)}",
-            delete_previous=True
-        )
-        
-        loop.close()
+        try:
+            status_msg = safe_send_message(
+                message,
+                "🔄 Синхронизация с базой данных...",
+                delete_previous=True
+            )
+            
+            result = loop.run_until_complete(sync_all_users_to_db())
+            
+            if status_msg:
+                try:
+                    safe_delete_message(message.chat.id, status_msg.message_id)
+                except:
+                    pass
+            
+            safe_send_message(
+                message,
+                f"✅ Синхронизировано пользователей: {result.get('saved', 0)}",
+                delete_previous=True
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка синхронизации: {e}")
+        finally:
+            loop.close()
     
     threading.Thread(target=run_sync, daemon=True).start()
 
@@ -427,44 +464,46 @@ def show_admin_stats(call: CallbackQuery):
     def run_async():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
-        # Получаем статистику из БД
-        db_stats = loop.run_until_complete(get_db_stats())
-        
-        loop.close()
-        
-        # Статистика из памяти
-        memory_stats = get_memory_stats()
-        
-        text = f"📊 <b>РАСШИРЕННАЯ СТАТИСТИКА</b>\n\n"
-        
-        text += f"<b>ПАМЯТЬ (КЭШ):</b>\n"
-        text += f"• Всего уникальных: {memory_stats.get('total_unique', 0)}\n"
-        text += f"• user_data: {memory_stats.get('users_in_data', 0)}\n"
-        text += f"• user_contexts: {memory_stats.get('users_in_contexts', 0)}\n"
-        text += f"• user_routes: {memory_stats.get('users_in_routes', 0)}\n"
-        text += f"• user_states: {memory_stats.get('users_in_states', 0)}\n\n"
-        
-        text += f"<b>POSTGRESQL (30 дней):</b>\n"
-        text += f"• Всего пользователей: {db_stats.get('total_users', 0)}\n"
-        text += f"• Активных: {db_stats.get('active_users', 0)}\n"
-        text += f"• Завершённых тестов: {db_stats.get('completed_tests', 0)}\n\n"
-        
-        if db_stats.get('perception_types'):
-            text += f"<b>Типы восприятия:</b>\n"
-            for pt in db_stats.get('perception_types', []):
-                text += f"• {pt.get('perception_type', 'unknown')}: {pt.get('count', 0)}\n"
-            text += f"\n"
-        
-        keyboard = get_back_keyboard("admin_panel")
-        
-        safe_send_message(
-            call.message,
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML',
-            delete_previous=True
-        )
+        try:
+            # Получаем статистику из БД
+            db_stats = loop.run_until_complete(get_db_stats())
+            
+            # Статистика из памяти
+            memory_stats = get_memory_stats()
+            
+            text = f"📊 <b>РАСШИРЕННАЯ СТАТИСТИКА</b>\n\n"
+            
+            text += f"<b>ПАМЯТЬ (КЭШ):</b>\n"
+            text += f"• Всего уникальных: {memory_stats.get('total_unique', 0)}\n"
+            text += f"• user_data: {memory_stats.get('users_in_data', 0)}\n"
+            text += f"• user_contexts: {memory_stats.get('users_in_contexts', 0)}\n"
+            text += f"• user_routes: {memory_stats.get('users_in_routes', 0)}\n"
+            text += f"• user_states: {memory_stats.get('users_in_states', 0)}\n\n"
+            
+            text += f"<b>POSTGRESQL (30 дней):</b>\n"
+            text += f"• Всего пользователей: {db_stats.get('total_users', 0)}\n"
+            text += f"• Активных: {db_stats.get('active_users', 0)}\n"
+            text += f"• Завершённых тестов: {db_stats.get('completed_tests', 0)}\n\n"
+            
+            if db_stats.get('perception_types'):
+                text += f"<b>Типы восприятия:</b>\n"
+                for pt in db_stats.get('perception_types', []):
+                    text += f"• {pt.get('perception_type', 'unknown')}: {pt.get('count', 0)}\n"
+                text += f"\n"
+            
+            keyboard = get_back_keyboard("admin_panel")
+            
+            safe_send_message(
+                call.message,
+                text,
+                reply_markup=keyboard,
+                parse_mode='HTML',
+                delete_previous=True
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка в admin_stats: {e}")
+        finally:
+            loop.close()
     
     threading.Thread(target=run_async, daemon=True).start()
 
@@ -476,38 +515,40 @@ def show_admin_db(call: CallbackQuery):
     def run_async():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
-        # Получаем размер таблиц
-        db_sizes = loop.run_until_complete(get_db_size())
-        
-        loop.close()
-        
-        text = f"🗄 <b>БАЗА ДАННЫХ</b>\n\n"
-        
-        text += f"<b>Размер таблиц:</b>\n"
-        text += f"• fredi_users: {db_sizes.get('users', 0)} записей\n"
-        text += f"• fredi_user_contexts: {db_sizes.get('contexts', 0)} записей\n"
-        text += f"• fredi_user_data: {db_sizes.get('data', 0)} записей\n"
-        text += f"• fredi_user_routes: {db_sizes.get('routes', 0)} записей\n"
-        text += f"• fredi_test_results: {db_sizes.get('tests', 0)} записей\n"
-        text += f"• fredi_events (30 дн): {db_sizes.get('events_30d', 0)} записей\n\n"
-        
-        text += f"<b>URL подключения:</b>\n"
-        text += f"• {db.dsn[:50]}...\n"
-        
-        keyboard = InlineKeyboardMarkup()
-        keyboard.row(
-            InlineKeyboardButton("🔄 СИНХРОНИЗАЦИЯ", callback_data="admin_sync"),
-            InlineKeyboardButton("◀️ НАЗАД", callback_data="admin_panel")
-        )
-        
-        safe_send_message(
-            call.message,
-            text,
-            reply_markup=keyboard,
-            parse_mode='HTML',
-            delete_previous=True
-        )
+        try:
+            # Получаем размер таблиц
+            db_sizes = loop.run_until_complete(get_db_size())
+            
+            text = f"🗄 <b>БАЗА ДАННЫХ</b>\n\n"
+            
+            text += f"<b>Размер таблиц:</b>\n"
+            text += f"• fredi_users: {db_sizes.get('users', 0)} записей\n"
+            text += f"• fredi_user_contexts: {db_sizes.get('contexts', 0)} записей\n"
+            text += f"• fredi_user_data: {db_sizes.get('data', 0)} записей\n"
+            text += f"• fredi_user_routes: {db_sizes.get('routes', 0)} записей\n"
+            text += f"• fredi_test_results: {db_sizes.get('tests', 0)} записей\n"
+            text += f"• fredi_events (30 дн): {db_sizes.get('events_30d', 0)} записей\n\n"
+            
+            text += f"<b>URL подключения:</b>\n"
+            text += f"• {db.dsn[:50]}...\n"
+            
+            keyboard = InlineKeyboardMarkup()
+            keyboard.row(
+                InlineKeyboardButton("🔄 СИНХРОНИЗАЦИЯ", callback_data="admin_sync"),
+                InlineKeyboardButton("◀️ НАЗАД", callback_data="admin_panel")
+            )
+            
+            safe_send_message(
+                call.message,
+                text,
+                reply_markup=keyboard,
+                parse_mode='HTML',
+                delete_previous=True
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка в admin_db: {e}")
+        finally:
+            loop.close()
     
     threading.Thread(target=run_async, daemon=True).start()
 
@@ -519,32 +560,34 @@ def start_sync(call: CallbackQuery):
     def run_sync():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
-        status_msg = safe_send_message(
-            call.message,
-            "🔄 Синхронизация с базой данных...",
-            delete_previous=True
-        )
-        
-        result = loop.run_until_complete(sync_all_users_to_db())
-        
-        if status_msg:
-            try:
-                safe_delete_message(call.message.chat.id, status_msg.message_id)
-            except:
-                pass
-        
-        text = f"✅ Синхронизировано пользователей: {result.get('saved', 0)}"
-        keyboard = get_back_keyboard("admin_panel")
-        
-        safe_send_message(
-            call.message,
-            text,
-            reply_markup=keyboard,
-            delete_previous=True
-        )
-        
-        loop.close()
+        try:
+            status_msg = safe_send_message(
+                call.message,
+                "🔄 Синхронизация с базой данных...",
+                delete_previous=True
+            )
+            
+            result = loop.run_until_complete(sync_all_users_to_db())
+            
+            if status_msg:
+                try:
+                    safe_delete_message(call.message.chat.id, status_msg.message_id)
+                except:
+                    pass
+            
+            text = f"✅ Синхронизировано пользователей: {result.get('saved', 0)}"
+            keyboard = get_back_keyboard("admin_panel")
+            
+            safe_send_message(
+                call.message,
+                text,
+                reply_markup=keyboard,
+                delete_previous=True
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка синхронизации: {e}")
+        finally:
+            loop.close()
     
     threading.Thread(target=run_sync, daemon=True).start()
 
@@ -907,35 +950,34 @@ def cleanup_db(call: CallbackQuery):
     def run_cleanup():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
-        status_msg = safe_send_message(
-            call.message,
-            "🧹 Очистка базы данных...",
-            delete_previous=True
-        )
-        
         try:
+            status_msg = safe_send_message(
+                call.message,
+                "🧹 Очистка базы данных...",
+                delete_previous=True
+            )
+            
+            loop.run_until_complete(ensure_db_connection())
             loop.run_until_complete(db.cleanup_old_data(days=30))
             result = "✅ База данных очищена"
+            
+            if status_msg:
+                try:
+                    safe_delete_message(call.message.chat.id, status_msg.message_id)
+                except:
+                    pass
+            
+            keyboard = get_back_keyboard("admin_panel")
+            safe_send_message(
+                call.message,
+                result,
+                reply_markup=keyboard,
+                delete_previous=True
+            )
         except Exception as e:
             logger.error(f"❌ Ошибка очистки БД: {e}")
-            result = f"❌ Ошибка: {e}"
-        
-        if status_msg:
-            try:
-                safe_delete_message(call.message.chat.id, status_msg.message_id)
-            except:
-                pass
-        
-        keyboard = get_back_keyboard("admin_panel")
-        safe_send_message(
-            call.message,
-            result,
-            reply_markup=keyboard,
-            delete_previous=True
-        )
-        
-        loop.close()
+        finally:
+            loop.close()
     
     threading.Thread(target=run_cleanup, daemon=True).start()
 
