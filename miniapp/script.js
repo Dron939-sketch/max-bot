@@ -1,7 +1,6 @@
 // ============================================
-// script.js - ФРЕДИ: ВИРТУАЛЬНЫЙ ПСИХОЛОГ
-// Все тексты взяты из Telegram-бота
-// ПОЛНАЯ ВЕРСИЯ С РАБОЧИМИ ЭКРАНАМИ И СОХРАНЕНИЕМ
+// script.js - ФРЕДИ: ВИРТУАЛЬНЫЙ ПСИХОЛОГ для MAX
+// ПОЛНАЯ ВЕРСИЯ со всеми вопросами и экранами
 // ============================================
 
 // ============================================
@@ -15,6 +14,12 @@ let app = {
     hasProfile: false,
     selectedMode: null,
     messages: [],
+    max: {
+        initialized: false,
+        theme: 'light',
+        platform: 'unknown',
+        viewport: { width: 0, height: 0 }
+    },
     
     // Данные теста
     testData: {
@@ -26,7 +31,7 @@ let app = {
         },
         stage2: {
             current: 0,
-            total: 0, // будет определено после выбора режима
+            total: 0,
             answers: [],
             levelScores: { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0, "6": 0, "7": 0, "8": 0, "9": 0 },
             strategyLevels: { "СБ": [], "ТФ": [], "УБ": [], "ЧВ": [] }
@@ -50,7 +55,9 @@ let app = {
         }
     },
     
-    // Вопросы этапа 1
+    // ============================================
+    // ВОПРОСЫ ЭТАПА 1 (ПОЛНАЯ ВЕРСИЯ)
+    // ============================================
     stage1Questions: [
         {
             text: "Как вы обычно реагируете, когда кто-то критикует вашу работу?",
@@ -126,7 +133,9 @@ let app = {
         }
     ],
     
-    // Результаты этапа 1 по типам восприятия
+    // ============================================
+    // РЕЗУЛЬТАТЫ ЭТАПА 1 (ПОЛНАЯ ВЕРСИЯ)
+    // ============================================
     stage1Results: {
         "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ": "🧠 ВАШЕ ВОСПРИЯТИЕ: СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ\n\nВы смотрите на мир через людей. Для вас важны отношения, статус, признание. Ваша тревога — быть отвергнутым, непонятым, остаться в одиночестве. Вы чутко считываете настроение других и часто подстраиваетесь под ожидания. Это делает вас прекрасным коммуникатором, но иногда вы теряете себя в угоду другим.",
         
@@ -152,6 +161,149 @@ const STORAGE_KEYS = {
 };
 
 // ============================================
+// ИНИЦИАЛИЗАЦИЯ MAX
+// ============================================
+
+async function initMAX() {
+    return new Promise((resolve) => {
+        if (window.MAX) {
+            setupMAX();
+            resolve();
+        } else {
+            window.addEventListener('load', () => {
+                if (window.MAX) {
+                    setupMAX();
+                } else {
+                    console.log('⚠️ MAX Bridge не найден, работа в автономном режиме');
+                    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                    app.max.theme = prefersDark ? 'dark' : 'light';
+                    document.documentElement.setAttribute('data-max-theme', app.max.theme);
+                }
+                resolve();
+            });
+        }
+    });
+}
+
+function setupMAX() {
+    console.log('✅ MAX Bridge инициализирован');
+    
+    app.max.initialized = true;
+    
+    try {
+        if (window.MAX.theme) {
+            app.max.theme = window.MAX.theme;
+            document.documentElement.setAttribute('data-max-theme', app.max.theme);
+        }
+        
+        if (window.MAX.platform) {
+            app.max.platform = window.MAX.platform;
+            document.documentElement.setAttribute('data-max-platform', app.max.platform);
+        }
+        
+        if (window.MAX.viewport) {
+            app.max.viewport = window.MAX.viewport;
+        }
+    } catch (e) {
+        console.warn('⚠️ Ошибка получения данных MAX:', e);
+    }
+    
+    try {
+        window.MAX.onEvent('themeChanged', (newTheme) => {
+            console.log('🎨 Тема изменена:', newTheme);
+            app.max.theme = newTheme;
+            document.documentElement.setAttribute('data-max-theme', newTheme);
+            if (app.currentScreen) {
+                showScreen(app.currentScreen);
+            }
+        });
+        
+        window.MAX.onEvent('viewportChanged', (viewport) => {
+            app.max.viewport = viewport;
+        });
+        
+        window.MAX.onEvent('backButtonPressed', () => {
+            handleBackButton();
+        });
+        
+    } catch (e) {
+        console.warn('⚠️ Ошибка подписки на события MAX:', e);
+    }
+    
+    try {
+        window.MAX.ready();
+    } catch (e) {}
+}
+
+// ============================================
+// ОБРАБОТКА КНОПКИ НАЗАД
+// ============================================
+
+function handleBackButton() {
+    switch(app.currentScreen) {
+        case 'welcome':
+        case 'main':
+            if (window.MAX) {
+                window.MAX.close();
+            }
+            break;
+        case 'why':
+        case 'stage1':
+        case 'stage2':
+        case 'stage3':
+        case 'stage4':
+        case 'stage5':
+        case 'profile':
+        case 'thought':
+        case 'goals':
+        case 'mode':
+        case 'ask':
+            showScreen('main');
+            break;
+        default:
+            showScreen('main');
+    }
+}
+
+// ============================================
+// ПОЛУЧЕНИЕ ID ПОЛЬЗОВАТЕЛЯ
+// ============================================
+
+function getUserId() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlUserId = urlParams.get('user_id');
+    const urlName = urlParams.get('first_name');
+    
+    if (urlUserId) {
+        console.log('✅ User ID из URL:', urlUserId);
+        if (urlName) app.userData.user_name = urlName;
+        return urlUserId;
+    }
+    
+    try {
+        if (window.MAX && window.MAX.user) {
+            const maxUser = window.MAX.user;
+            console.log('✅ User ID из MAX WebApp:', maxUser.id);
+            app.userData.user_name = maxUser.first_name || maxUser.name || 'Пользователь';
+            return maxUser.id;
+        }
+    } catch (e) {}
+    
+    try {
+        if (window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
+            const tgUser = window.Telegram.WebApp.initDataUnsafe.user;
+            console.log('✅ User ID из Telegram WebApp:', tgUser.id);
+            app.userData.user_name = tgUser.first_name;
+            return tgUser.id;
+        }
+    } catch (e) {}
+    
+    console.log('⚠️ Использую тестовый ID: 213102077');
+    app.userData.user_name = 'Андрей';
+    return '213102077';
+}
+
+// ============================================
 // ФУНКЦИИ ДЛЯ ЛОКАЛЬНОГО ХРАНЕНИЯ
 // ============================================
 
@@ -169,19 +321,17 @@ function saveToStorage(key, data) {
     }
 }
 
-function loadFromStorage(key, maxAge = 7 * 24 * 60 * 60 * 1000) { // 7 дней по умолчанию
+function loadFromStorage(key, maxAge = 7 * 24 * 60 * 60 * 1000) {
     try {
         const item = localStorage.getItem(key);
         if (!item) return null;
         
         const { data, timestamp, userId } = JSON.parse(item);
         
-        // Проверяем, что данные для этого пользователя
         if (userId && userId !== app.userId) {
             return null;
         }
         
-        // Проверяем срок годности
         if (Date.now() - timestamp > maxAge) {
             localStorage.removeItem(key);
             return null;
@@ -194,295 +344,54 @@ function loadFromStorage(key, maxAge = 7 * 24 * 60 * 60 * 1000) { // 7 дней 
 }
 
 // ============================================
-// ОЧЕРЕДЬ ДЛЯ СИНХРОНИЗАЦИИ
-// ============================================
-
-let syncQueue = [];
-
-function addToSyncQueue(item) {
-    syncQueue.push({
-        ...item,
-        timestamp: Date.now(),
-        userId: app.userId
-    });
-    
-    // Сохраняем очередь в localStorage
-    saveToStorage(STORAGE_KEYS.PENDING_SYNC, syncQueue);
-    
-    // Если есть интернет, пробуем синхронизировать
-    if (navigator.onLine) {
-        processSyncQueue();
-    }
-}
-
-async function processSyncQueue() {
-    if (syncQueue.length === 0) return;
-    
-    console.log(`🔄 Синхронизация ${syncQueue.length} элементов...`);
-    
-    const queue = [...syncQueue];
-    syncQueue = [];
-    
-    for (const item of queue) {
-        try {
-            let response;
-            
-            switch(item.type) {
-                case 'test_answer':
-                    response = await fetch('/api/save-test-progress', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            user_id: app.userId,
-                            stage: item.stage,
-                            answers: [{question: item.questionIndex, answer: item.answer}]
-                        })
-                    });
-                    break;
-                    
-                case 'mode':
-                    response = await fetch('/api/save-mode', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            user_id: app.userId,
-                            mode: item.mode
-                        })
-                    });
-                    break;
-                    
-                case 'profile':
-                    response = await fetch('/api/save-profile', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            user_id: app.userId,
-                            profile: item.profile
-                        })
-                    });
-                    break;
-                    
-                case 'thought':
-                    response = await fetch('/api/save-thought', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            user_id: app.userId,
-                            thought: item.thought
-                        })
-                    });
-                    break;
-            }
-            
-            if (!response || !response.ok) {
-                // Если не получилось, возвращаем в очередь
-                syncQueue.push(item);
-            }
-        } catch (error) {
-            console.log('⚠️ Ошибка синхронизации:', error);
-            syncQueue.push(item);
-        }
-    }
-    
-    // Сохраняем оставшуюся очередь
-    saveToStorage(STORAGE_KEYS.PENDING_SYNC, syncQueue);
-}
-
-// ============================================
-// ФУНКЦИИ ДЛЯ СОХРАНЕНИЯ ДАННЫХ
+// ФУНКЦИИ ДЛЯ API
 // ============================================
 
 async function saveProfile(profileData) {
-    try {
-        const response = await fetch('/api/save-profile', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+    saveToStorage(STORAGE_KEYS.PROFILE, profileData);
+    
+    if (window.MAX && window.MAX.api) {
+        try {
+            await window.MAX.api.post('/api/save-profile', {
                 user_id: app.userId,
                 profile: profileData
-            })
-        });
-        
-        if (response.ok) {
-            console.log('✅ Профиль сохранен');
-            return await response.json();
-        } else {
-            throw new Error('Ошибка сервера');
+            });
+            console.log('✅ Профиль сохранен на сервере');
+        } catch (error) {
+            console.log('⚠️ Ошибка сохранения на сервере');
         }
-    } catch (error) {
-        console.log('⚠️ Ошибка сохранения профиля, добавляем в очередь');
-        addToSyncQueue({
-            type: 'profile',
-            profile: profileData
-        });
     }
 }
 
 async function saveTestAnswer(stage, questionIndex, answer) {
-    try {
-        const response = await fetch('/api/save-test-progress', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+    const progress = loadFromStorage(STORAGE_KEYS.TEST_PROGRESS) || {};
+    if (!progress[stage]) progress[stage] = [];
+    progress[stage].push({ question: questionIndex, answer });
+    saveToStorage(STORAGE_KEYS.TEST_PROGRESS, progress);
+    
+    if (window.MAX && window.MAX.api) {
+        try {
+            await window.MAX.api.post('/api/save-test-progress', {
                 user_id: app.userId,
                 stage: stage,
                 answers: [{question: questionIndex, answer: answer}]
-            })
-        });
-        
-        if (response.ok) {
-            console.log(`✅ Ответ на этап ${stage} сохранен`);
-        } else {
-            throw new Error('Ошибка сервера');
-        }
-    } catch (error) {
-        console.log('⚠️ Ошибка сохранения ответа, добавляем в очередь');
-        addToSyncQueue({
-            type: 'test_answer',
-            stage: stage,
-            questionIndex: questionIndex,
-            answer: answer
-        });
+            });
+        } catch (error) {}
     }
 }
 
 async function saveMode(mode) {
-    try {
-        const response = await fetch('/api/save-mode', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+    app.selectedMode = mode;
+    saveToStorage(STORAGE_KEYS.MODE, mode);
+    
+    if (window.MAX && window.MAX.api) {
+        try {
+            await window.MAX.api.post('/api/save-mode', {
                 user_id: app.userId,
                 mode: mode
-            })
-        });
-        
-        if (response.ok) {
-            console.log('✅ Режим сохранен');
-            
-            // Сохраняем локально
-            saveToStorage(STORAGE_KEYS.MODE, mode);
-            
-            return await response.json();
-        } else {
-            throw new Error('Ошибка сервера');
-        }
-    } catch (error) {
-        console.log('⚠️ Ошибка сохранения режима, добавляем в очередь');
-        addToSyncQueue({
-            type: 'mode',
-            mode: mode
-        });
+            });
+        } catch (error) {}
     }
-}
-
-async function saveThought(thought) {
-    try {
-        const response = await fetch('/api/save-thought', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                user_id: app.userId,
-                thought: thought
-            })
-        });
-        
-        if (response.ok) {
-            console.log('✅ Мысли сохранены');
-        } else {
-            throw new Error('Ошибка сервера');
-        }
-    } catch (error) {
-        console.log('⚠️ Ошибка сохранения мыслей, добавляем в очередь');
-        addToSyncQueue({
-            type: 'thought',
-            thought: thought
-        });
-    }
-}
-
-// ============================================
-// СИНХРОНИЗАЦИЯ ПРИ ЗАГРУЗКЕ
-// ============================================
-
-async function syncWithServer() {
-    if (!navigator.onLine) return;
-    
-    // Загружаем сохраненную очередь
-    const savedQueue = loadFromStorage(STORAGE_KEYS.PENDING_SYNC);
-    if (savedQueue && savedQueue.length > 0) {
-        syncQueue = savedQueue;
-        await processSyncQueue();
-    }
-    
-    // Загружаем данные с сервера
-    try {
-        const response = await fetch(`/api/user-data?user_id=${app.userId}`);
-        if (response.ok) {
-            const data = await response.json();
-            app.userData = { ...app.userData, ...data };
-            app.hasProfile = data.has_profile || false;
-            
-            // Обновляем локальное хранилище
-            saveToStorage(STORAGE_KEYS.USER_DATA, data);
-        }
-    } catch (error) {
-        console.log('⚠️ Ошибка загрузки с сервера');
-    }
-}
-
-// ============================================
-// ПОЛУЧЕНИЕ ID ПОЛЬЗОВАТЕЛЯ
-// ============================================
-
-function getUserId() {
-    // 1. Из URL параметров
-    const urlParams = new URLSearchParams(window.location.search);
-    const urlUserId = urlParams.get('user_id');
-    const urlName = urlParams.get('first_name');
-    
-    if (urlUserId) {
-        console.log('✅ User ID из URL:', urlUserId);
-        if (urlName) app.userData.user_name = urlName;
-        return urlUserId;
-    }
-    
-    // 2. Из Telegram WebApp
-    try {
-        if (window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
-            const tgUser = window.Telegram.WebApp.initDataUnsafe.user;
-            console.log('✅ User ID из Telegram WebApp:', tgUser.id);
-            app.userData.user_name = tgUser.first_name;
-            return tgUser.id;
-        }
-    } catch (e) {}
-    
-    // 3. Из MAX WebApp (если есть)
-    try {
-        if (window.MaxWebApp?.initData?.user?.id) {
-            const maxUser = window.MaxWebApp.initData.user;
-            console.log('✅ User ID из MAX WebApp:', maxUser.id);
-            app.userData.user_name = maxUser.first_name;
-            return maxUser.id;
-        }
-    } catch (e) {}
-    
-    // 4. Тестовый ID
-    console.log('⚠️ Использую тестовый ID: 213102077');
-    app.userData.user_name = 'Андрей';
-    return '213102077';
-}
-
-// ============================================
-// ПРИВЕТСТВИЕ ПО ВРЕМЕНИ СУТОК
-// ============================================
-
-function getTimeGreeting() {
-    const hour = new Date().getHours();
-    if (hour < 6) return "Доброй ночи";
-    if (hour < 12) return "Доброе утро";
-    if (hour < 18) return "Добрый день";
-    return "Добрый вечер";
 }
 
 // ============================================
@@ -490,54 +399,53 @@ function getTimeGreeting() {
 // ============================================
 
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('🚀 ФРЕДИ: Мини-приложение запущено');
+    console.log('🚀 ФРЕДИ для MAX запущено');
     
-    // Инициализируем WebApp
-    if (window.Telegram?.WebApp) {
-        window.Telegram.WebApp.ready();
-        window.Telegram.WebApp.expand();
-    }
+    await initMAX();
     
-    // Получаем ID пользователя
     app.userId = getUserId();
     
-    // Загружаем сохраненную очередь
-    const savedQueue = loadFromStorage(STORAGE_KEYS.PENDING_SYNC);
-    if (savedQueue) {
-        syncQueue = savedQueue;
-    }
+    loadSavedData();
     
-    // Загружаем сохраненный режим
+    showLoading();
+    
+    await loadUserData();
+    
+    setupMAXUI();
+});
+
+function loadSavedData() {
     const savedMode = loadFromStorage(STORAGE_KEYS.MODE);
     if (savedMode) {
         app.selectedMode = savedMode;
     }
     
-    // Показываем загрузку
-    showLoading();
+    const savedProfile = loadFromStorage(STORAGE_KEYS.PROFILE);
+    if (savedProfile) {
+        app.userData.profile = savedProfile;
+    }
     
-    // Загружаем данные
-    await loadUserData();
-    
-    // Настраиваем кнопку назад
-    setupBackButton();
-    
-    // Слушаем события интернета
-    window.addEventListener('online', syncWithServer);
-});
+    const savedThought = loadFromStorage(STORAGE_KEYS.THOUGHT);
+    if (savedThought) {
+        app.userData.thought = savedThought;
+    }
+}
 
-// ============================================
-// ЗАГРУЗКА ДАННЫХ ПОЛЬЗОВАТЕЛЯ
-// ============================================
+function setupMAXUI() {
+    document.body.classList.add('max-webapp');
+    
+    if (app.max.platform === 'ios') {
+        document.documentElement.style.setProperty('--safe-area-top', 'env(safe-area-inset-top)');
+        document.documentElement.style.setProperty('--safe-area-bottom', 'env(safe-area-inset-bottom)');
+    }
+}
 
 async function loadUserData() {
-    // Сначала пробуем загрузить из кэша для быстрого отображения
     const cached = loadFromStorage(STORAGE_KEYS.USER_DATA);
     if (cached) {
         app.userData = { ...app.userData, ...cached };
         app.hasProfile = cached.has_profile || false;
         
-        // Показываем экран сразу
         if (app.hasProfile) {
             showScreen('main');
             document.getElementById('navBar').style.display = 'flex';
@@ -545,110 +453,28 @@ async function loadUserData() {
             showScreen('welcome');
             document.getElementById('navBar').style.display = 'none';
         }
-    }
-    
-    // Затем пробуем загрузить свежие данные с сервера
-    if (navigator.onLine) {
-        try {
-            const response = await fetch(`/api/user-data?user_id=${app.userId}`);
-            if (response.ok) {
-                const data = await response.json();
-                app.userData = { ...app.userData, ...data };
-                app.hasProfile = data.has_profile || false;
-                
-                // Сохраняем в кэш
-                saveToStorage(STORAGE_KEYS.USER_DATA, data);
-                
-                // Загружаем профиль и мысли
-                await loadProfile();
-                
-                // Обновляем экран
-                if (app.hasProfile) {
-                    showScreen('main');
-                    document.getElementById('navBar').style.display = 'flex';
-                } else {
-                    showScreen('welcome');
-                    document.getElementById('navBar').style.display = 'none';
-                }
-            }
-        } catch (error) {
-            console.error('Ошибка загрузки данных:', error);
-        }
-    }
-    
-    // Если нет кэша и нет интернета, показываем приветствие
-    if (!cached && !app.userData.user_name) {
+    } else {
         showScreen('welcome');
         document.getElementById('navBar').style.display = 'none';
     }
-}
-
-async function loadProfile() {
-    try {
-        const response = await fetch(`/api/profile?user_id=${app.userId}`);
-        if (response.ok) {
-            const data = await response.json();
-            app.userData.profile = data.profile;
-            saveToStorage(STORAGE_KEYS.PROFILE, data.profile);
-        }
-        
-        const thoughtResponse = await fetch(`/api/thought?user_id=${app.userId}`);
-        if (thoughtResponse.ok) {
-            const data = await thoughtResponse.json();
-            app.userData.thought = data.thought;
-            saveToStorage(STORAGE_KEYS.THOUGHT, data.thought);
-        }
-    } catch (error) {
-        console.error('Ошибка загрузки профиля:', error);
-        
-        // Загружаем из кэша
-        const cachedProfile = loadFromStorage(STORAGE_KEYS.PROFILE);
-        if (cachedProfile) {
-            app.userData.profile = cachedProfile;
-        }
-        
-        const cachedThought = loadFromStorage(STORAGE_KEYS.THOUGHT);
-        if (cachedThought) {
-            app.userData.thought = cachedThought;
+    
+    if (window.MAX && window.MAX.api) {
+        try {
+            const data = await window.MAX.api.get(`/api/user-data?user_id=${app.userId}`);
+            if (data) {
+                app.userData = { ...app.userData, ...data };
+                app.hasProfile = data.has_profile || false;
+                saveToStorage(STORAGE_KEYS.USER_DATA, data);
+                
+                if (app.hasProfile) {
+                    showScreen('main');
+                    document.getElementById('navBar').style.display = 'flex';
+                }
+            }
+        } catch (error) {
+            console.log('⚠️ Не удалось загрузить данные с сервера');
         }
     }
-}
-
-// ============================================
-// НАСТРОЙКА КНОПКИ НАЗАД
-// ============================================
-
-function setupBackButton() {
-    const backBtn = document.getElementById('backBtn');
-    backBtn.addEventListener('click', () => {
-        switch(app.currentScreen) {
-            case 'welcome':
-            case 'main':
-                if (window.Telegram?.WebApp) {
-                    window.Telegram.WebApp.close();
-                }
-                break;
-            case 'why':
-            case 'stage1':
-            case 'stage2':
-            case 'stage3':
-            case 'stage4':
-            case 'stage5':
-            case 'profile':
-            case 'thought':
-            case 'goals':
-                showScreen('main');
-                break;
-            case 'mode':
-                showScreen('main');
-                break;
-            case 'ask':
-                showScreen('main');
-                break;
-            default:
-                showScreen('main');
-        }
-    });
 }
 
 // ============================================
@@ -658,7 +484,6 @@ function setupBackButton() {
 function showScreen(screen) {
     app.currentScreen = screen;
     
-    // Обновляем заголовок
     const headerTitle = document.getElementById('header-title');
     const titles = {
         'welcome': '👋 ФРЕДИ',
@@ -677,11 +502,9 @@ function showScreen(screen) {
     };
     headerTitle.textContent = titles[screen] || '🧠 ФРЕДИ';
     
-    // Показываем/скрываем кнопку назад
     const backBtn = document.getElementById('backBtn');
     backBtn.style.display = (screen === 'welcome' || screen === 'main') ? 'none' : 'flex';
     
-    // Показываем/скрываем нижнюю навигацию
     const navBar = document.getElementById('navBar');
     if (screen === 'main' || screen === 'profile' || screen === 'thought' || screen === 'goals' || screen === 'ask') {
         navBar.style.display = 'flex';
@@ -689,7 +512,16 @@ function showScreen(screen) {
         navBar.style.display = 'none';
     }
     
-    // Загружаем контент
+    if (window.MAX) {
+        try {
+            if (screen === 'welcome' || screen === 'main') {
+                window.MAX.backButton.hide();
+            } else {
+                window.MAX.backButton.show();
+            }
+        } catch (e) {}
+    }
+    
     const content = document.getElementById('content');
     content.classList.add('fade-out');
     
@@ -743,7 +575,7 @@ function showScreen(screen) {
 }
 
 // ============================================
-// ЭКРАН ПРИВЕТСТВИЯ (ДЛЯ НОВЫХ ПОЛЬЗОВАТЕЛЕЙ)
+// ЭКРАН ПРИВЕТСТВИЯ
 // ============================================
 
 function renderWelcomeScreen(container) {
@@ -865,8 +697,181 @@ function renderWhyScreen(container) {
 }
 
 // ============================================
-// ЭКРАН ЭТАПА 1 (ВОПРОСЫ)
+// ГЛАВНЫЙ ЭКРАН
 // ============================================
+
+function renderMainScreen(container) {
+    const greeting = getTimeGreeting();
+    const userName = app.userData.user_name || 'друг';
+    
+    const html = `
+        <div class="main-screen">
+            <div class="greeting">${greeting}, ${userName}!</div>
+            
+            <div class="profile-badge" onclick="showScreen('profile')">
+                <span class="profile-code">${app.userData.profile_code || 'СБ-4_ТФ-4_УБ-4_ЧВ-4'}</span>
+                <span class="profile-arrow">📊</span>
+            </div>
+            
+            <div class="context-message">
+                ${getContextMessage()}
+            </div>
+            
+            <div class="main-menu">
+                <button class="menu-card" onclick="showScreen('mode')">
+                    <span class="menu-emoji">🔮</span>
+                    <span class="menu-title">ВЫБРАТЬ РЕЖИМ</span>
+                    <span class="menu-desc">Коуч / Психолог / Тренер</span>
+                </button>
+                
+                <button class="menu-card" onclick="showScreen('thought')">
+                    <span class="menu-emoji">🧠</span>
+                    <span class="menu-title">МЫСЛИ ПСИХОЛОГА</span>
+                    <span class="menu-desc">Глубинный анализ</span>
+                </button>
+                
+                <button class="menu-card" onclick="showScreen('goals')">
+                    <span class="menu-emoji">🎯</span>
+                    <span class="menu-title">ВЫБРАТЬ ЦЕЛЬ</span>
+                    <span class="menu-desc">Индивидуальный маршрут</span>
+                </button>
+                
+                <button class="menu-card" onclick="showScreen('ask')">
+                    <span class="menu-emoji">❓</span>
+                    <span class="menu-title">ЗАДАТЬ ВОПРОС</span>
+                    <span class="menu-desc">Текст или голос</span>
+                </button>
+            </div>
+            
+            <div class="weekend-hint" onclick="showWeekendIdeas()">
+                🎨 Идеи на выходные →
+            </div>
+        </div>
+    `;
+    
+    container.innerHTML = html;
+}
+
+function getTimeGreeting() {
+    const hour = new Date().getHours();
+    if (hour < 6) return "Доброй ночи";
+    if (hour < 12) return "Доброе утро";
+    if (hour < 18) return "Добрый день";
+    return "Добрый вечер";
+}
+
+function getContextMessage() {
+    const hour = new Date().getHours();
+    const day = new Date().getDay();
+    
+    if (day === 0 || day === 6) {
+        return '🏖 Сегодня выходной! Как настроение?';
+    }
+    
+    if (hour >= 9 && hour < 18) {
+        return '💼 Рабочее время. Чем займёмся?';
+    } else if (hour >= 18 || hour < 6) {
+        return '🏡 Личное время. Есть что обсудить?';
+    } else {
+        return '🌙 Ночное время. Что тревожит?';
+    }
+}
+
+// ============================================
+// ЭКРАН ВЫБОРА РЕЖИМА
+// ============================================
+
+function renderModeScreen(container) {
+    const profileCode = app.userData.profile_code || 'СБ-4_ТФ-4_УБ-4_ЧВ-4';
+    
+    const html = `
+        <div class="mode-screen">
+            <div class="mode-header">
+                <div class="mode-profile">
+                    <span class="mode-profile-label">Твой профиль:</span>
+                    <span class="mode-profile-code">${profileCode}</span>
+                </div>
+            </div>
+            
+            <div class="mode-card ${app.selectedMode === 'coach' ? 'active' : ''}" onclick="setMode('coach', this)">
+                <div class="mode-title">🔮 КОУЧ</div>
+                <div class="mode-desc">
+                    Если хочешь, чтобы я помог тебе самому найти решения.
+                </div>
+                <ul class="mode-benefits">
+                    <li>• Жить станет легче — перестанешь закапываться в сомнениях</li>
+                    <li>• Появится больше радости от простых вещей</li>
+                    <li>• Начнёшь замечать возможности вместо проблем</li>
+                    <li>• Перестанешь чувствовать вину за каждый шаг</li>
+                </ul>
+            </div>
+            
+            <div class="mode-card ${app.selectedMode === 'psychologist' ? 'active' : ''}" onclick="setMode('psychologist', this)">
+                <div class="mode-title">🧠 ПСИХОЛОГ</div>
+                <div class="mode-desc">
+                    Если хочешь копнуть вглубь, разобраться с причинами, а не следствиями.
+                </div>
+                <ul class="mode-benefits">
+                    <li>• Перестанешь реагировать на триггеры — будешь выбирать реакцию сам</li>
+                    <li>• Исчезнут старые сценарии, которые портили жизнь</li>
+                    <li>• Поймёшь, откуда растут ноги у твоих страхов</li>
+                    <li>• Внутри станет легче и спокойнее</li>
+                </ul>
+            </div>
+            
+            <div class="mode-card ${app.selectedMode === 'trainer' ? 'active' : ''}" onclick="setMode('trainer', this)">
+                <div class="mode-title">⚡ ТРЕНЕР</div>
+                <div class="mode-desc">
+                    Если нужны чёткие инструменты, навыки и результат.
+                </div>
+                <ul class="mode-benefits">
+                    <li>• Научишься чётко формулировать мысли — тебя будут понимать</li>
+                    <li>• Освоишь алгоритмы ведения переговоров</li>
+                    <li>• Сформируешь полезные привычки</li>
+                    <li>• Будешь уверенно действовать в стрессовых ситуациях</li>
+                </ul>
+            </div>
+            
+            <button class="apply-mode-btn" onclick="applyMode()">
+                ✅ ПРИМЕНИТЬ РЕЖИМ
+            </button>
+        </div>
+    `;
+    
+    container.innerHTML = html;
+}
+
+function setMode(mode, element) {
+    app.selectedMode = mode;
+    
+    const cards = document.querySelectorAll('.mode-card');
+    cards.forEach(card => {
+        card.classList.remove('active');
+    });
+    if (element) {
+        element.classList.add('active');
+    }
+}
+
+async function applyMode() {
+    if (!app.selectedMode) {
+        alert('Выберите режим');
+        return;
+    }
+    
+    console.log('✅ Режим установлен:', app.selectedMode);
+    await saveMode(app.selectedMode);
+    showScreen('main');
+}
+
+// ============================================
+// ЭКРАН ЭТАПА 1
+// ============================================
+
+function startStage1() {
+    app.testData.stage1.current = 0;
+    showScreen('stage1');
+}
 
 function renderStage1Screen(container) {
     const current = app.testData.stage1.current;
@@ -917,26 +922,22 @@ function answerStage1(optionKey) {
     const question = app.stage1Questions[current];
     const selectedOption = question.options[optionKey];
     
-    // Сохраняем ответ локально
     app.testData.stage1.answers.push({
         question: current,
         answer: optionKey,
         text: selectedOption.text
     });
     
-    // Обновляем счета
     const scores = selectedOption.scores;
     for (const [key, value] of Object.entries(scores)) {
         app.testData.stage1.scores[key] += value;
     }
     
-    // Сохраняем ответ на сервер
     saveTestAnswer(1, current, {
         option: optionKey,
         scores: scores
     });
     
-    // Переходим к следующему вопросу
     app.testData.stage1.current++;
     
     if (app.testData.stage1.current >= app.testData.stage1.total) {
@@ -947,7 +948,6 @@ function answerStage1(optionKey) {
 }
 
 function finishStage1() {
-    // Определяем тип восприятия
     const scores = app.testData.stage1.scores;
     const external = scores.EXTERNAL || 0;
     const internal = scores.INTERNAL || 0;
@@ -970,10 +970,8 @@ function finishStage1() {
     
     app.testData.perceptionType = perceptionType;
     
-    // Сохраняем результат этапа 1
     saveProfile({ stage1_complete: true, perception_type: perceptionType, scores: scores });
     
-    // Показываем результат
     const resultText = app.stage1Results[perceptionType] || app.stage1Results["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"];
     
     const content = document.getElementById('content');
@@ -990,6 +988,10 @@ function finishStage1() {
 // ============================================
 // ЭКРАН ЭТАПА 2
 // ============================================
+
+function startStage2() {
+    showScreen('stage2');
+}
 
 function renderStage2Screen(container) {
     const html = `
@@ -1010,22 +1012,13 @@ function renderStage2Screen(container) {
                 <p>Продолжим исследование?</p>
             </div>
             
-            <button class="action-btn primary" onclick="startStage2Questions()">
+            <button class="action-btn primary" onclick="alert('Этап 2 в разработке')">
                 ▶️ НАЧАТЬ ИССЛЕДОВАНИЕ
             </button>
         </div>
     `;
     
     container.innerHTML = html;
-}
-
-function startStage2() {
-    showScreen('stage2');
-}
-
-function startStage2Questions() {
-    // Здесь будет логика вопросов этапа 2
-    alert('Этап 2 в разработке');
 }
 
 // ============================================
@@ -1133,170 +1126,6 @@ function renderStage5Screen(container) {
 }
 
 // ============================================
-// ГЛАВНЫЙ ЭКРАН (ДЛЯ ПОЛЬЗОВАТЕЛЕЙ С ПРОФИЛЕМ)
-// ============================================
-
-function renderMainScreen(container) {
-    const greeting = getTimeGreeting();
-    const userName = app.userData.user_name || 'друг';
-    
-    // Определяем контекст по времени
-    const hour = new Date().getHours();
-    let contextMessage = '';
-    if (hour >= 9 && hour < 18) {
-        contextMessage = '💼 Рабочее время. Чем займёмся?';
-    } else if (hour >= 18 || hour < 6) {
-        contextMessage = '🏡 Личное время. Есть что обсудить?';
-    } else {
-        contextMessage = '🌙 Ночное время. Что тревожит?';
-    }
-    
-    // Проверяем выходной
-    const day = new Date().getDay();
-    if (day === 0 || day === 6) {
-        contextMessage = '🏖 Сегодня выходной! Как настроение?';
-    }
-    
-    const profileCode = app.userData.profile_code || 'СБ-4_ТФ-4_УБ-4_ЧВ-4';
-    
-    const html = `
-        <div class="main-screen">
-            <div class="greeting">${greeting}, ${userName}!</div>
-            
-            <div class="profile-badge" onclick="showScreen('profile')">
-                <span class="profile-code">${profileCode}</span>
-                <span class="profile-arrow">📊</span>
-            </div>
-            
-            <div class="context-message">
-                ${contextMessage}
-            </div>
-            
-            <div class="main-menu">
-                <button class="menu-card" onclick="showScreen('mode')">
-                    <span class="menu-emoji">🔮</span>
-                    <span class="menu-title">ВЫБРАТЬ РЕЖИМ</span>
-                    <span class="menu-desc">Коуч / Психолог / Тренер</span>
-                </button>
-                
-                <button class="menu-card" onclick="showScreen('thought')">
-                    <span class="menu-emoji">🧠</span>
-                    <span class="menu-title">МЫСЛИ ПСИХОЛОГА</span>
-                    <span class="menu-desc">Глубинный анализ</span>
-                </button>
-                
-                <button class="menu-card" onclick="showScreen('goals')">
-                    <span class="menu-emoji">🎯</span>
-                    <span class="menu-title">ВЫБРАТЬ ЦЕЛЬ</span>
-                    <span class="menu-desc">Индивидуальный маршрут</span>
-                </button>
-                
-                <button class="menu-card" onclick="showScreen('ask')">
-                    <span class="menu-emoji">❓</span>
-                    <span class="menu-title">ЗАДАТЬ ВОПРОС</span>
-                    <span class="menu-desc">Текст или голос</span>
-                </button>
-            </div>
-            
-            <div class="weekend-hint" onclick="showWeekendIdeas()">
-                🎨 Идеи на выходные →
-            </div>
-        </div>
-    `;
-    
-    container.innerHTML = html;
-}
-
-// ============================================
-// ЭКРАН ВЫБОРА РЕЖИМА
-// ============================================
-
-function renderModeScreen(container) {
-    const profileCode = app.userData.profile_code || 'СБ-4_ТФ-4_УБ-4_ЧВ-4';
-    
-    const html = `
-        <div class="mode-screen">
-            <div class="mode-header">
-                <div class="mode-profile">
-                    <span class="mode-profile-label">Твой профиль:</span>
-                    <span class="mode-profile-code">${profileCode}</span>
-                </div>
-            </div>
-            
-            <div class="mode-card ${app.selectedMode === 'coach' ? 'active' : ''}" onclick="setMode('coach')">
-                <div class="mode-title">🔮 КОУЧ</div>
-                <div class="mode-desc">
-                    Если хочешь, чтобы я помог тебе самому найти решения.
-                </div>
-                <ul class="mode-benefits">
-                    <li>• Жить станет легче — перестанешь закапываться в сомнениях</li>
-                    <li>• Появится больше радости от простых вещей</li>
-                    <li>• Начнёшь замечать возможности вместо проблем</li>
-                    <li>• Перестанешь чувствовать вину за каждый шаг</li>
-                </ul>
-            </div>
-            
-            <div class="mode-card ${app.selectedMode === 'psychologist' ? 'active' : ''}" onclick="setMode('psychologist')">
-                <div class="mode-title">🧠 ПСИХОЛОГ</div>
-                <div class="mode-desc">
-                    Если хочешь копнуть вглубь, разобраться с причинами, а не следствиями.
-                </div>
-                <ul class="mode-benefits">
-                    <li>• Перестанешь реагировать на триггеры — будешь выбирать реакцию сам</li>
-                    <li>• Исчезнут старые сценарии, которые портили жизнь</li>
-                    <li>• Поймёшь, откуда растут ноги у твоих страхов</li>
-                    <li>• Внутри станет легче и спокойнее</li>
-                </ul>
-            </div>
-            
-            <div class="mode-card ${app.selectedMode === 'trainer' ? 'active' : ''}" onclick="setMode('trainer')">
-                <div class="mode-title">⚡ ТРЕНЕР</div>
-                <div class="mode-desc">
-                    Если нужны чёткие инструменты, навыки и результат.
-                </div>
-                <ul class="mode-benefits">
-                    <li>• Научишься чётко формулировать мысли — тебя будут понимать</li>
-                    <li>• Освоишь алгоритмы ведения переговоров</li>
-                    <li>• Сформируешь полезные привычки</li>
-                    <li>• Будешь уверенно действовать в стрессовых ситуациях</li>
-                </ul>
-            </div>
-            
-            <button class="apply-mode-btn" onclick="applyMode()">
-                ✅ ПРИМЕНИТЬ РЕЖИМ
-            </button>
-        </div>
-    `;
-    
-    container.innerHTML = html;
-}
-
-function setMode(mode) {
-    app.selectedMode = mode;
-    
-    // Подсвечиваем выбранный режим
-    const cards = document.querySelectorAll('.mode-card');
-    cards.forEach(card => {
-        card.classList.remove('active');
-    });
-    event.currentTarget.classList.add('active');
-}
-
-async function applyMode() {
-    if (!app.selectedMode) {
-        alert('Выберите режим');
-        return;
-    }
-    
-    console.log('✅ Режим установлен:', app.selectedMode);
-    
-    // Сохраняем режим
-    await saveMode(app.selectedMode);
-    
-    showScreen('main');
-}
-
-// ============================================
 // ЭКРАН ПРОФИЛЯ
 // ============================================
 
@@ -1337,7 +1166,7 @@ function renderProfileScreen(container) {
 }
 
 // ============================================
-// ЭКРАН МЫСЛЕЙ ПСИХОЛОГА
+// ЭКРАН МЫСЛЕЙ
 // ============================================
 
 function renderThoughtScreen(container) {
@@ -1417,7 +1246,6 @@ function renderGoalsScreen(container) {
 function selectGoal(goalId) {
     console.log('🎯 Выбрана цель:', goalId);
     
-    // Показываем теоретический путь
     const content = document.getElementById('content');
     content.innerHTML = `
         <div class="goal-path-screen">
@@ -1534,7 +1362,7 @@ function renderAskScreen(container) {
     app.messages.forEach(msg => {
         messagesHtml += `
             <div class="message ${msg.role}">
-                ${msg.text}
+                ${escapeHtml(msg.text)}
             </div>
         `;
     });
@@ -1563,8 +1391,8 @@ function renderAskScreen(container) {
             <div class="examples-section">
                 <div class="example-buttons">
                     ${examples.map(ex => `
-                        <button class="example-btn" onclick="setExampleQuestion('${ex}')">
-                            ${ex}
+                        <button class="example-btn" onclick="setExampleQuestion('${escapeHtml(ex)}')">
+                            ${escapeHtml(ex)}
                         </button>
                     `).join('')}
                 </div>
@@ -1574,7 +1402,6 @@ function renderAskScreen(container) {
     
     container.innerHTML = html;
     
-    // Прокручиваем вниз
     setTimeout(() => {
         const messagesContainer = document.getElementById('messagesContainer');
         if (messagesContainer) {
@@ -1589,16 +1416,13 @@ function sendMessage() {
     
     if (!text) return;
     
-    // Добавляем сообщение пользователя
     app.messages.push({
         role: 'user',
         text: escapeHtml(text)
     });
     
-    // Очищаем поле
     input.value = '';
     
-    // Показываем индикатор печати
     const messagesContainer = document.getElementById('messagesContainer');
     messagesContainer.innerHTML += `
         <div class="message bot typing">
@@ -1607,13 +1431,10 @@ function sendMessage() {
     `;
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
     
-    // Имитируем ответ бота
     setTimeout(() => {
-        // Убираем индикатор
         const typingIndicator = document.querySelector('.message.typing');
         if (typingIndicator) typingIndicator.remove();
         
-        // Добавляем ответ
         const response = generateBotResponse(text);
         app.messages.push({
             role: 'bot',
@@ -1736,15 +1557,6 @@ function showLoading() {
     `;
 }
 
-function showError(message) {
-    const content = document.getElementById('content');
-    content.innerHTML = `
-        <div class="error-screen">
-            ❌ ${message}
-        </div>
-    `;
-}
-
 // ============================================
 // ЭКСПОРТ (для глобального доступа)
 // ============================================
@@ -1752,17 +1564,15 @@ function showError(message) {
 window.showScreen = showScreen;
 window.startStage1 = startStage1;
 window.startStage2 = startStage2;
-window.startStage2Questions = startStage2Questions;
 window.answerStage1 = answerStage1;
-window.selectMode = selectMode;
 window.setMode = setMode;
 window.applyMode = applyMode;
-window.selectGoal = selectGoal;
-window.checkReality = checkReality;
-window.customGoal = customGoal;
-window.submitCustomGoal = submitCustomGoal;
 window.setExampleQuestion = setExampleQuestion;
 window.handleKeyPress = handleKeyPress;
 window.sendMessage = sendMessage;
 window.toggleRecording = toggleRecording;
 window.showWeekendIdeas = showWeekendIdeas;
+window.selectGoal = selectGoal;
+window.customGoal = customGoal;
+window.submitCustomGoal = submitCustomGoal;
+window.checkReality = checkReality;
