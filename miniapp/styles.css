@@ -1,12 +1,11 @@
 /* ============================================
    styles.css - ФРЕДИ: ВИРТУАЛЬНЫЙ ПСИХОЛОГ
-   Стили для мини-приложения (Telegram WebApp)
-   ПОЛНАЯ ВЕРСИЯ
+   ПОЛНАЯ ВЕРСИЯ с поддержкой MAX и Telegram
    ============================================ */
 
 /* ========== ОСНОВНЫЕ ПЕРЕМЕННЫЕ ========== */
 :root {
-    /* Светлая тема (как в Telegram) */
+    /* Светлая тема (Telegram/MAX) */
     --tg-bg: #ffffff;
     --tg-text: #000000;
     --tg-hint: #707579;
@@ -21,14 +20,20 @@
     --header-height: 60px;
     --nav-height: 70px;
     
-    /* Цвета сообщений как в Telegram */
+    /* Цвета сообщений */
     --message-user-bg: #40a7e3;
     --message-user-text: #ffffff;
     --message-bot-bg: #f0f0f0;
     --message-bot-text: #000000;
+    
+    /* MAX specific */
+    --max-safe-top: 0px;
+    --max-safe-bottom: 0px;
+    --max-surface-light: rgba(255, 255, 255, 0.85);
+    --max-surface-dark: rgba(31, 31, 31, 0.85);
 }
 
-/* Темная тема Telegram */
+/* Темная тема */
 @media (prefers-color-scheme: dark) {
     :root {
         --tg-bg: #1f1f1f;
@@ -40,9 +45,48 @@
         --message-user-text: #ffffff;
         --message-bot-bg: #2d2d2d;
         --message-bot-text: #ffffff;
+        --max-surface-dark: rgba(31, 31, 31, 0.9);
     }
 }
 
+/* ========== MAX ТЕМЫ (через data-атрибут) ========== */
+[data-max-theme="light"] {
+    --tg-bg: #f5f7fa;
+    --tg-surface: var(--max-surface-light);
+}
+
+[data-max-theme="dark"] {
+    --tg-bg: #0e1621;
+    --tg-text: #ffffff;
+    --tg-hint: #8e8e93;
+    --tg-secondary-bg: #1e2530;
+    --tg-border: #2b3139;
+    --message-bot-bg: #1e2530;
+    --message-bot-text: #ffffff;
+    --tg-surface: var(--max-surface-dark);
+}
+
+/* ========== БЕЗОПАСНЫЕ ЗОНЫ ДЛЯ MAX ========== */
+.max-webapp {
+    --safe-area-top: env(safe-area-inset-top, 0px);
+    --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.max-webapp .header {
+    padding-top: var(--safe-area-top);
+    height: calc(var(--header-height) + var(--safe-area-top));
+}
+
+.max-webapp .nav-bar {
+    padding-bottom: var(--safe-area-bottom);
+    height: calc(var(--nav-height) + var(--safe-area-bottom));
+}
+
+.max-webapp .content {
+    padding-bottom: calc(var(--nav-height) + var(--safe-area-bottom) + 16px);
+}
+
+/* ========== БАЗОВЫЕ СТИЛИ ========== */
 * {
     margin: 0;
     padding: 0;
@@ -59,9 +103,10 @@ body {
     -webkit-font-smoothing: antialiased;
     height: 100vh;
     overflow: hidden;
+    transition: background-color 0.3s ease, color 0.2s ease;
 }
 
-/* ========== ПОДЛОЖКА КАК В TELEGRAM ========== */
+/* ========== ПОДЛОЖКА (СОХРАНЯЕМ ВАШУ) ========== */
 body::before {
     content: "";
     position: fixed;
@@ -73,12 +118,17 @@ body::before {
         radial-gradient(circle at 25px 25px, var(--tg-border) 1px, transparent 1px),
         radial-gradient(circle at 75px 75px, var(--tg-border) 1px, transparent 1px);
     background-size: 100px 100px;
-    opacity: 0.3;
+    opacity: 0.15;
     pointer-events: none;
     z-index: -1;
+    transition: opacity 0.3s ease;
 }
 
-/* Альтернативный вариант подложки (сетка) - можно добавить класс к body */
+[data-max-theme="dark"] body::before {
+    opacity: 0.1;
+}
+
+/* Альтернативные паттерны */
 .body-pattern-grid::before {
     background-image: 
         linear-gradient(var(--tg-border) 1px, transparent 1px),
@@ -87,25 +137,24 @@ body::before {
     opacity: 0.1;
 }
 
-/* Альтернативный вариант подложки (точки) */
 .body-pattern-dots::before {
     background-image: radial-gradient(var(--tg-border) 1px, transparent 1px);
     background-size: 30px 30px;
-    opacity: 0.2;
+    opacity: 0.15;
 }
 
+/* ========== КОНТЕЙНЕР ========== */
 .container {
     max-width: 600px;
     margin: 0 auto;
     height: 100vh;
     display: flex;
     flex-direction: column;
-    background: transparent; /* Прозрачный фон, чтобы была видна подложка */
+    background: transparent;
     position: relative;
-    backdrop-filter: blur(0); /* Без размытия */
 }
 
-/* ========== ШАПКА С ЛЕГКИМ РАЗМЫТИЕМ ========== */
+/* ========== ШАПКА ========== */
 .header {
     height: var(--header-height);
     padding: 0 16px;
@@ -113,17 +162,17 @@ body::before {
     align-items: center;
     justify-content: space-between;
     border-bottom: 1px solid var(--tg-border);
-    background: rgba(255, 255, 255, 0.85); /* Полупрозрачная */
-    backdrop-filter: blur(10px); /* Эффект размытия как в Telegram */
+    background: var(--max-surface-light);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     position: sticky;
     top: 0;
     z-index: 10;
+    transition: background 0.3s ease, border-color 0.3s ease;
 }
 
-@media (prefers-color-scheme: dark) {
-    .header {
-        background: rgba(31, 31, 31, 0.85);
-    }
+[data-max-theme="dark"] .header {
+    background: var(--max-surface-dark);
 }
 
 .back-btn {
@@ -138,17 +187,22 @@ body::before {
     align-items: center;
     justify-content: center;
     border-radius: 50%;
-    transition: background 0.2s;
+    transition: background 0.2s, color 0.2s;
 }
 
 .back-btn:hover {
-    background: var(--tg-secondary-bg);
+    background: rgba(64, 167, 227, 0.1);
+}
+
+[data-max-theme="dark"] .back-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
 }
 
 .header h1 {
     font-size: 20px;
     font-weight: 600;
     color: var(--tg-text);
+    transition: color 0.2s;
 }
 
 .header-placeholder {
@@ -162,10 +216,10 @@ body::before {
     padding: 16px;
     padding-bottom: calc(var(--nav-height) + 16px);
     scroll-behavior: smooth;
-    background: transparent; /* Прозрачный, видна подложка */
+    background: transparent;
 }
 
-/* Стилизация скролла как в Telegram */
+/* Стилизация скролла */
 .content::-webkit-scrollbar {
     width: 4px;
 }
@@ -179,11 +233,12 @@ body::before {
     border-radius: 4px;
 }
 
-/* ========== НИЖНЯЯ НАВИГАЦИЯ С РАЗМЫТИЕМ ========== */
+/* ========== НИЖНЯЯ НАВИГАЦИЯ ========== */
 .nav-bar {
     height: var(--nav-height);
-    background: rgba(255, 255, 255, 0.85);
+    background: var(--max-surface-light);
     backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     border-top: 1px solid var(--tg-border);
     display: flex;
     align-items: center;
@@ -196,12 +251,11 @@ body::before {
     max-width: 600px;
     margin: 0 auto;
     z-index: 10;
+    transition: background 0.3s ease, border-color 0.3s ease;
 }
 
-@media (prefers-color-scheme: dark) {
-    .nav-bar {
-        background: rgba(31, 31, 31, 0.85);
-    }
+[data-max-theme="dark"] .nav-bar {
+    background: var(--max-surface-dark);
 }
 
 .nav-btn {
@@ -226,23 +280,11 @@ body::before {
     background: rgba(64, 167, 227, 0.1);
 }
 
-/* ========== КАРТОЧКИ С ПРОЗРАЧНЫМ ФОНОМ ========== */
-.welcome-screen,
-.why-screen,
-.mode-screen,
-.profile-screen,
-.thought-screen,
-.goals-screen,
-.ask-screen,
-.stage-screen,
-.result-screen,
-.goal-path-screen,
-.reality-check-screen,
-.custom-goal-screen,
-.weekend-ideas-screen {
-    background: transparent;
+[data-max-theme="dark"] .nav-btn.active {
+    background: rgba(64, 167, 227, 0.2);
 }
 
+/* ========== СТЕКЛЯННЫЕ КАРТОЧКИ ========== */
 .stages-list,
 .mode-header,
 .mode-card,
@@ -259,29 +301,30 @@ body::before {
 .reality-check-screen,
 .custom-goal-screen,
 .weekend-ideas-screen .ideas-container {
-    background: rgba(255, 255, 255, 0.9);
-    backdrop-filter: blur(5px);
+    background: var(--max-surface-light);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid var(--tg-border);
+    transition: background 0.3s ease, border-color 0.3s ease, transform 0.2s ease;
 }
 
-@media (prefers-color-scheme: dark) {
-    .stages-list,
-    .mode-header,
-    .mode-card,
-    .profile-section,
-    .thought-block,
-    .goal-card,
-    .examples-section,
-    .messages-container,
-    .profile-badge,
-    .menu-card,
-    .weekend-hint,
-    .result-screen,
-    .path-steps,
-    .reality-check-screen,
-    .custom-goal-screen,
-    .weekend-ideas-screen .ideas-container {
-        background: rgba(45, 45, 45, 0.9);
-    }
+[data-max-theme="dark"] .stages-list,
+[data-max-theme="dark"] .mode-header,
+[data-max-theme="dark"] .mode-card,
+[data-max-theme="dark"] .profile-section,
+[data-max-theme="dark"] .thought-block,
+[data-max-theme="dark"] .goal-card,
+[data-max-theme="dark"] .examples-section,
+[data-max-theme="dark"] .messages-container,
+[data-max-theme="dark"] .profile-badge,
+[data-max-theme="dark"] .menu-card,
+[data-max-theme="dark"] .weekend-hint,
+[data-max-theme="dark"] .result-screen,
+[data-max-theme="dark"] .path-steps,
+[data-max-theme="dark"] .reality-check-screen,
+[data-max-theme="dark"] .custom-goal-screen,
+[data-max-theme="dark"] .weekend-ideas-screen .ideas-container {
+    background: var(--max-surface-dark);
 }
 
 /* ========== ЭКРАН ПРИВЕТСТВИЯ ========== */
@@ -297,32 +340,17 @@ body::before {
     text-shadow: 0 1px 2px rgba(0,0,0,0.05);
 }
 
-.weather {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--tg-hint);
-    font-size: 16px;
-    margin-bottom: 24px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--tg-border);
-}
-
 .context-message {
-    background: rgba(240, 240, 240, 0.9);
+    background: rgba(64, 167, 227, 0.1);
     backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
     border-radius: var(--tg-radius);
     padding: 16px;
     margin-bottom: 24px;
     color: var(--tg-text);
     font-size: 15px;
     border-left: 4px solid var(--tg-button);
-}
-
-@media (prefers-color-scheme: dark) {
-    .context-message {
-        background: rgba(45, 45, 45, 0.9);
-    }
+    transition: background 0.3s ease;
 }
 
 .welcome-text {
@@ -346,7 +374,6 @@ body::before {
     border-radius: var(--tg-radius);
     padding: 16px;
     margin: 20px 0;
-    border: 1px solid var(--tg-border);
 }
 
 .stage-item {
@@ -369,138 +396,105 @@ body::before {
     flex: 1;
 }
 
-/* ========== КНОПКИ РЕЖИМОВ ========== */
-.mode-buttons {
+/* ========== КАРТОЧКИ МЕНЮ ========== */
+.main-menu {
     display: flex;
     flex-direction: column;
     gap: 12px;
-    margin-bottom: 24px;
+    margin: 20px 0;
 }
 
-.mode-row {
-    display: flex;
-    gap: 12px;
-}
-
-.mode-btn {
-    flex: 1;
-    height: 56px;
-    border: 1px solid var(--tg-border);
-    background: rgba(255, 255, 255, 0.9);
-    backdrop-filter: blur(5px);
+.menu-card {
     border-radius: var(--tg-radius);
-    font-size: 16px;
-    font-weight: 500;
+    padding: 16px;
     cursor: pointer;
     transition: all 0.2s;
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 8px;
+    gap: 16px;
+    text-align: left;
 }
 
-@media (prefers-color-scheme: dark) {
-    .mode-btn {
-        background: rgba(45, 45, 45, 0.9);
-    }
+.menu-card:hover {
+    background: rgba(64, 167, 227, 0.1);
+    transform: translateX(4px);
 }
 
-.mode-btn.hard {
-    color: #e53e3e;
+[data-max-theme="dark"] .menu-card:hover {
+    background: rgba(64, 167, 227, 0.2);
 }
 
-.mode-btn.medium {
-    color: #d69e2e;
+.menu-emoji {
+    font-size: 32px;
+    min-width: 48px;
+    text-align: center;
 }
 
-.mode-btn.soft {
-    color: #38a169;
-}
-
-.mode-btn:hover {
-    background: var(--tg-secondary-bg);
-    transform: translateY(-2px);
-}
-
-/* ========== МЕНЮ КНОПКИ ========== */
-.menu-buttons {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    margin-bottom: 24px;
-}
-
-.menu-btn {
-    height: 56px;
-    border: 1px solid var(--tg-border);
-    background: rgba(255, 255, 255, 0.9);
-    backdrop-filter: blur(5px);
-    border-radius: var(--tg-radius);
-    font-size: 16px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    color: var(--tg-text);
-}
-
-@media (prefers-color-scheme: dark) {
-    .menu-btn {
-        background: rgba(45, 45, 45, 0.9);
-    }
-}
-
-.menu-btn:hover {
-    background: var(--tg-secondary-bg);
-}
-
-/* ========== КНОПКИ ДЕЙСТВИЙ ========== */
-.action-buttons {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    margin-top: 24px;
-}
-
-.action-btn {
-    width: 100%;
-    height: 56px;
-    border: none;
-    border-radius: var(--tg-radius);
-    font-size: 16px;
+.menu-title {
     font-weight: 600;
+    font-size: 16px;
+    color: var(--tg-text);
+    margin-bottom: 4px;
+}
+
+.menu-desc {
+    font-size: 13px;
+    color: var(--tg-hint);
+}
+
+/* ========== ПРОФИЛЬ БЕЙДЖ ========== */
+.profile-badge {
+    border-radius: 30px;
+    padding: 8px 16px;
+    margin: 16px 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     cursor: pointer;
     transition: all 0.2s;
-    backdrop-filter: blur(5px);
 }
 
-.action-btn.primary {
-    background: var(--tg-button);
-    color: white;
-}
-
-.action-btn.primary:hover {
-    opacity: 0.9;
+.profile-badge:hover {
+    background: rgba(64, 167, 227, 0.1);
     transform: translateY(-2px);
 }
 
-.action-btn.secondary {
-    background: rgba(255, 255, 255, 0.9);
-    border: 1px solid var(--tg-border);
+[data-max-theme="dark"] .profile-badge:hover {
+    background: rgba(64, 167, 227, 0.2);
+}
+
+.profile-code {
+    font-weight: 600;
+    font-size: 15px;
     color: var(--tg-text);
 }
 
-@media (prefers-color-scheme: dark) {
-    .action-btn.secondary {
-        background: rgba(45, 45, 45, 0.9);
-    }
+.profile-arrow {
+    color: var(--tg-hint);
+    font-size: 18px;
 }
 
-.action-btn.secondary:hover {
-    background: var(--tg-secondary-bg);
+/* ========== ПОДСКАЗКА НА ВЫХОДНЫЕ ========== */
+.weekend-hint {
+    border-radius: var(--tg-radius);
+    padding: 12px 16px;
+    margin-top: 20px;
+    color: var(--tg-button);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.weekend-hint:hover {
+    background: rgba(64, 167, 227, 0.1);
+    transform: translateY(-2px);
+}
+
+[data-max-theme="dark"] .weekend-hint:hover {
+    background: rgba(64, 167, 227, 0.2);
 }
 
 /* ========== ЭКРАН ВЫБОРА РЕЖИМА ========== */
@@ -512,7 +506,6 @@ body::before {
     border-radius: var(--tg-radius);
     padding: 16px;
     margin-bottom: 20px;
-    border: 1px solid var(--tg-border);
 }
 
 .mode-profile {
@@ -533,29 +526,26 @@ body::before {
 }
 
 .mode-card {
-    border: 1px solid var(--tg-border);
     border-radius: var(--tg-radius);
     padding: 20px;
     margin-bottom: 16px;
     cursor: pointer;
     transition: all 0.2s;
-    backdrop-filter: blur(5px);
 }
 
 .mode-card:hover {
-    background: rgba(240, 240, 240, 0.95);
+    background: rgba(64, 167, 227, 0.1);
     transform: translateY(-2px);
 }
 
-@media (prefers-color-scheme: dark) {
-    .mode-card:hover {
-        background: rgba(55, 55, 55, 0.95);
-    }
+[data-max-theme="dark"] .mode-card:hover {
+    background: rgba(64, 167, 227, 0.2);
 }
 
 .mode-card.active {
     border-color: var(--tg-button);
-    background: rgba(64, 167, 227, 0.1);
+    background: rgba(64, 167, 227, 0.15);
+    transform: scale(1.02);
 }
 
 .mode-title {
@@ -593,6 +583,7 @@ body::before {
     color: var(--tg-button);
     position: absolute;
     left: 4px;
+    font-weight: bold;
 }
 
 /* ========== КНОПКА ПРИМЕНЕНИЯ РЕЖИМА ========== */
@@ -613,98 +604,7 @@ body::before {
 .apply-mode-btn:hover {
     opacity: 0.9;
     transform: translateY(-2px);
-}
-
-/* ========== ПРОФИЛЬ НА ГЛАВНОМ ЭКРАНЕ ========== */
-.profile-badge {
-    border: 1px solid var(--tg-border);
-    border-radius: 30px;
-    padding: 8px 16px;
-    margin: 16px 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-
-.profile-badge:hover {
-    background: var(--tg-secondary-bg);
-    transform: translateY(-2px);
-}
-
-.profile-code {
-    font-weight: 600;
-    font-size: 15px;
-    color: var(--tg-text);
-}
-
-.profile-arrow {
-    color: var(--tg-hint);
-    font-size: 18px;
-}
-
-/* ========== МЕНЮ КАРТОЧКИ НА ГЛАВНОМ ЭКРАНЕ ========== */
-.main-menu {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    margin: 20px 0;
-}
-
-.menu-card {
-    border: 1px solid var(--tg-border);
-    border-radius: var(--tg-radius);
-    padding: 16px;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    text-align: left;
-}
-
-.menu-card:hover {
-    background: var(--tg-secondary-bg);
-    transform: translateX(4px);
-}
-
-.menu-emoji {
-    font-size: 32px;
-    min-width: 48px;
-    text-align: center;
-}
-
-.menu-title {
-    font-weight: 600;
-    font-size: 16px;
-    color: var(--tg-text);
-    margin-bottom: 4px;
-}
-
-.menu-desc {
-    font-size: 13px;
-    color: var(--tg-hint);
-}
-
-/* ========== ПОДСКАЗКА НА ВЫХОДНЫЕ ========== */
-.weekend-hint {
-    border: 1px solid var(--tg-button);
-    border-radius: var(--tg-radius);
-    padding: 12px 16px;
-    margin-top: 20px;
-    color: var(--tg-button);
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-}
-
-.weekend-hint:hover {
-    background: rgba(64, 167, 227, 0.2);
-    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(64, 167, 227, 0.3);
 }
 
 /* ========== ЭКРАН ЭТАПОВ ТЕСТА ========== */
@@ -764,8 +664,9 @@ body::before {
 .option-btn {
     width: 100%;
     padding: 16px;
-    background: rgba(255, 255, 255, 0.9);
+    background: var(--max-surface-light);
     backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
     border: 1px solid var(--tg-border);
     border-radius: var(--tg-radius);
     font-size: 16px;
@@ -776,23 +677,24 @@ body::before {
     line-height: 1.5;
 }
 
-@media (prefers-color-scheme: dark) {
-    .option-btn {
-        background: rgba(45, 45, 45, 0.9);
-    }
+[data-max-theme="dark"] .option-btn {
+    background: var(--max-surface-dark);
 }
 
 .option-btn:hover {
-    background: var(--tg-secondary-bg);
+    background: rgba(64, 167, 227, 0.1);
     border-color: var(--tg-button);
     transform: translateX(4px);
 }
 
-/* ========== ЭКРАН РЕЗУЛЬТАТОВ ЭТАПА ========== */
+[data-max-theme="dark"] .option-btn:hover {
+    background: rgba(64, 167, 227, 0.2);
+}
+
+/* ========== ЭКРАН РЕЗУЛЬТАТОВ ========== */
 .result-screen {
     border-radius: var(--tg-radius);
     padding: 24px;
-    border: 1px solid var(--tg-border);
     animation: fadeIn 0.3s ease-out;
 }
 
@@ -809,36 +711,11 @@ body::before {
     background: transparent;
 }
 
-.profile-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 20px;
-}
-
-.profile-code {
-    background: rgba(240, 240, 240, 0.9);
-    backdrop-filter: blur(5px);
-    padding: 8px 16px;
-    border-radius: 20px;
-    font-size: 14px;
-    color: var(--tg-hint);
-    border: 1px solid var(--tg-border);
-}
-
-@media (prefers-color-scheme: dark) {
-    .profile-code {
-        background: rgba(45, 45, 45, 0.9);
-    }
-}
-
 .profile-section {
     border-radius: var(--tg-radius);
     padding: 16px;
     margin-bottom: 16px;
-    border: 1px solid var(--tg-border);
     animation: slideIn 0.3s ease-out;
-    backdrop-filter: blur(5px);
 }
 
 @keyframes slideIn {
@@ -891,6 +768,7 @@ body::before {
     color: var(--tg-button);
     position: absolute;
     left: 4px;
+    font-weight: bold;
 }
 
 .profile-content {
@@ -898,7 +776,7 @@ body::before {
     white-space: pre-line;
 }
 
-/* ========== ЭКРАН МЫСЛЕЙ ПСИХОЛОГА ========== */
+/* ========== ЭКРАН МЫСЛЕЙ ========== */
 .thought-screen {
     background: transparent;
 }
@@ -907,9 +785,7 @@ body::before {
     border-radius: var(--tg-radius);
     padding: 16px;
     margin-bottom: 16px;
-    border: 1px solid var(--tg-border);
     position: relative;
-    backdrop-filter: blur(5px);
 }
 
 .thought-block::before {
@@ -917,19 +793,18 @@ body::before {
     position: absolute;
     top: -8px;
     right: 12px;
-    background: rgba(255, 255, 255, 0.9);
+    background: var(--max-surface-light);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
     padding: 2px 8px;
     border-radius: 12px;
     font-size: 12px;
     color: var(--tg-hint);
     border: 1px solid var(--tg-border);
-    backdrop-filter: blur(5px);
 }
 
-@media (prefers-color-scheme: dark) {
-    .thought-block::before {
-        background: rgba(45, 45, 45, 0.9);
-    }
+[data-max-theme="dark"] .thought-block::before {
+    background: var(--max-surface-dark);
 }
 
 .thought-title {
@@ -964,7 +839,6 @@ body::before {
 }
 
 .goal-card {
-    border: 1px solid var(--tg-border);
     border-radius: var(--tg-radius);
     padding: 16px;
     margin-bottom: 12px;
@@ -973,18 +847,15 @@ body::before {
     display: flex;
     align-items: center;
     gap: 12px;
-    backdrop-filter: blur(5px);
 }
 
 .goal-card:hover {
-    background: rgba(240, 240, 240, 0.9);
+    background: rgba(64, 167, 227, 0.1);
     transform: translateX(4px);
 }
 
-@media (prefers-color-scheme: dark) {
-    .goal-card:hover {
-        background: rgba(55, 55, 55, 0.9);
-    }
+[data-max-theme="dark"] .goal-card:hover {
+    background: rgba(64, 167, 227, 0.2);
 }
 
 .goal-difficulty {
@@ -1026,8 +897,9 @@ body::before {
     width: 100%;
     height: 56px;
     border: 2px dashed var(--tg-border);
-    background: rgba(255, 255, 255, 0.9);
+    background: var(--max-surface-light);
     backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
     border-radius: var(--tg-radius);
     font-size: 16px;
     color: var(--tg-hint);
@@ -1036,191 +908,12 @@ body::before {
     margin-top: 16px;
 }
 
-@media (prefers-color-scheme: dark) {
-    .custom-goal-btn {
-        background: rgba(45, 45, 45, 0.9);
-    }
+[data-max-theme="dark"] .custom-goal-btn {
+    background: var(--max-surface-dark);
 }
 
 .custom-goal-btn:hover {
     border-color: var(--tg-button);
-    color: var(--tg-button);
-}
-
-/* ========== ЭКРАН ПУТИ К ЦЕЛИ ========== */
-.goal-path-screen {
-    border-radius: var(--tg-radius);
-    padding: 20px;
-    border: 1px solid var(--tg-border);
-    animation: fadeIn 0.3s ease-out;
-}
-
-.goal-path-screen h2 {
-    font-size: 20px;
-    font-weight: 600;
-    margin-bottom: 16px;
-    color: var(--tg-text);
-}
-
-.goal-path-screen p {
-    margin-bottom: 16px;
-    color: var(--tg-text);
-}
-
-.path-steps {
-    margin: 20px 0;
-    padding: 16px;
-    border-radius: var(--tg-radius);
-    border: 1px solid var(--tg-border);
-}
-
-.path-step {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 16px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--tg-border);
-}
-
-.path-step:last-child {
-    margin-bottom: 0;
-    padding-bottom: 0;
-    border-bottom: none;
-}
-
-.step-number {
-    width: 28px;
-    height: 28px;
-    background: var(--tg-button);
-    color: white;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 600;
-    font-size: 14px;
-}
-
-.step-text {
-    flex: 1;
-    color: var(--tg-text);
-}
-
-/* ========== ЭКРАН ПРОВЕРКИ РЕАЛЬНОСТИ ========== */
-.reality-check-screen {
-    border-radius: var(--tg-radius);
-    padding: 20px;
-    border: 1px solid var(--tg-border);
-    animation: fadeIn 0.3s ease-out;
-}
-
-.reality-check-screen h2 {
-    font-size: 20px;
-    font-weight: 600;
-    margin-bottom: 20px;
-    color: var(--tg-text);
-}
-
-.reality-check-screen p {
-    margin-bottom: 12px;
-    color: var(--tg-text);
-}
-
-/* ========== ЭКРАН ПОЛЬЗОВАТЕЛЬСКОЙ ЦЕЛИ ========== */
-.custom-goal-screen {
-    border-radius: var(--tg-radius);
-    padding: 20px;
-    border: 1px solid var(--tg-border);
-    animation: fadeIn 0.3s ease-out;
-}
-
-.custom-goal-screen h2 {
-    font-size: 20px;
-    font-weight: 600;
-    margin-bottom: 16px;
-    color: var(--tg-text);
-}
-
-.custom-goal-screen p {
-    margin-bottom: 20px;
-    color: var(--tg-hint);
-}
-
-.goal-input {
-    width: 100%;
-    padding: 16px;
-    background: rgba(255, 255, 255, 0.9);
-    backdrop-filter: blur(5px);
-    border: 1px solid var(--tg-border);
-    border-radius: var(--tg-radius);
-    font-size: 16px;
-    color: var(--tg-text);
-    margin-bottom: 20px;
-    resize: vertical;
-    font-family: inherit;
-}
-
-@media (prefers-color-scheme: dark) {
-    .goal-input {
-        background: rgba(45, 45, 45, 0.9);
-    }
-}
-
-.goal-input:focus {
-    outline: none;
-    border-color: var(--tg-button);
-}
-
-/* ========== ЭКРАН ИДЕЙ НА ВЫХОДНЫЕ ========== */
-.weekend-ideas-screen {
-    animation: fadeIn 0.3s ease-out;
-}
-
-.weekend-ideas-screen h2 {
-    font-size: 20px;
-    font-weight: 600;
-    margin-bottom: 20px;
-    color: var(--tg-text);
-}
-
-.ideas-container {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    margin-bottom: 24px;
-}
-
-.idea-card {
-    background: rgba(255, 255, 255, 0.9);
-    backdrop-filter: blur(5px);
-    border: 1px solid var(--tg-border);
-    border-radius: var(--tg-radius);
-    padding: 16px;
-    display: flex;
-    gap: 16px;
-    align-items: flex-start;
-}
-
-@media (prefers-color-scheme: dark) {
-    .idea-card {
-        background: rgba(45, 45, 45, 0.9);
-    }
-}
-
-.idea-emoji {
-    font-size: 32px;
-    min-width: 48px;
-    text-align: center;
-}
-
-.idea-text {
-    flex: 1;
-    color: var(--tg-text);
-    line-height: 1.6;
-}
-
-.idea-text strong {
     color: var(--tg-button);
 }
 
@@ -1231,23 +924,6 @@ body::before {
     height: 100%;
     min-height: 500px;
     background: transparent;
-}
-
-.ask-header {
-    margin-bottom: 24px;
-}
-
-.ask-header h2 {
-    font-size: 20px;
-    font-weight: 600;
-    margin-bottom: 8px;
-    color: var(--tg-text);
-    text-shadow: 0 1px 2px rgba(0,0,0,0.05);
-}
-
-.ask-header p {
-    color: var(--tg-hint);
-    font-size: 15px;
 }
 
 .messages-container {
@@ -1261,8 +937,6 @@ body::before {
     display: flex;
     flex-direction: column;
     gap: 12px;
-    border: 1px solid var(--tg-border);
-    backdrop-filter: blur(5px);
 }
 
 .message {
@@ -1273,7 +947,6 @@ body::before {
     line-height: 1.5;
     word-wrap: break-word;
     animation: messageIn 0.3s ease-out;
-    backdrop-filter: blur(5px);
 }
 
 @keyframes messageIn {
@@ -1296,16 +969,14 @@ body::before {
 
 .message.bot {
     align-self: flex-start;
-    background: rgba(240, 240, 240, 0.95);
+    background: var(--max-surface-light);
     color: var(--message-bot-text);
     border: 1px solid var(--tg-border);
     border-bottom-left-radius: 4px;
 }
 
-@media (prefers-color-scheme: dark) {
-    .message.bot {
-        background: rgba(45, 45, 45, 0.95);
-    }
+[data-max-theme="dark"] .message.bot {
+    background: var(--max-surface-dark);
 }
 
 .message.system {
@@ -1338,17 +1009,17 @@ body::before {
     display: flex;
     gap: 12px;
     align-items: center;
-    background: rgba(255, 255, 255, 0.9);
+    background: var(--max-surface-light);
     backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     border: 1px solid var(--tg-border);
     border-radius: 30px;
     padding: 8px 12px;
+    transition: background 0.3s ease;
 }
 
-@media (prefers-color-scheme: dark) {
-    .input-panel {
-        background: rgba(45, 45, 45, 0.9);
-    }
+[data-max-theme="dark"] .input-panel {
+    background: var(--max-surface-dark);
 }
 
 .text-input {
@@ -1384,14 +1055,14 @@ body::before {
 .voice-btn:hover, .send-btn:hover {
     transform: scale(1.05);
     opacity: 0.9;
+    box-shadow: 0 4px 12px rgba(64, 167, 227, 0.3);
 }
 
+/* ========== ПРИМЕРЫ ВОПРОСОВ ========== */
 .examples-section {
     margin-top: 24px;
     padding: 16px;
     border-radius: var(--tg-radius);
-    border: 1px solid var(--tg-border);
-    backdrop-filter: blur(5px);
 }
 
 .examples-section h3 {
@@ -1410,8 +1081,9 @@ body::before {
 .example-btn {
     text-align: left;
     padding: 12px 16px;
-    background: rgba(255, 255, 255, 0.9);
+    background: var(--max-surface-light);
     backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
     border: 1px solid var(--tg-border);
     border-radius: 20px;
     font-size: 14px;
@@ -1420,15 +1092,262 @@ body::before {
     transition: all 0.2s;
 }
 
-@media (prefers-color-scheme: dark) {
-    .example-btn {
-        background: rgba(45, 45, 45, 0.9);
-    }
+[data-max-theme="dark"] .example-btn {
+    background: var(--max-surface-dark);
 }
 
 .example-btn:hover {
     background: var(--tg-button);
     color: white;
+    border-color: var(--tg-button);
+    transform: translateX(4px);
+}
+
+/* ========== ИДЕИ НА ВЫХОДНЫЕ ========== */
+.weekend-ideas-screen {
+    animation: fadeIn 0.3s ease-out;
+}
+
+.weekend-ideas-screen h2 {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 20px;
+    color: var(--tg-text);
+}
+
+.ideas-container {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.idea-card {
+    border-radius: var(--tg-radius);
+    padding: 16px;
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    background: var(--max-surface-light);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid var(--tg-border);
+    transition: transform 0.2s ease;
+}
+
+[data-max-theme="dark"] .idea-card {
+    background: var(--max-surface-dark);
+}
+
+.idea-card:hover {
+    transform: translateX(4px);
+}
+
+.idea-emoji {
+    font-size: 32px;
+    min-width: 48px;
+    text-align: center;
+}
+
+.idea-text {
+    flex: 1;
+    color: var(--tg-text);
+    line-height: 1.6;
+}
+
+.idea-text strong {
+    color: var(--tg-button);
+}
+
+/* ========== ПУТЬ К ЦЕЛИ ========== */
+.goal-path-screen {
+    border-radius: var(--tg-radius);
+    padding: 20px;
+    animation: fadeIn 0.3s ease-out;
+    background: var(--max-surface-light);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid var(--tg-border);
+}
+
+[data-max-theme="dark"] .goal-path-screen {
+    background: var(--max-surface-dark);
+}
+
+.goal-path-screen h2 {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--tg-text);
+}
+
+.goal-path-screen p {
+    margin-bottom: 16px;
+    color: var(--tg-text);
+}
+
+.path-steps {
+    margin: 20px 0;
+    padding: 16px;
+    border-radius: var(--tg-radius);
+}
+
+.path-step {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--tg-border);
+}
+
+.path-step:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.step-number {
+    width: 28px;
+    height: 28px;
+    background: var(--tg-button);
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.step-text {
+    flex: 1;
+    color: var(--tg-text);
+}
+
+/* ========== ПРОВЕРКА РЕАЛЬНОСТИ ========== */
+.reality-check-screen {
+    border-radius: var(--tg-radius);
+    padding: 20px;
+    animation: fadeIn 0.3s ease-out;
+    background: var(--max-surface-light);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid var(--tg-border);
+}
+
+[data-max-theme="dark"] .reality-check-screen {
+    background: var(--max-surface-dark);
+}
+
+.reality-check-screen h2 {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 20px;
+    color: var(--tg-text);
+}
+
+.reality-check-screen p {
+    margin-bottom: 12px;
+    color: var(--tg-text);
+}
+
+/* ========== ПОЛЬЗОВАТЕЛЬСКАЯ ЦЕЛЬ ========== */
+.custom-goal-screen {
+    border-radius: var(--tg-radius);
+    padding: 20px;
+    animation: fadeIn 0.3s ease-out;
+    background: var(--max-surface-light);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid var(--tg-border);
+}
+
+[data-max-theme="dark"] .custom-goal-screen {
+    background: var(--max-surface-dark);
+}
+
+.custom-goal-screen h2 {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--tg-text);
+}
+
+.custom-goal-screen p {
+    margin-bottom: 20px;
+    color: var(--tg-hint);
+}
+
+.goal-input {
+    width: 100%;
+    padding: 16px;
+    background: var(--max-surface-light);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    border: 1px solid var(--tg-border);
+    border-radius: var(--tg-radius);
+    font-size: 16px;
+    color: var(--tg-text);
+    margin-bottom: 20px;
+    resize: vertical;
+    font-family: inherit;
+    transition: border-color 0.2s ease;
+}
+
+[data-max-theme="dark"] .goal-input {
+    background: var(--max-surface-dark);
+}
+
+.goal-input:focus {
+    outline: none;
+    border-color: var(--tg-button);
+}
+
+/* ========== КНОПКИ ДЕЙСТВИЙ ========== */
+.action-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.action-btn {
+    width: 100%;
+    height: 56px;
+    border: none;
+    border-radius: var(--tg-radius);
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.action-btn.primary {
+    background: var(--tg-button);
+    color: white;
+}
+
+.action-btn.primary:hover {
+    opacity: 0.9;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(64, 167, 227, 0.3);
+}
+
+.action-btn.secondary {
+    background: var(--max-surface-light);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    border: 1px solid var(--tg-border);
+    color: var(--tg-text);
+}
+
+[data-max-theme="dark"] .action-btn.secondary {
+    background: var(--max-surface-dark);
+}
+
+.action-btn.secondary:hover {
+    background: rgba(64, 167, 227, 0.1);
     border-color: var(--tg-button);
 }
 
@@ -1463,22 +1382,20 @@ body::before {
 
 /* ========== ОШИБКИ ========== */
 .error-screen {
-    background: rgba(255, 238, 238, 0.9);
+    background: rgba(255, 68, 68, 0.1);
     backdrop-filter: blur(5px);
-    color: #c00;
+    -webkit-backdrop-filter: blur(5px);
+    color: #ff4444;
     padding: 20px;
     border-radius: var(--tg-radius);
     text-align: center;
-    border: 1px solid #fcc;
+    border: 1px solid rgba(255, 68, 68, 0.3);
     margin: 20px 0;
 }
 
-@media (prefers-color-scheme: dark) {
-    .error-screen {
-        background: rgba(68, 34, 34, 0.9);
-        color: #ff8888;
-        border-color: #662222;
-    }
+[data-max-theme="dark"] .error-screen {
+    background: rgba(255, 68, 68, 0.2);
+    color: #ff8888;
 }
 
 /* ========== АНИМАЦИИ ========== */
@@ -1505,15 +1422,6 @@ body::before {
     
     .greeting {
         font-size: 20px;
-    }
-    
-    .mode-btn {
-        height: 48px;
-        font-size: 14px;
-    }
-    
-    .menu-btn {
-        height: 48px;
     }
     
     .mode-title {
@@ -1568,4 +1476,27 @@ body::before {
 
 .hidden {
     display: none !important;
+}
+
+/* ========== MAX СПЕЦИФИЧНЫЕ СТИЛИ ========== */
+.max-webapp .header {
+    background: var(--max-surface-light);
+    backdrop-filter: blur(15px) saturate(180%);
+    -webkit-backdrop-filter: blur(15px) saturate(180%);
+}
+
+.max-webapp .nav-bar {
+    background: var(--max-surface-light);
+    backdrop-filter: blur(15px) saturate(180%);
+    -webkit-backdrop-filter: blur(15px) saturate(180%);
+}
+
+[data-max-theme="dark"] .max-webapp .header,
+[data-max-theme="dark"] .max-webapp .nav-bar {
+    background: var(--max-surface-dark);
+}
+
+/* Плавное переключение тем */
+body, .header, .nav-bar, .mode-card, .message, .input-panel, .menu-card {
+    transition: background-color 0.3s ease, color 0.2s ease, border-color 0.3s ease;
 }
