@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики целей и маршрутов для MAX
-Версия 2.1 - ИСПРАВЛЕНА ОШИБКА С STATE_DATA
+Версия 2.2 - ДОБАВЛЕНО СОХРАНЕНИЕ В БД
 """
 
 import logging
@@ -28,10 +28,13 @@ from reality_check import (
 
 # Импорты из state.py
 from state import (
-    user_data, user_contexts, user_state_data, user_states,
+    user_data, user_contexts, user_state_data, user_states, user_routes,
     get_state, set_state, get_state_data, update_state_data, 
     TestStates, user_names, clear_state
 )
+
+# ✅ ДОБАВЛЕНО: импорт для БД
+from db_instance import db, save_user_to_db
 
 # Импорты из formatters.py
 from formatters import bold, italic, clean_text_for_safe_display
@@ -67,6 +70,107 @@ def get_user_context_obj(user_id: int):
 def get_user_name(user_id: int) -> str:
     """Получает имя пользователя"""
     return user_names.get(user_id, "друг")
+
+# ============================================
+# ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
+# ============================================
+
+async def save_goal_to_db(user_id: int, goal_data: Dict[str, Any], status: str = "selected"):
+    """Сохраняет выбранную цель в БД"""
+    try:
+        await db.log_event(
+            user_id,
+            'goal_selected',
+            {
+                'goal_id': goal_data.get('id'),
+                'goal_name': goal_data.get('name'),
+                'goal_time': goal_data.get('time'),
+                'goal_difficulty': goal_data.get('difficulty'),
+                'status': status,
+                'timestamp': time.time()
+            }
+        )
+        logger.debug(f"💾 Цель {goal_data.get('id')} для {user_id} сохранена в БД")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения цели для {user_id}: {e}")
+
+async def save_route_to_db(user_id: int, route_data: Dict[str, Any], goal_data: Dict[str, Any]):
+    """Сохраняет маршрут в БД"""
+    try:
+        # Сохраняем в user_routes
+        from state import user_routes
+        user_routes[user_id] = {
+            'route_data': route_data,
+            'goal': goal_data,
+            'current_step': 1,
+            'progress': [],
+            'started_at': time.time()
+        }
+        
+        # Сохраняем в таблицу маршрутов
+        await db.save_user_route(
+            user_id=user_id,
+            route_data={
+                'route': route_data,
+                'goal': goal_data
+            },
+            current_step=1,
+            progress=[]
+        )
+        
+        # Логируем событие
+        await db.log_event(
+            user_id,
+            'route_started',
+            {
+                'goal_id': goal_data.get('id'),
+                'goal_name': goal_data.get('name'),
+                'timestamp': time.time()
+            }
+        )
+        logger.debug(f"💾 Маршрут для {user_id} сохранен в БД")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения маршрута для {user_id}: {e}")
+
+async def update_route_progress_in_db(user_id: int, step: int, progress: List[int]):
+    """Обновляет прогресс по маршруту в БД"""
+    try:
+        route_data = user_routes.get(user_id, {})
+        if route_data:
+            await db.update_user_route(
+                route_id=route_data.get('route_id'),  # Нужно хранить route_id
+                current_step=step,
+                progress=progress
+            )
+            
+            await db.log_event(
+                user_id,
+                'route_step_completed',
+                {
+                    'step': step,
+                    'progress': progress,
+                    'timestamp': time.time()
+                }
+            )
+    except Exception as e:
+        logger.error(f"❌ Ошибка обновления прогресса маршрута для {user_id}: {e}")
+
+async def save_feasibility_result_to_db(user_id: int, goal_data: Dict[str, Any], result: Dict[str, Any]):
+    """Сохраняет результат проверки реальности в БД"""
+    try:
+        await db.log_event(
+            user_id,
+            'feasibility_checked',
+            {
+                'goal_id': goal_data.get('id'),
+                'goal_name': goal_data.get('name'),
+                'deficit': result.get('deficit'),
+                'status': result.get('status_text'),
+                'timestamp': time.time()
+            }
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения результата проверки для {user_id}: {e}")
 
 # ============================================
 # КАТЕГОРИИ ЦЕЛЕЙ (для обратной совместимости)
@@ -236,6 +340,9 @@ def select_goal(call, goal_id: str):
     
     # Сохраняем выбранную цель
     update_user_state_data(user_id, current_goal=goal_info)
+    
+    # ✅ СОХРАНЯЕМ В БД
+    asyncio.create_task(save_goal_to_db(user_id, goal_info, "selected"))
     
     text = f"""
 🧠 <b>ВЫБРАННАЯ ЦЕЛЬ</b>
@@ -541,6 +648,9 @@ async def show_theoretical_path(call: CallbackQuery, state_data: Dict, goal_info
     # Сохраняем путь в state
     update_user_state_data(user_id, theoretical_path=path, current_destination=goal_info)
     
+    # ✅ СОХРАНЯЕМ ЦЕЛЬ В БД
+    asyncio.create_task(save_goal_to_db(user_id, goal_info, "in_progress"))
+    
     # Форматируем текст пути для отображения
     path_text = path.get('formatted_text', 'Маршрут строится...')
     
@@ -786,6 +896,9 @@ async def calculate_and_show_feasibility(call: CallbackQuery, state_data: Dict):
     # Сохраняем результат
     update_user_state_data(call.from_user.id, feasibility_result=result)
     
+    # ✅ СОХРАНЯЕМ РЕЗУЛЬТАТ В БД
+    asyncio.create_task(save_feasibility_result_to_db(call.from_user.id, goal, result))
+    
     text = f"""
 🧠 {bold('ФРЕДИ: РЕАЛЬНОСТЬ ЦЕЛИ')}
 
@@ -879,6 +992,9 @@ async def accept_feasibility_plan(call: CallbackQuery, state_data: Dict):
         await call.answer("❌ Цель не найдена")
         return
     
+    # ✅ СОХРАНЯЕМ СОГЛАСИЕ В БД
+    asyncio.create_task(save_goal_to_db(call.from_user.id, goal, "accepted"))
+    
     await build_route(call, state_data, goal.get('id'))
 
 
@@ -955,6 +1071,10 @@ async def select_goal_50(call: CallbackQuery, state_data: Dict):
     }
     
     update_user_state_data(call.from_user.id, current_destination=new_goal)
+    
+    # ✅ СОХРАНЯЕМ В БД
+    asyncio.create_task(save_goal_to_db(call.from_user.id, new_goal, "adjusted"))
+    
     await show_theoretical_path(call, state_data, new_goal)
 
 
@@ -971,6 +1091,10 @@ async def select_goal_30(call: CallbackQuery, state_data: Dict):
     }
     
     update_user_state_data(call.from_user.id, current_destination=new_goal)
+    
+    # ✅ СОХРАНЯЕМ В БД
+    asyncio.create_task(save_goal_to_db(call.from_user.id, new_goal, "adjusted"))
+    
     await show_theoretical_path(call, state_data, new_goal)
 
 
@@ -987,6 +1111,10 @@ async def select_goal_blocks(call: CallbackQuery, state_data: Dict):
     }
     
     update_user_state_data(call.from_user.id, current_destination=new_goal)
+    
+    # ✅ СОХРАНЯЕМ В БД
+    asyncio.create_task(save_goal_to_db(call.from_user.id, new_goal, "adjusted"))
+    
     await show_theoretical_path(call, state_data, new_goal)
 
 
@@ -1025,6 +1153,10 @@ async def build_route(call: CallbackQuery, state_data: Dict, goal_id: str):
     
     if route:
         update_user_state_data(user_id, current_route=route)
+        
+        # ✅ СОХРАНЯЕМ МАРШРУТ В БД
+        asyncio.create_task(save_route_to_db(user_id, route, goal_info))
+        
         await show_route_step(call, state_data, 1, route, status_msg)
     else:
         # Если ИИ не сработал, показываем резервный маршрут
@@ -1165,6 +1297,9 @@ async def route_step_done(call: CallbackQuery, state_data: Dict):
         route_progress=route_progress
     )
     
+    # ✅ ОБНОВЛЯЕМ ПРОГРЕСС В БД
+    asyncio.create_task(update_route_progress_in_db(user_id, step, route_progress))
+    
     if next_step > 3:
         await complete_route(call, state_data)
     else:
@@ -1186,6 +1321,17 @@ async def complete_route(call: CallbackQuery, state_data: Dict):
     user_name = get_user_name(user_id)
     
     destination = state_data.get("current_destination", {})
+    
+    # ✅ ЛОГИРУЕМ ЗАВЕРШЕНИЕ В БД
+    asyncio.create_task(db.log_event(
+        user_id,
+        'route_completed',
+        {
+            'goal_id': destination.get('id'),
+            'goal_name': destination.get('name'),
+            'timestamp': time.time()
+        }
+    ))
     
     text = f"""
 🎉 {bold('МАРШРУТ ЗАВЕРШЕН!')}
@@ -1214,6 +1360,9 @@ async def complete_route(call: CallbackQuery, state_data: Dict):
     
     # Очищаем данные маршрута
     update_user_state_data(user_id, route_step=None, current_destination=None, current_route=None)
+    
+    # ✅ СОХРАНЯЕМ ПОЛЬЗОВАТЕЛЯ В БД
+    asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
 
 
 # ============================================
@@ -1280,5 +1429,10 @@ __all__ = [
     # Новые функции для категорий
     'show_goals_categories',
     'show_goals_for_category',
-    'select_goal'
+    'select_goal',
+    # ✅ ДОБАВЛЕНО: функции для БД
+    'save_goal_to_db',
+    'save_route_to_db',
+    'update_route_progress_in_db',
+    'save_feasibility_result_to_db'
 ]
