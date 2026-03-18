@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики команды /start и начальных экранов для MAX
-ДОБАВЛЕНО: Сохранение пользователей в PostgreSQL
+ВЕРСИЯ 2.0 - ПОЛНАЯ ИНТЕГРАЦИЯ С PostgreSQL
+ДОБАВЛЕНО: Загрузка пользователей из БД, автосохранение
 """
 import logging
 import time
 import asyncio
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 
@@ -25,14 +26,14 @@ from message_utils import safe_send_message
 
 # Импорты из state.py
 from state import (
-    user_data, user_names, user_contexts, 
+    user_data, user_names, user_contexts, user_routes,
     get_user_context, get_user_context_dict,
     clear_state, set_state, get_state, TestStates,
-    get_user_name
+    get_user_name, load_user_from_db
 )
 
-# Импортируем базу данных из main
-from main import db, save_user_to_db
+# ✅ ИСПРАВЛЕНО: импортируем из db_instance вместо main
+from db_instance import db, save_user_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,28 @@ def get_user_name_local(user_id: int) -> str:
     """Получает имя пользователя (локальная версия)"""
     return user_names.get(user_id, "Пользователь")
 
+def get_profile_code(user_id: int) -> str:
+    """Получает код профиля пользователя"""
+    data = user_data.get(user_id, {})
+    profile_data = data.get("profile_data", {})
+    
+    # Пробуем получить из разных мест
+    code = profile_data.get('display_name')
+    if code:
+        return code
+    
+    # Если нет, генерируем из векторов
+    scores = {}
+    from profiles import VECTORS
+    for k in VECTORS:
+        levels = data.get("behavioral_levels", {}).get(k, [])
+        scores[k] = sum(levels) / len(levels) if levels else 3.0
+    
+    if scores:
+        return f"СБ-{round(scores.get('СБ', 3))}_ТФ-{round(scores.get('ТФ', 3))}_УБ-{round(scores.get('УБ', 3))}_ЧВ-{round(scores.get('ЧВ', 3))}"
+    
+    return "СБ-4_ТФ-4_УБ-4_ЧВ-4"
+
 # ============================================
 # СТАТИСТИКА (теперь с сохранением в БД)
 # ============================================
@@ -77,6 +100,30 @@ class Stats:
 
 stats = Stats()
 
+
+# ============================================
+# ✅ НОВАЯ ФУНКЦИЯ: ЗАГРУЗКА ПОЛЬЗОВАТЕЛЯ ИЗ БД
+# ============================================
+
+async def ensure_user_loaded(user_id: int, user_name: str = None) -> bool:
+    """
+    Проверяет, загружен ли пользователь, и загружает из БД если нужно
+    Возвращает True, если данные загружены
+    """
+    # Если пользователь уже в памяти, просто обновляем имя
+    if user_id in user_data or user_id in user_contexts:
+        if user_name and user_id not in user_names:
+            user_names[user_id] = user_name
+        return True
+    
+    # Пробуем загрузить из БД
+    logger.info(f"🔄 Загружаем пользователя {user_id} из БД...")
+    loaded = await load_user_from_db(user_id, db)
+    
+    if loaded and user_name:
+        user_names[user_id] = user_name
+    
+    return loaded
 
 # ============================================
 # ОБРАБОТЧИКИ КОМАНД
@@ -101,6 +148,22 @@ def cmd_start(message: Message):
         language_code=message.from_user.language_code
     ))
     
+    # ✅ ПРОВЕРЯЕМ, ЕСТЬ ЛИ ПОЛЬЗОВАТЕЛЬ В БД
+    def run_load_check():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loaded = loop.run_until_complete(ensure_user_loaded(user_id, user_name))
+        loop.close()
+        
+        # После загрузки продолжаем обработку
+        continue_start(message, user_id, user_name, loaded)
+    
+    threading.Thread(target=run_load_check, daemon=True).start()
+
+
+def continue_start(message: Message, user_id: int, user_name: str, loaded_from_db: bool):
+    """Продолжает обработку /start после проверки БД"""
+    
     # Получаем или создаем контекст
     if user_id not in user_contexts:
         user_contexts[user_id] = UserContext(user_id)
@@ -117,16 +180,17 @@ def cmd_start(message: Message):
     
     if profile_data or is_test_completed(user_data_dict):
         # У пользователя уже есть профиль
-        profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
+        profile_code = get_profile_code(user_id)
+        
+        db_status = "✅ из базы данных" if loaded_from_db else "✅ из памяти"
         
         text = f"""
 🧠 {bold('ФРЕДИ: ВИРТУАЛЬНЫЙ ПСИХОЛОГ')}
 
-👋 О, {user_name}, я вас помню!
-(У меня, в отличие от людей, с памятью всё отлично — спасибо базе данных)
+👋 О, {user_name}, я вас помню {db_status}!
+(У меня, в отличие от людей, с памятью всё отлично)
 
 📊 {bold('ВАШ ПРОФИЛЬ:')} {profile_code}
-(Лежит у меня в архивах, пылится...)
 
 ❓ {bold('ЧТО ДЕЛАЕМ?')}
 
@@ -144,7 +208,7 @@ def cmd_start(message: Message):
     
     # Проверяем, заполнен ли контекст (город, пол, возраст)
     if not (context.city and context.gender and context.age):
-        # Новый пользователь - показываем красивое приветствие из Telegram
+        # Новый пользователь - показываем красивое приветствие
         welcome_text = f"""
 {user_name}, привет! Ну, здравствуйте, дорогой человек! 👋
 
@@ -199,6 +263,44 @@ def cmd_menu(message: Message):
 
 
 # ============================================
+# ✅ НОВАЯ КОМАНДА: ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ
+# ============================================
+
+@bot.message_handler(commands=['sync'])
+def cmd_sync(message: Message):
+    """Принудительная синхронизация с БД (для админов)"""
+    user_id = message.from_user.id
+    
+    # Проверяем, админ ли это
+    from config import ADMIN_IDS
+    if user_id not in ADMIN_IDS:
+        safe_send_message(message, "⛔ Доступ запрещен")
+        return
+    
+    def run_sync():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        saved_count = 0
+        for uid in list(user_data.keys()):
+            try:
+                loop.run_until_complete(save_user_to_db(uid, user_data, user_contexts, user_routes))
+                saved_count += 1
+            except Exception as e:
+                logger.error(f"❌ Ошибка синхронизации {uid}: {e}")
+        
+        loop.close()
+        
+        safe_send_message(
+            message,
+            f"✅ Синхронизировано {saved_count} пользователей",
+            delete_previous=True
+        )
+    
+    threading.Thread(target=run_sync, daemon=True).start()
+
+
+# ============================================
 # CALLBACK-ОБРАБОТЧИКИ
 # ============================================
 
@@ -236,6 +338,9 @@ def callback_restart_test(call: CallbackQuery):
             context.profile_data = {}
         if hasattr(context, 'confinement_model'):
             context.confinement_model = {}
+    
+    # Сохраняем изменения в БД
+    asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
     
     # Логируем событие в БД
     asyncio.create_task(db.log_event(user_id, 'restart_test', {}))
@@ -297,7 +402,7 @@ def callback_back_to_start(call: CallbackQuery):
 # ============================================
 
 def show_why_details(call: CallbackQuery):
-    """Показывает детальную информацию о боте (из Telegram)"""
+    """Показывает детальную информацию о боте"""
     user_id = call.from_user.id
     
     text = f"""
@@ -404,6 +509,7 @@ def show_main_menu(message: Message, context: UserContext):
 __all__ = [
     'cmd_start',
     'cmd_menu',
+    'cmd_sync',  # ✅ Добавлено
     'show_why_details',
     'show_intro',
     'show_main_menu',
@@ -412,5 +518,7 @@ __all__ = [
     'callback_restart_test',
     'callback_show_profile',
     'callback_show_modes',
-    'callback_back_to_start'
+    'callback_back_to_start',
+    'ensure_user_loaded',  # ✅ Добавлено
+    'get_profile_code'  # ✅ Добавлено
 ]
