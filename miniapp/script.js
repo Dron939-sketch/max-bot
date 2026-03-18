@@ -1,6 +1,7 @@
 // ============================================
 // script.js - ФРЕДИ: ВИРТУАЛЬНЫЙ ПСИХОЛОГ
 // Все тексты взяты из Telegram-бота
+// ИСПРАВЛЕНО: подстановка имени, рабочая кнопка
 // ============================================
 
 // ============================================
@@ -123,6 +124,9 @@ function setupBackButton() {
         } else if (app.currentScreen === 'mode') {
             // С выбора режима возвращаемся к главному меню
             showScreen('main');
+        } else if (app.currentScreen === 'stage1') {
+            // С этапа 1 возвращаемся к приветствию
+            showScreen('welcome');
         } else {
             // По умолчанию - на главную
             showScreen('main');
@@ -144,6 +148,7 @@ function showScreen(screen) {
         'why': '🧐 ФРЕДИ',
         'main': '🏠 ФРЕДИ',
         'mode': '🔮 ФРЕДИ',
+        'stage1': '🧠 ЭТАП 1',
         'profile': '📊 ПОРТРЕТ',
         'thought': '🧠 МЫСЛИ',
         'goals': '🎯 ЦЕЛИ',
@@ -173,6 +178,9 @@ function showScreen(screen) {
             case 'mode':
                 renderModeScreen(content);
                 break;
+            case 'stage1':
+                renderStage1Screen(content);
+                break;
             case 'profile':
                 renderProfileScreen(content);
                 break;
@@ -198,6 +206,7 @@ function showScreen(screen) {
 // ============================================
 
 function renderWelcomeScreen(container) {
+    // ✅ Берем имя из данных пользователя
     const userName = app.userData.user_name || 'Андрей';
     
     const html = `
@@ -248,7 +257,7 @@ function renderWelcomeScreen(container) {
             </div>
             
             <div class="action-buttons">
-                <button class="action-btn primary" onclick="startContext()">
+                <button class="action-btn primary" onclick="startTest()">
                     🚀 ДАВАЙ, ПОГНАЛИ!
                 </button>
                 <button class="action-btn secondary" onclick="showScreen('why')">
@@ -302,8 +311,44 @@ function renderWhyScreen(container) {
             </div>
             
             <div class="action-buttons">
-                <button class="action-btn primary" onclick="startContext()">
+                <button class="action-btn primary" onclick="startTest()">
                     🚀 ПОГНАЛИ!
+                </button>
+                <button class="action-btn secondary" onclick="showScreen('welcome')">
+                    ◀️ НАЗАД
+                </button>
+            </div>
+        </div>
+    `;
+    
+    container.innerHTML = html;
+}
+
+// ============================================
+// ЭКРАН ЭТАПА 1 (ПОСЛЕ НАЖАТИЯ "ДАВАЙ, ПОГНАЛИ!")
+// ============================================
+
+function renderStage1Screen(container) {
+    const html = `
+        <div class="welcome-screen">
+            <div class="welcome-text">
+                <p>🧠 <strong>ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ</strong></p>
+                
+                <p>Восприятие — это линза, через которую вы смотрите на мир.</p>
+                
+                <p>🔍 <strong>Что мы исследуем:</strong><br>
+                • Куда направлено ваше внимание — вовне или внутрь<br>
+                • Какая тревога доминирует — страх отвержения или страх потери контроля</p>
+                
+                <p>📊 <strong>Вопросов:</strong> 8<br>
+                ⏱ <strong>Время:</strong> ~3 минуты</p>
+                
+                <p>Отвечайте честно — это поможет мне лучше понять вас.</p>
+            </div>
+            
+            <div class="action-buttons">
+                <button class="action-btn primary" onclick="startStage1()">
+                    ▶️ НАЧАТЬ ИССЛЕДОВАНИЕ
                 </button>
                 <button class="action-btn secondary" onclick="showScreen('welcome')">
                     ◀️ НАЗАД
@@ -640,15 +685,23 @@ function showError(message) {
 }
 
 // ============================================
-// ОБРАБОТЧИКИ ДЕЙСТВИЙ
+// НАЧАЛО ТЕСТА
 // ============================================
 
-function startContext() {
+function startTest() {
     console.log('🚀 Начинаем тест');
-    // Здесь будет переход к тесту
-    // Пока просто показываем уведомление
-    alert('Функция теста будет доступна в следующей версии!');
+    showScreen('stage1');
 }
+
+function startStage1() {
+    console.log('▶️ Начинаем этап 1');
+    // Здесь будет логика первого вопроса
+    alert('Этап 1: Первый вопрос появится здесь');
+}
+
+// ============================================
+// ОБРАБОТЧИКИ ДЕЙСТВИЙ
+// ============================================
 
 function showBenefits() {
     console.log('📖 Показываем преимущества теста');
@@ -749,7 +802,8 @@ function escapeHtml(text) {
 // ============================================
 
 window.showScreen = showScreen;
-window.startContext = startContext;
+window.startTest = startTest;
+window.startStage1 = startStage1;
 window.selectMode = selectMode;
 window.setMode = setMode;
 window.selectGoal = selectGoal;
