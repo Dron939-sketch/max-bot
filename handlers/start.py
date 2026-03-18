@@ -2,9 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики команды /start и начальных экранов для MAX
+ДОБАВЛЕНО: Сохранение пользователей в PostgreSQL
 """
 import logging
 import time
+import asyncio
 from typing import Optional
 
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
@@ -26,8 +28,11 @@ from state import (
     user_data, user_names, user_contexts, 
     get_user_context, get_user_context_dict,
     clear_state, set_state, get_state, TestStates,
-    get_user_name  # ✅ ДОБАВЛЕНО для show_intro
+    get_user_name
 )
+
+# Импортируем базу данных из main
+from main import db, save_user_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +61,7 @@ def get_user_name_local(user_id: int) -> str:
     return user_names.get(user_id, "Пользователь")
 
 # ============================================
-# ВРЕМЕННАЯ СТАТИСТИКА (потом в БД)
+# СТАТИСТИКА (теперь с сохранением в БД)
 # ============================================
 class Stats:
     def __init__(self):
@@ -64,6 +69,8 @@ class Stats:
     
     def register_start(self, user_id):
         self.starts[user_id] = time.time()
+        # Логируем событие в БД
+        asyncio.create_task(db.log_event(user_id, 'start', {'timestamp': time.time()}))
     
     def get_starts(self):
         return self.starts
@@ -81,9 +88,18 @@ def cmd_start(message: Message):
     user_id = message.from_user.id
     user_name = message.from_user.first_name or "Пользователь"
     
-    # Сохраняем имя
+    # Сохраняем имя в памяти
     user_names[user_id] = user_name
     clear_state(user_id)
+    
+    # Сохраняем пользователя в БД (асинхронно)
+    asyncio.create_task(db.save_telegram_user(
+        user_id=user_id,
+        first_name=user_name,
+        username=message.from_user.username,
+        last_name=message.from_user.last_name,
+        language_code=message.from_user.language_code
+    ))
     
     # Получаем или создаем контекст
     if user_id not in user_contexts:
@@ -92,7 +108,7 @@ def cmd_start(message: Message):
     context = user_contexts[user_id]
     context.name = user_name
     
-    # Регистрируем старт
+    # Регистрируем старт (событие в БД)
     stats.register_start(user_id)
     
     # Проверяем, есть ли уже профиль
@@ -221,6 +237,9 @@ def callback_restart_test(call: CallbackQuery):
         if hasattr(context, 'confinement_model'):
             context.confinement_model = {}
     
+    # Логируем событие в БД
+    asyncio.create_task(db.log_event(user_id, 'restart_test', {}))
+    
     # Показываем приветствие
     text = f"""
 🔄 <b>ТЕСТ ПЕРЕЗАПУЩЕН</b>
@@ -279,6 +298,7 @@ def callback_back_to_start(call: CallbackQuery):
 
 def show_why_details(call: CallbackQuery):
     """Показывает детальную информацию о боте (из Telegram)"""
+    user_id = call.from_user.id
     
     text = f"""
 🎭 {bold('Ну, вопрос хороший. Давайте по существу.')}
@@ -318,7 +338,7 @@ def show_why_details(call: CallbackQuery):
 
 
 # ============================================
-# ФУНКЦИЯ SHOW_INTRO (ИСПРАВЛЕНО)
+# ФУНКЦИЯ SHOW_INTRO
 # ============================================
 
 def show_intro(message: Message):
@@ -334,7 +354,6 @@ def show_intro(message: Message):
 👇 {bold('Выберите, с какой интонацией будем общаться:')}
 """
     
-    # ✅ ИСПРАВЛЕНО: убрана кнопка "❓ ЗАДАТЬ ВОПРОС"
     keyboard = InlineKeyboardMarkup()
     keyboard.row(
         InlineKeyboardButton(text="🔴 ЖЕСТКИЙ", callback_data="mode_hard"),
@@ -343,7 +362,6 @@ def show_intro(message: Message):
     )
     keyboard.row(
         InlineKeyboardButton(text="📖 ЧТО ДАЕТ ТЕСТ", callback_data="show_benefits")
-        # ❌ Кнопка "❓ ЗАДАТЬ ВОПРОС" удалена
     )
     
     safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
