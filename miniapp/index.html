@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Фреди - Психологический портрет</title>
+    <title>Фреди - Виртуальный психолог</title>
     
-    <!-- MAX Web App Bridge -->
+    <!-- MAX Web App Bridge (для доступа к данным пользователя) -->
     <script src="https://st.max.ru/js/max-web-app.js"></script>
     
     <!-- Подключаем CSS -->
@@ -13,29 +13,27 @@
 </head>
 <body>
     <div id="app" class="container">
-        <!-- Заголовок с именем пользователя -->
+        <!-- Шапка с кнопкой назад -->
         <div class="header">
-            <h1 id="user-greeting">🧠 Фреди</h1>
+            <button class="back-btn" id="backBtn" onclick="window.history.back()">←</button>
+            <h1 id="header-title">🧠 ФРЕДИ</h1>
+            <div class="header-placeholder"></div>
         </div>
-        
-        <!-- Прогресс-бар будет добавлен скриптом -->
-        
-        <!-- Контент будет загружаться сюда -->
+
+        <!-- Основной контент -->
         <div id="content" class="content">
-            <div class="loading">
-                <div class="spinner"></div>
-                <p>Загружаю ваш портрет...</p>
-            </div>
+            <!-- Сюда будет загружаться активный экран -->
         </div>
-        
-        <!-- Навигационные кнопки -->
-        <div class="nav-buttons" id="nav-buttons">
-            <button class="nav-btn active" data-view="profile">📊 Портрет</button>
-            <button class="nav-btn" data-view="thought">🧠 Мысли</button>
-            <button class="nav-btn" data-view="ideas">🌟 Идеи</button>
+
+        <!-- Нижняя навигация (всегда видна) -->
+        <div class="nav-bar" id="navBar">
+            <button class="nav-btn active" data-screen="main">🏠 Главная</button>
+            <button class="nav-btn" data-screen="profile">📊 Портрет</button>
+            <button class="nav-btn" data-screen="thought">🧠 Мысли</button>
+            <button class="nav-btn" data-screen="goals">🎯 Цели</button>
         </div>
     </div>
-    
+
     <!-- Подключаем JavaScript -->
     <script src="script.js"></script>
 </body>
