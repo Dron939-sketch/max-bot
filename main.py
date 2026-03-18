@@ -5,7 +5,7 @@
 ВЕРСИЯ ДЛЯ MAX
 ИСПРАВЛЕНО: обработка вопросов без await для синхронных функций
 ДОБАВЛЕНО: FastAPI для мини-приложения
-ИСПРАВЛЕНО: f-strings quotes error
+ИСПРАВЛЕНО: f-strings quotes error (финальная версия)
 """
 
 import os
@@ -124,12 +124,12 @@ from handlers.modes import show_mode_selection, show_mode_selected, show_main_me
 from handlers.start import cmd_start as start_cmd, show_why_details
 from handlers.profile import (
     show_profile, show_ai_profile, show_psychologist_thought, show_final_profile,
-    set_morning_manager  # ✅ Добавлено для установки morning_manager
+    set_morning_manager
 )
 from handlers.stages import *
 from handlers.help import show_help, show_tale, show_benefits
 from handlers.goals import *
-from handlers.questions import *  # Импортируем всё, включая process_text_question_sync
+from handlers.questions import *
 from handlers.admin import *
 from handlers.voice import handle_voice_message, send_voice_to_max
 
@@ -166,10 +166,10 @@ anchoring = Anchoring()
 weekend_planner = WeekendPlanner()
 scheduler = TaskScheduler()
 
-# ✅ Устанавливаем morning_manager для profile.py (чтобы избежать циклического импорта)
+# Устанавливаем morning_manager для profile.py (чтобы избежать циклического импорта)
 set_morning_manager(morning_manager)
 
-# ✅ Привязываем morning_manager к боту и контекстам
+# Привязываем morning_manager к боту и контекстам
 morning_manager.set_bot(bot)
 morning_manager.set_contexts(user_contexts, user_data)
 
@@ -807,7 +807,7 @@ def show_main_menu_after_mode(message: types.Message, context: UserContext):
     context.update_weather()
     day_context = context.get_day_context()
     
-    # 👇 ИСПРАВЛЕННАЯ СТРОКА (использованы одинарные кавычки внутри f-строки)
+    # 👇 ИСПРАВЛЕННАЯ СТРОКА - используются одинарные кавычки внутри f-строки
     text = f"{mode_config['emoji']} {bold(f'РЕЖИМ {mode_config['display_name']}')}\n\n"
     text += context.get_greeting(context.name) + "\n"
     text += f"📅 Сегодня {day_context['weekday']}, {day_context['day']} {day_context['month']}, {day_context['time_str']}\n"
