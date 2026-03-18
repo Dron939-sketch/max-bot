@@ -1,163 +1,224 @@
+/* styles.css - Telegram-стиль для мини-приложения Фреди */
+:root {
+    --tg-bg: #ffffff;
+    --tg-text: #000000;
+    --tg-hint: #707579;
+    --tg-link: #0047b3;
+    --tg-button: #40a7e3;
+    --tg-button-text: #ffffff;
+    --tg-secondary-bg: #f0f0f0;
+    --tg-border: #e0e0e0;
+    --tg-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    --tg-radius: 12px;
+    --tg-radius-small: 8px;
+}
+
 * {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
 }
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    background: #f5f7fa;
-    color: #1e293b;
-    line-height: 1.6;
+    background: var(--tg-bg);
+    color: var(--tg-text);
+    line-height: 1.5;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
 }
 
 .container {
-    max-width: 800px;
+    max-width: 600px;
     margin: 0 auto;
-    padding: 16px;
+    padding: 0;
     min-height: 100vh;
-    display: flex;
-    flex-direction: column;
+    background: var(--tg-bg);
 }
 
+/* Заголовок как в Telegram */
 .header {
-    text-align: center;
-    margin-bottom: 24px;
-    padding-bottom: 16px;
-    border-bottom: 2px solid #e2e8f0;
+    background: var(--tg-bg);
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--tg-border);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    backdrop-filter: blur(10px);
+    background: rgba(255, 255, 255, 0.9);
 }
 
 .header h1 {
-    font-size: 28px;
-    font-weight: 700;
-    color: #0f172a;
-    margin-bottom: 8px;
-}
-
-.header p {
-    color: #475569;
-    font-size: 16px;
-}
-
-.content {
-    flex: 1;
-    background: white;
-    border-radius: 20px;
-    padding: 24px;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    margin-bottom: 20px;
-    min-height: 300px;
-}
-
-/* Стили для портрета */
-.profile-section {
-    margin-bottom: 24px;
-}
-
-.profile-section h2 {
     font-size: 20px;
     font-weight: 600;
-    color: #0f172a;
-    margin-bottom: 12px;
+    color: var(--tg-text);
     display: flex;
     align-items: center;
     gap: 8px;
 }
 
+.header h1 span {
+    color: var(--tg-hint);
+    font-size: 16px;
+    font-weight: normal;
+    margin-left: auto;
+}
+
+/* Контент */
+.content {
+    padding: 16px;
+}
+
+/* Сообщения как в Telegram */
+.profile-section {
+    background: var(--tg-secondary-bg);
+    border-radius: var(--tg-radius);
+    padding: 16px;
+    margin-bottom: 12px;
+    border: 1px solid var(--tg-border);
+}
+
+.profile-section h2 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--tg-hint);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
 .profile-section h2 span {
-    font-size: 24px;
+    font-size: 18px;
 }
 
 .profile-section p {
-    color: #334155;
-    margin-bottom: 16px;
-    padding-left: 32px;
+    font-size: 16px;
+    color: var(--tg-text);
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
-/* Стили для мыслей психолога */
+/* Блок "Мысли психолога" как пересланное сообщение */
 .thought-block {
-    background: #f0f9ff;
-    border-left: 4px solid #0284c7;
+    background: var(--tg-secondary-bg);
+    border-radius: var(--tg-radius);
     padding: 16px;
-    margin-bottom: 16px;
-    border-radius: 0 12px 12px 0;
+    margin-bottom: 12px;
+    border-left: 3px solid var(--tg-button);
+    border: 1px solid var(--tg-border);
+    position: relative;
+}
+
+.thought-block::before {
+    content: '📎';
+    position: absolute;
+    top: -8px;
+    right: 12px;
+    background: var(--tg-bg);
+    padding: 2px 6px;
+    border-radius: 12px;
+    font-size: 12px;
+    color: var(--tg-hint);
+    border: 1px solid var(--tg-border);
 }
 
 .thought-title {
-    font-weight: 600;
-    color: #0369a1;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--tg-button);
     margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
-/* Стили для идей на выходные */
+.thought-block p {
+    font-size: 15px;
+    color: var(--tg-text);
+}
+
+/* Карточки идей как сообщения */
 .idea-card {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    padding: 16px;
-    margin-bottom: 12px;
-    transition: transform 0.2s;
+    background: var(--tg-bg);
+    border: 1px solid var(--tg-border);
+    border-radius: var(--tg-radius);
+    padding: 14px;
+    margin-bottom: 8px;
+    transition: background 0.2s;
 }
 
-.idea-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+.idea-card:active {
+    background: var(--tg-secondary-bg);
 }
 
 .idea-title {
-    font-weight: 600;
-    color: #0f172a;
-    margin-bottom: 8px;
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--tg-text);
+    margin-bottom: 4px;
 }
 
 .idea-desc {
-    color: #475569;
     font-size: 14px;
+    color: var(--tg-hint);
 }
 
-/* Навигационные кнопки */
+/* Навигационные кнопки как в Telegram */
 .nav-buttons {
     display: flex;
     gap: 8px;
-    justify-content: center;
-    background: white;
-    padding: 8px;
-    border-radius: 50px;
-    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+    padding: 12px 16px;
+    background: var(--tg-bg);
+    border-top: 1px solid var(--tg-border);
+    position: sticky;
+    bottom: 0;
+    backdrop-filter: blur(10px);
+    background: rgba(255, 255, 255, 0.9);
 }
 
 .nav-btn {
     flex: 1;
-    padding: 12px 8px;
+    padding: 10px 12px;
     border: none;
-    background: transparent;
-    color: #64748b;
-    font-size: 14px;
+    background: var(--tg-secondary-bg);
+    color: var(--tg-text);
+    font-size: 15px;
     font-weight: 500;
-    border-radius: 40px;
+    border-radius: 20px;
     cursor: pointer;
-    transition: all 0.3s;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border: 1px solid transparent;
 }
 
 .nav-btn.active {
-    background: #3b82f6;
-    color: white;
-    box-shadow: 0 4px 6px -1px rgba(59, 130, 246, 0.3);
+    background: var(--tg-button);
+    color: var(--tg-button-text);
 }
 
-/* Загрузка */
+.nav-btn:active {
+    transform: scale(0.97);
+}
+
+/* Анимация загрузки */
 .loading {
     text-align: center;
-    padding: 40px 0;
-    color: #64748b;
+    padding: 40px 16px;
+    color: var(--tg-hint);
 }
 
 .spinner {
-    width: 40px;
-    height: 40px;
-    margin: 0 auto 16px;
-    border: 3px solid #e2e8f0;
-    border-top-color: #3b82f6;
+    width: 32px;
+    height: 32px;
+    margin: 0 auto 12px;
+    border: 2px solid var(--tg-border);
+    border-top-color: var(--tg-button);
     border-radius: 50%;
     animation: spin 1s linear infinite;
 }
@@ -166,28 +227,100 @@ body {
     to { transform: rotate(360deg); }
 }
 
-/* Ошибки */
+.loading p {
+    font-size: 15px;
+    color: var(--tg-hint);
+}
+
+/* Сообщения об ошибках */
 .error {
-    background: #fef2f2;
-    color: #991b1b;
+    background: #fee;
+    color: #c00;
     padding: 16px;
-    border-radius: 12px;
+    border-radius: var(--tg-radius);
     text-align: center;
-    border-left: 4px solid #dc2626;
+    border: 1px solid #fcc;
+    font-size: 15px;
 }
 
 /* Адаптивность */
 @media (max-width: 480px) {
-    .container {
-        padding: 8px;
-    }
-    
-    .content {
-        padding: 16px;
+    .header h1 {
+        font-size: 18px;
     }
     
     .nav-btn {
-        font-size: 12px;
-        padding: 10px 4px;
+        font-size: 14px;
+        padding: 8px 10px;
     }
+    
+    .profile-section {
+        padding: 14px;
+    }
+    
+    .profile-section h2 {
+        font-size: 14px;
+    }
+    
+    .profile-section p {
+        font-size: 15px;
+    }
+}
+
+/* Темная тема (если поддерживается) */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --tg-bg: #1f1f1f;
+        --tg-text: #ffffff;
+        --tg-hint: #aaaaaa;
+        --tg-secondary-bg: #2d2d2d;
+        --tg-border: #3a3a3a;
+        --tg-button: #40a7e3;
+        --tg-button-text: #ffffff;
+    }
+    
+    .header {
+        background: rgba(31, 31, 31, 0.9);
+    }
+    
+    .nav-buttons {
+        background: rgba(31, 31, 31, 0.9);
+    }
+    
+    .error {
+        background: #442222;
+        color: #ff8888;
+        border-color: #662222;
+    }
+}
+
+/* Стили для ссылок и кнопок */
+a, .clickable {
+    color: var(--tg-link);
+    text-decoration: none;
+}
+
+/* Разделители */
+hr {
+    border: none;
+    border-top: 1px solid var(--tg-border);
+    margin: 16px 0;
+}
+
+/* Скроллбар как в Telegram */
+::-webkit-scrollbar {
+    width: 4px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--tg-hint);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--tg-button);
 }
