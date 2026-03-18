@@ -95,9 +95,52 @@ function updateProgressBar(percent) {
     }
 }
 
+// Получение ID пользователя (с запасными вариантами)
+function getUserId() {
+    // 1. Пробуем получить из URL параметров
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlUserId = urlParams.get('user_id');
+    
+    if (urlUserId) {
+        console.log('✅ User ID из URL:', urlUserId);
+        return urlUserId;
+    }
+    
+    // 2. Пробуем получить из WebApp (Telegram/Max)
+    try {
+        if (window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
+            const tgId = window.Telegram.WebApp.initDataUnsafe.user.id;
+            console.log('✅ User ID из Telegram WebApp:', tgId);
+            return tgId;
+        }
+    } catch (e) {}
+    
+    // 3. Пробуем получить из MAX WebApp
+    try {
+        if (window.WebApp?.initDataUnsafe?.user?.id) {
+            const maxId = window.WebApp.initDataUnsafe.user.id;
+            console.log('✅ User ID из MAX WebApp:', maxId);
+            return maxId;
+        }
+    } catch (e) {}
+    
+    // 4. Для теста в браузере - спрашиваем у пользователя
+    const testId = prompt('Введите ваш ID для теста (или нажмите Отмена для ID 213102077):');
+    if (testId) {
+        console.log('⚠️ Использую тестовый ID:', testId);
+        return testId;
+    }
+    
+    // 5. Тестовый ID по умолчанию
+    console.log('⚠️ Использую тестовый ID по умолчанию: 213102077');
+    return '213102077';
+}
+
 // Инициализация при загрузке страницы
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('Mini-app initialized');
+    console.log('🎯 Mini-app initialized');
+    console.log('📍 Current URL:', window.location.href);
+    console.log('📍 URL params:', window.location.search);
     
     // Добавляем прогресс-бар в DOM
     const app = document.getElementById('app');
@@ -109,13 +152,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         header.after(progressBar);
     }
     
-    // Получаем параметры из URL
-    const urlParams = new URLSearchParams(window.location.search);
-    userId = urlParams.get('user_id');
+    // Получаем ID пользователя
+    userId = getUserId();
 
-    // Если нет user_id, показываем ошибку
+    // Если нет user_id даже после всех попыток
     if (!userId) {
-        showError('Ошибка: не передан ID пользователя');
+        showError('Ошибка: не удалось определить ID пользователя');
         return;
     }
 
