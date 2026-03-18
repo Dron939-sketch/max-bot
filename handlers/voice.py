@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики голосовых сообщений для MAX
-Версия 2.3 - ПОЛНАЯ с поддержкой отправки голоса (исправлены циклические импорты)
+Версия 2.4 - ПОЛНАЯ с диагностикой токена и исправленными await
 """
 
 import os
@@ -50,18 +50,36 @@ async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None
         logger.error("❌ Нет аудиоданных для отправки")
         return False
     
+    # ========== ДИАГНОСТИКА ТОКЕНА ==========
     if not MAX_TOKEN:
-        logger.error("❌ MAX_TOKEN не настроен")
+        logger.error("❌ MAX_TOKEN не настроен в config.py")
+        logger.error("Проверьте переменные окружения на Render")
         return False
+    
+    # Проверяем, что токен не равен заглушке
+    if MAX_TOKEN == "ВАШ_ТОКЕН_ЗДЕСЬ":
+        logger.error("❌ MAX_TOKEN не заменен на реальный токен (стоит заглушка)")
+        return False
+    
+    # Показываем первые символы токена для отладки (безопасно)
+    token_preview = MAX_TOKEN[:10] + "..." if len(MAX_TOKEN) > 10 else MAX_TOKEN
+    logger.info(f"🔑 Использую токен: {token_preview}")
+    logger.info(f"📤 Отправка голоса в чат {chat_id}")
+    # =========================================
     
     temp_path = None
     try:
         # ШАГ 1: Получаем URL для загрузки
         async with aiohttp.ClientSession() as session:
-            # Запрос на получение upload URL
+            headers = {
+                "Authorization": f"Bearer {MAX_TOKEN}",
+                "Content-Type": "application/json"
+            }
+            
+            logger.info("📡 Запрашиваем upload URL...")
             upload_response = await session.post(
                 "https://platform-api.max.ru/uploads?type=audio",
-                headers={"Authorization": f"Bearer {MAX_TOKEN}"}
+                headers=headers
             )
             
             if upload_response.status != 200:
@@ -78,6 +96,7 @@ async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None
                 return False
             
             logger.info(f"✅ Получен upload URL: {upload_url[:50]}...")
+            logger.info(f"✅ Получен token для загрузки: {token[:10]}...")
             
             # ШАГ 2: Загружаем аудиофайл
             # Создаем временный файл
@@ -117,12 +136,10 @@ async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None
                 ]
             }
             
+            logger.info("📤 Отправляем сообщение с аудио...")
             message_response = await session.post(
                 "https://platform-api.max.ru/messages",
-                headers={
-                    "Authorization": f"Bearer {MAX_TOKEN}",
-                    "Content-Type": "application/json"
-                },
+                headers=headers,
                 json=message_data
             )
             
