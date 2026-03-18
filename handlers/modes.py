@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики выбора и подтверждения режима для MAX
-Версия 2.0 - ДОБАВЛЕНО СОХРАНЕНИЕ В БД
+Версия 2.1 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
 ИСПРАВЛЕНО: все f-строки с кавычками
 """
 import logging
 import asyncio
 import time
+import threading  # ✅ ДОБАВЛЕНО
 from maxibot import types
 from bot_instance import bot
 from config import COMMUNICATION_MODES
@@ -38,6 +39,27 @@ from state import (
 from db_instance import db, save_user_to_db
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# ============================================
+
+def run_async_task(coro_func, *args, **kwargs):
+    """
+    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
+    """
+    def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            coro = coro_func(*args, **kwargs)
+            loop.run_until_complete(coro)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+        finally:
+            loop.close()
+    
+    threading.Thread(target=_wrapper, daemon=True).start()
 
 # ============================================
 # ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
@@ -220,8 +242,8 @@ def set_mode_coach(call: types.CallbackQuery):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ СОХРАНЯЕМ В БД
-    asyncio.create_task(save_mode_to_db(user_id, "coach"))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_mode_to_db, user_id, "coach")
     
     # Показываем подтверждение
     show_mode_selected(call.message, "coach")
@@ -249,8 +271,8 @@ def set_mode_psychologist(call: types.CallbackQuery):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ СОХРАНЯЕМ В БД
-    asyncio.create_task(save_mode_to_db(user_id, "psychologist"))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_mode_to_db, user_id, "psychologist")
     
     # Показываем подтверждение
     show_mode_selected(call.message, "psychologist")
@@ -278,8 +300,8 @@ def set_mode_trainer(call: types.CallbackQuery):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ СОХРАНЯЕМ В БД
-    asyncio.create_task(save_mode_to_db(user_id, "trainer"))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_mode_to_db, user_id, "trainer")
     
     # Показываем подтверждение
     show_mode_selected(call.message, "trainer")
@@ -317,8 +339,8 @@ def choose_mode(call: types.CallbackQuery, mode: str):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ СОХРАНЯЕМ В БД
-    asyncio.create_task(save_mode_to_db(user_id, new_mode))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_mode_to_db, user_id, new_mode)
     
     mode_info = COMMUNICATION_MODES.get(new_mode, COMMUNICATION_MODES["coach"])
     
