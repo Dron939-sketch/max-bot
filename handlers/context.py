@@ -5,6 +5,7 @@
 Восстановлено из оригинального bot3.py и адаптировано
 ДОБАВЛЕНО: Сохранение контекста в PostgreSQL
 ИСПРАВЛЕНО: Устранен циклический импорт с main.py
+ИСПРАВЛЕНО: Асинхронные вызовы обернуты в threading
 """
 
 import logging
@@ -36,6 +37,27 @@ from state import (
 from db_instance import db, save_user_to_db
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# ============================================
+
+def run_async_task(coro_func, *args, **kwargs):
+    """
+    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
+    """
+    def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            coro = coro_func(*args, **kwargs)
+            loop.run_until_complete(coro)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+        finally:
+            loop.close()
+    
+    threading.Thread(target=_wrapper, daemon=True).start()
 
 # ============================================
 # ГЛОБАЛЬНАЯ БЛОКИРОВКА ДЛЯ ПРЕДОТВРАЩЕНИЯ ДВОЙНЫХ ВЫЗОВОВ
@@ -198,8 +220,8 @@ def handle_context_callback(call: CallbackQuery):
         context.gender = "male"
         context.awaiting_context = None
         
-        # Сохраняем в БД
-        asyncio.create_task(save_context_to_db(user_id))
+        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+        run_async_task(save_context_to_db, user_id)
         
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
@@ -224,8 +246,8 @@ def handle_context_callback(call: CallbackQuery):
         context.gender = "female"
         context.awaiting_context = None
         
-        # Сохраняем в БД
-        asyncio.create_task(save_context_to_db(user_id))
+        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+        run_async_task(save_context_to_db, user_id)
         
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
@@ -250,8 +272,8 @@ def handle_context_callback(call: CallbackQuery):
         context.gender = "other"
         context.awaiting_context = None
         
-        # Сохраняем в БД
-        asyncio.create_task(save_context_to_db(user_id))
+        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+        run_async_task(save_context_to_db, user_id)
         
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
@@ -276,8 +298,8 @@ def handle_context_callback(call: CallbackQuery):
         logger.info(f"⏭️ Пропускаем сбор контекста")
         context.awaiting_context = None
         
-        # Сохраняем в БД
-        asyncio.create_task(save_context_to_db(user_id))
+        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+        run_async_task(save_context_to_db, user_id)
         
         safe_send_message(
             call.message,
@@ -356,8 +378,8 @@ def handle_context_message(message: Message) -> bool:
         logger.info(f"🌍 Определяем часовой пояс...")
         context.detect_timezone_from_city()
         
-        # Сохраняем в БД
-        asyncio.create_task(save_context_to_db(user_id))
+        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+        run_async_task(save_context_to_db, user_id)
         
         # Получаем следующий вопрос
         logger.info(f"❓ Получаем следующий вопрос от ask_for_context()...")
@@ -390,8 +412,8 @@ def handle_context_message(message: Message) -> bool:
                 context.age = age
                 context.awaiting_context = None
                 
-                # Сохраняем в БД
-                asyncio.create_task(save_context_to_db(user_id))
+                # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+                run_async_task(save_context_to_db, user_id)
                 
                 # Получаем следующий вопрос
                 logger.info(f"❓ Получаем следующий вопрос после возраста...")
@@ -446,8 +468,8 @@ def handle_context_message(message: Message) -> bool:
         
         context.awaiting_context = None
         
-        # Сохраняем в БД
-        asyncio.create_task(save_context_to_db(user_id))
+        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+        run_async_task(save_context_to_db, user_id)
         
         # Получаем следующий вопрос
         logger.info(f"❓ Получаем следующий вопрос после пола...")
@@ -488,8 +510,8 @@ def show_context_complete(message: Message, context: UserContext):
     logger.info(f"🌤️ Обновляем погоду для итогового экрана...")
     context.update_weather()
     
-    # Сохраняем в БД
-    asyncio.create_task(save_context_to_db(user_id))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_context_to_db, user_id)
     
     # Формируем сводку
     summary = f"✅ **Отлично! Теперь я знаю о вас:**\n\n"
@@ -555,8 +577,8 @@ def cmd_context(message: Message):
     context.weather_cache = {}
     context.life_context_complete = False
     
-    # Сохраняем сброс в БД
-    asyncio.create_task(save_context_to_db(user_id))
+    # ✅ ИСПРАВЛЕНО: Сохраняем сброс в БД через run_async_task
+    run_async_task(save_context_to_db, user_id)
     
     safe_send_message(
         message,
@@ -707,8 +729,8 @@ def save_life_context(user_id: int, answers: dict):
     context.energy_level = answers.get('energy_level')
     context.life_context_complete = True
     
-    # Сохраняем в БД
-    asyncio.create_task(save_context_to_db(user_id))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_context_to_db, user_id)
 
 def parse_life_context_from_text(text: str) -> dict:
     """
