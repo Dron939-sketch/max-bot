@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики профиля пользователя для MAX
-Версия 2.6 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
+Версия 2.7 - ИСПРАВЛЕНЫ ВЫЗОВЫ safe_send_message
 ПОЛНАЯ ВЕРСИЯ СО ВСЕМИ ФУНКЦИЯМИ
 """
 
@@ -26,7 +26,7 @@ from formatters import (
 )
 
 # ✅ ИМПОРТ ДЛЯ БАЗЫ ДАННЫХ
-from db_instance import save_user_to_db, save_test_result_to_db
+from db_instance import save_user_to_db, save_test_result_to_db, ensure_db_connection
 
 # Убираем прямой импорт из main, создаем глобальную переменную
 morning_manager = None
@@ -54,6 +54,9 @@ def run_async_task(coro_func, *args, **kwargs):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
+            # Проверяем соединение с БД перед выполнением
+            if 'db' in str(coro_func) or 'save' in str(coro_func) or 'log' in str(coro_func):
+                loop.run_until_complete(ensure_db_connection())
             coro = coro_func(*args, **kwargs)
             loop.run_until_complete(coro)
         except Exception as e:
@@ -418,6 +421,9 @@ def show_preliminary_profile(message: Message, user_id: int):
 async def save_profile_to_db(user_id: int):
     """Сохраняет профиль пользователя в БД"""
     try:
+        # Проверяем соединение с БД
+        await ensure_db_connection()
+        
         # Сохраняем как результат теста
         await save_test_result_to_db(user_id, 'full_profile', user_data)
         
@@ -440,7 +446,8 @@ async def show_ai_profile_async(message: Message, user_id: int):
     context = user_contexts.get(user_id)
     user_name = context.name if context and context.name else ""
     
-    status_msg = await safe_send_message(
+    # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
+    status_msg = safe_send_message(
         message,
         "🧠 Анализирую данные и генерирую ваш психологический портрет...\n\nЭто займёт несколько секунд.",
         delete_previous=True
@@ -524,7 +531,8 @@ async def show_ai_profile_async(message: Message, user_id: int):
                 try:
                     if i == len(merged_parts) - 1:
                         # Последняя часть с кнопками
-                        await safe_send_message(
+                        # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
+                        safe_send_message(
                             message if i == 0 else None,
                             part,
                             reply_markup=keyboard,
@@ -535,7 +543,8 @@ async def show_ai_profile_async(message: Message, user_id: int):
                         logger.info(f"✅ Отправлена последняя часть {i+1} с кнопками")
                     else:
                         # Промежуточные части без кнопок
-                        await safe_send_message(
+                        # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
+                        safe_send_message(
                             None,
                             part,
                             parse_mode=None,
@@ -633,7 +642,8 @@ async def show_ai_profile_async(message: Message, user_id: int):
     )
     keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
     
-    await safe_send_message(
+    # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
+    safe_send_message(
         message,
         text,
         reply_markup=keyboard,
@@ -648,7 +658,8 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
     context = user_contexts.get(user_id)
     user_name = context.name if context and context.name else ""
     
-    status_msg = await safe_send_message(
+    # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
+    status_msg = safe_send_message(
         message,
         "🧠 Анализирую ваш профиль и формирую мысли психолога...\n\nЭто займёт несколько секунд.",
         delete_previous=True
@@ -719,7 +730,8 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                 try:
                     if i == len(merged_parts) - 1:
                         # Последняя часть с кнопками
-                        await safe_send_message(
+                        # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
+                        safe_send_message(
                             message if i == 0 else None,
                             part,
                             reply_markup=keyboard,
@@ -730,7 +742,8 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                         logger.info(f"✅ Отправлена последняя часть мысли {i+1} с кнопками")
                     else:
                         # Промежуточные части
-                        await safe_send_message(
+                        # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
+                        safe_send_message(
                             None,
                             part,
                             parse_mode=None,
@@ -794,7 +807,8 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
     keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
     
-    await safe_send_message(
+    # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
+    safe_send_message(
         message,
         text,
         reply_markup=keyboard,
@@ -809,7 +823,8 @@ async def show_final_profile_async(message: Message, user_id: int):
     
     if user_id in _profile_generation_in_progress and _profile_generation_in_progress[user_id]:
         logger.info(f"⏳ Генерация профиля уже выполняется для пользователя {user_id}")
-        await safe_send_message(
+        # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
+        safe_send_message(
             message,
             "⏳ Ваш профиль уже генерируется, пожалуйста, подождите...",
             delete_previous=True
@@ -823,7 +838,8 @@ async def show_final_profile_async(message: Message, user_id: int):
         await show_ai_profile_async(message, user_id)
         return
     
-    status_msg = await safe_send_message(
+    # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
+    status_msg = safe_send_message(
         message,
         "🧠 Анализирую данные...\n\n"
         "Собираю воедино результаты 5 этапов тестирования.\n"
