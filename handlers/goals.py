@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики целей и маршрутов для MAX
-Версия 2.2 - ДОБАВЛЕНО СОХРАНЕНИЕ В БД
+Версия 2.3 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
 """
 
 import logging
 import time
 import asyncio
+import threading  # ✅ ДОБАВЛЕНО
 from typing import Dict, Any, List, Optional
 
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
@@ -40,6 +41,27 @@ from db_instance import db, save_user_to_db
 from formatters import bold, italic, clean_text_for_safe_display
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# ============================================
+
+def run_async_task(coro_func, *args, **kwargs):
+    """
+    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
+    """
+    def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            coro = coro_func(*args, **kwargs)
+            loop.run_until_complete(coro)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+        finally:
+            loop.close()
+    
+    threading.Thread(target=_wrapper, daemon=True).start()
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -341,8 +363,8 @@ def select_goal(call, goal_id: str):
     # Сохраняем выбранную цель
     update_user_state_data(user_id, current_goal=goal_info)
     
-    # ✅ СОХРАНЯЕМ В БД
-    asyncio.create_task(save_goal_to_db(user_id, goal_info, "selected"))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_goal_to_db, user_id, goal_info, "selected")
     
     text = f"""
 🧠 <b>ВЫБРАННАЯ ЦЕЛЬ</b>
@@ -648,8 +670,8 @@ async def show_theoretical_path(call: CallbackQuery, state_data: Dict, goal_info
     # Сохраняем путь в state
     update_user_state_data(user_id, theoretical_path=path, current_destination=goal_info)
     
-    # ✅ СОХРАНЯЕМ ЦЕЛЬ В БД
-    asyncio.create_task(save_goal_to_db(user_id, goal_info, "in_progress"))
+    # ✅ ИСПРАВЛЕНО: Сохраняем цель в БД через run_async_task
+    run_async_task(save_goal_to_db, user_id, goal_info, "in_progress")
     
     # Форматируем текст пути для отображения
     path_text = path.get('formatted_text', 'Маршрут строится...')
@@ -896,8 +918,8 @@ async def calculate_and_show_feasibility(call: CallbackQuery, state_data: Dict):
     # Сохраняем результат
     update_user_state_data(call.from_user.id, feasibility_result=result)
     
-    # ✅ СОХРАНЯЕМ РЕЗУЛЬТАТ В БД
-    asyncio.create_task(save_feasibility_result_to_db(call.from_user.id, goal, result))
+    # ✅ ИСПРАВЛЕНО: Сохраняем результат в БД через run_async_task
+    run_async_task(save_feasibility_result_to_db, call.from_user.id, goal, result)
     
     text = f"""
 🧠 {bold('ФРЕДИ: РЕАЛЬНОСТЬ ЦЕЛИ')}
@@ -992,8 +1014,8 @@ async def accept_feasibility_plan(call: CallbackQuery, state_data: Dict):
         await call.answer("❌ Цель не найдена")
         return
     
-    # ✅ СОХРАНЯЕМ СОГЛАСИЕ В БД
-    asyncio.create_task(save_goal_to_db(call.from_user.id, goal, "accepted"))
+    # ✅ ИСПРАВЛЕНО: Сохраняем согласие в БД через run_async_task
+    run_async_task(save_goal_to_db, call.from_user.id, goal, "accepted")
     
     await build_route(call, state_data, goal.get('id'))
 
@@ -1072,8 +1094,8 @@ async def select_goal_50(call: CallbackQuery, state_data: Dict):
     
     update_user_state_data(call.from_user.id, current_destination=new_goal)
     
-    # ✅ СОХРАНЯЕМ В БД
-    asyncio.create_task(save_goal_to_db(call.from_user.id, new_goal, "adjusted"))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_goal_to_db, call.from_user.id, new_goal, "adjusted")
     
     await show_theoretical_path(call, state_data, new_goal)
 
@@ -1092,8 +1114,8 @@ async def select_goal_30(call: CallbackQuery, state_data: Dict):
     
     update_user_state_data(call.from_user.id, current_destination=new_goal)
     
-    # ✅ СОХРАНЯЕМ В БД
-    asyncio.create_task(save_goal_to_db(call.from_user.id, new_goal, "adjusted"))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_goal_to_db, call.from_user.id, new_goal, "adjusted")
     
     await show_theoretical_path(call, state_data, new_goal)
 
@@ -1112,8 +1134,8 @@ async def select_goal_blocks(call: CallbackQuery, state_data: Dict):
     
     update_user_state_data(call.from_user.id, current_destination=new_goal)
     
-    # ✅ СОХРАНЯЕМ В БД
-    asyncio.create_task(save_goal_to_db(call.from_user.id, new_goal, "adjusted"))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_goal_to_db, call.from_user.id, new_goal, "adjusted")
     
     await show_theoretical_path(call, state_data, new_goal)
 
@@ -1154,8 +1176,8 @@ async def build_route(call: CallbackQuery, state_data: Dict, goal_id: str):
     if route:
         update_user_state_data(user_id, current_route=route)
         
-        # ✅ СОХРАНЯЕМ МАРШРУТ В БД
-        asyncio.create_task(save_route_to_db(user_id, route, goal_info))
+        # ✅ ИСПРАВЛЕНО: Сохраняем маршрут в БД через run_async_task
+        run_async_task(save_route_to_db, user_id, route, goal_info)
         
         await show_route_step(call, state_data, 1, route, status_msg)
     else:
@@ -1297,8 +1319,8 @@ async def route_step_done(call: CallbackQuery, state_data: Dict):
         route_progress=route_progress
     )
     
-    # ✅ ОБНОВЛЯЕМ ПРОГРЕСС В БД
-    asyncio.create_task(update_route_progress_in_db(user_id, step, route_progress))
+    # ✅ ИСПРАВЛЕНО: Обновляем прогресс в БД через run_async_task
+    run_async_task(update_route_progress_in_db, user_id, step, route_progress)
     
     if next_step > 3:
         await complete_route(call, state_data)
@@ -1322,8 +1344,8 @@ async def complete_route(call: CallbackQuery, state_data: Dict):
     
     destination = state_data.get("current_destination", {})
     
-    # ✅ ЛОГИРУЕМ ЗАВЕРШЕНИЕ В БД
-    asyncio.create_task(db.log_event(
+    # ✅ ИСПРАВЛЕНО: Логируем завершение в БД через run_async_task
+    run_async_task(db.log_event,
         user_id,
         'route_completed',
         {
@@ -1331,7 +1353,7 @@ async def complete_route(call: CallbackQuery, state_data: Dict):
             'goal_name': destination.get('name'),
             'timestamp': time.time()
         }
-    ))
+    )
     
     text = f"""
 🎉 {bold('МАРШРУТ ЗАВЕРШЕН!')}
@@ -1361,8 +1383,8 @@ async def complete_route(call: CallbackQuery, state_data: Dict):
     # Очищаем данные маршрута
     update_user_state_data(user_id, route_step=None, current_destination=None, current_route=None)
     
-    # ✅ СОХРАНЯЕМ ПОЛЬЗОВАТЕЛЯ В БД
-    asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
+    # ✅ ИСПРАВЛЕНО: Сохраняем пользователя в БД через run_async_task
+    run_async_task(save_user_to_db, user_id, user_data, user_contexts, user_routes)
 
 
 # ============================================
