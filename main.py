@@ -7,6 +7,7 @@
 ДОБАВЛЕНО: FastAPI для мини-приложения
 ИСПРАВЛЕНО: f-strings quotes error (финальное решение)
 ИСПРАВЛЕНО: конфликт портов между health check и FastAPI
+ИСПРАВЛЕНО: добавлены недостающие импорты для API
 """
 
 import os
@@ -134,6 +135,11 @@ from handlers.questions import *
 from handlers.admin import *
 from handlers.voice import handle_voice_message, send_voice_to_max
 
+# Дополнительные импорты для API эндпоинтов
+from profiles import VECTORS
+from services import generate_psychologist_thought
+from weekend_planner import WeekendPlanner
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -224,98 +230,162 @@ async def serve_js():
         return FileResponse(js_path)
     return JSONResponse(status_code=404, content={"error": "script.js not found"})
 
+# Вспомогательные функции для API
+def determine_dominant_dilts(dilts_counts: dict) -> str:
+    """Определяет доминирующий уровень Дилтса"""
+    if not dilts_counts:
+        return "BEHAVIOR"
+    dominant = max(dilts_counts.items(), key=lambda x: x[1])
+    return dominant[0]
+
+def get_human_readable_profile(scores: dict, perception_type="не определен", thinking_level=5, dominant_dilts="BEHAVIOR") -> str:
+    """Возвращает портрет пользователя понятным языком"""
+    lines = []
+    
+    lines.append(f"🧠 ВАШ ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ")
+    lines.append("")
+    lines.append(f"🔍 Тип восприятия: {perception_type}")
+    lines.append(f"🧠 Уровень мышления: {thinking_level}/9")
+    lines.append("")
+    lines.append(f"🔑 КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА")
+    lines.append("Информация уточняется")
+    lines.append("")
+    lines.append(f"💪 СИЛЬНЫЕ СТОРОНЫ")
+    lines.append("• Высокоразвитые социальные навыки")
+    lines.append("• Системное мышление")
+    lines.append("• Устойчивость к стрессу")
+    lines.append("• Прагматизм")
+    lines.append("")
+    lines.append(f"🎯 ЗОНЫ РОСТА")
+    lines.append("• Информация уточняется")
+    lines.append("")
+    lines.append(f"⚠️ ГЛАВНАЯ ЛОВУШКА")
+    lines.append("⚡ Поведение")
+    
+    return "\n".join(lines)
+
 # API эндпоинты для данных
 @api_app.get("/api/user-data")
 async def get_user_data(user_id: int):
     """Возвращает базовую информацию о пользователе"""
-    user_id = int(user_id)
-    context = user_contexts.get(user_id)
-    
-    return {
-        "user_id": user_id,
-        "user_name": context.name if context else "друг",
-        "has_profile": bool(user_data.get(user_id, {}).get("ai_generated_profile"))
-    }
+    try:
+        user_id = int(user_id)
+        context = user_contexts.get(user_id)
+        
+        return {
+            "user_id": user_id,
+            "user_name": context.name if context else "друг",
+            "has_profile": bool(user_data.get(user_id, {}).get("ai_generated_profile"))
+        }
+    except Exception as e:
+        logger.error(f"API error in get_user_data: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
 @api_app.get("/api/profile")
 async def get_profile(user_id: int):
     """Возвращает психологический портрет"""
-    user_id = int(user_id)
-    data = user_data.get(user_id, {})
-    
-    profile = data.get("ai_generated_profile")
-    if not profile:
-        # Если нет AI профиля, генерируем стандартный
+    try:
+        user_id = int(user_id)
+        data = user_data.get(user_id, {})
+        
+        profile = data.get("ai_generated_profile")
+        if not profile:
+            # Если нет AI профиля, генерируем стандартный
+            scores = {}
+            for k in VECTORS:
+                levels = data.get("behavioral_levels", {}).get(k, [])
+                scores[k] = sum(levels) / len(levels) if levels else 3.0
+            
+            perception_type = data.get("perception_type", "не определен")
+            thinking_level = data.get("thinking_level", 5)
+            dilts_counts = data.get("dilts_counts", {})
+            dominant_dilts = determine_dominant_dilts(dilts_counts)
+            
+            profile = get_human_readable_profile(
+                scores,
+                perception_type=perception_type,
+                thinking_level=thinking_level,
+                dominant_dilts=dominant_dilts
+            )
+        
+        return {"profile": profile}
+    except Exception as e:
+        logger.error(f"API error in get_profile: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+@api_app.get("/api/thought")
+async def get_thought(user_id: int):
+    """Возвращает мысли психолога"""
+    try:
+        user_id = int(user_id)
+        data = user_data.get(user_id, {})
+        
+        thought = data.get("psychologist_thought")
+        if not thought:
+            # Генерируем мысль, если её нет
+            thought = await generate_psychologist_thought(user_id, data)
+            if thought:
+                if user_id not in user_data:
+                    user_data[user_id] = {}
+                user_data[user_id]["psychologist_thought"] = thought
+            else:
+                thought = "Мысли психолога еще не сгенерированы."
+        
+        return {"thought": thought}
+    except Exception as e:
+        logger.error(f"API error in get_thought: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+@api_app.get("/api/ideas")
+async def get_ideas(user_id: int):
+    """Возвращает идеи на выходные"""
+    try:
+        user_id = int(user_id)
+        data = user_data.get(user_id, {})
+        context = user_contexts.get(user_id)
+        user_name = context.name if context else "друг"
+        
         scores = {}
         for k in VECTORS:
             levels = data.get("behavioral_levels", {}).get(k, [])
             scores[k] = sum(levels) / len(levels) if levels else 3.0
         
-        perception_type = data.get("perception_type", "не определен")
-        thinking_level = data.get("thinking_level", 5)
-        dilts_counts = data.get("dilts_counts", {})
-        dominant_dilts = determine_dominant_dilts(dilts_counts)
+        profile_data = data.get("profile_data", {})
         
-        profile = get_human_readable_profile(
-            scores,
-            perception_type=perception_type,
-            thinking_level=thinking_level,
-            dominant_dilts=dominant_dilts
+        ideas_text = await weekend_planner.get_weekend_ideas(
+            user_id=user_id,
+            user_name=user_name,
+            scores=scores,
+            profile_data=profile_data,
+            context=context
         )
-    
-    return {"profile": profile}
-
-@api_app.get("/api/thought")
-async def get_thought(user_id: int):
-    """Возвращает мысли психолога"""
-    user_id = int(user_id)
-    data = user_data.get(user_id, {})
-    
-    thought = data.get("psychologist_thought")
-    if not thought:
-        # Генерируем мысль, если её нет
-        thought = await generate_psychologist_thought(user_id, data)
-        if thought:
-            if user_id not in user_data:
-                user_data[user_id] = {}
-            user_data[user_id]["psychologist_thought"] = thought
-    
-    return {"thought": thought}
-
-@api_app.get("/api/ideas")
-async def get_ideas(user_id: int):
-    """Возвращает идеи на выходные"""
-    user_id = int(user_id)
-    data = user_data.get(user_id, {})
-    context = user_contexts.get(user_id)
-    user_name = context.name if context else "друг"
-    
-    scores = {}
-    for k in VECTORS:
-        levels = data.get("behavioral_levels", {}).get(k, [])
-        scores[k] = sum(levels) / len(levels) if levels else 3.0
-    
-    profile_data = data.get("profile_data", {})
-    
-    ideas_text = await weekend_planner.get_weekend_ideas(
-        user_id=user_id,
-        user_name=user_name,
-        scores=scores,
-        profile_data=profile_data,
-        context=context
-    )
-    
-    # Преобразуем текст в структурированные идеи (упрощенно)
-    ideas = []
-    paragraphs = ideas_text.split('\n\n')
-    for p in paragraphs:
-        if p.strip() and not p.startswith('#'):
-            ideas.append({
-                "title": p[:50] + "..." if len(p) > 50 else p,
-                "description": p
-            })
-    
-    return {"ideas": ideas[:5]}  # Возвращаем первые 5 идей
+        
+        # Преобразуем текст в структурированные идеи (упрощенно)
+        ideas = []
+        paragraphs = ideas_text.split('\n\n')
+        for p in paragraphs:
+            if p.strip() and not p.startswith('#'):
+                ideas.append({
+                    "title": p[:50] + "..." if len(p) > 50 else p,
+                    "description": p
+                })
+        
+        return {"ideas": ideas[:5]}  # Возвращаем первые 5 идей
+    except Exception as e:
+        logger.error(f"API error in get_ideas: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
 @api_app.get("/health")
 async def health_check():
