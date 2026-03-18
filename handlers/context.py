@@ -3,13 +3,14 @@
 """
 Обработчики сбора контекста (город, возраст, пол) для MAX
 Восстановлено из оригинального bot3.py и адаптировано
-ИСПРАВЛЕНО: кнопка НАЧАТЬ ТЕСТ ведет на start_stage_1_direct, убраны HTML-теги
+ДОБАВЛЕНО: Сохранение контекста в PostgreSQL
 """
 
 import logging
 import re
 import time
 import threading
+import asyncio
 from typing import Dict, Any, Optional, Tuple
 
 from bot_instance import bot
@@ -30,6 +31,9 @@ from state import (
     get_user_context, get_user_context_dict,
     get_state, set_state, get_state_data, update_state_data, clear_state, TestStates
 )
+
+# Импортируем базу данных из main
+from main import db, save_user_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +78,13 @@ def get_user_names(user_id: int) -> str:
 def get_user_context_dict() -> Dict[int, UserContext]:
     """Возвращает словарь контекстов пользователей"""
     return user_contexts
+
+async def save_context_to_db(user_id: int):
+    """Сохраняет контекст пользователя в БД"""
+    context = get_user_context(user_id)
+    if context:
+        await db.save_user_context(user_id, context)
+        logger.debug(f"💾 Контекст пользователя {user_id} сохранен в БД")
 
 # ============================================
 # НАЧАЛО СБОРА КОНТЕКСТА
@@ -187,6 +198,9 @@ def handle_context_callback(call: CallbackQuery):
         context.gender = "male"
         context.awaiting_context = None
         
+        # Сохраняем в БД
+        asyncio.create_task(save_context_to_db(user_id))
+        
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
         logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
@@ -209,6 +223,9 @@ def handle_context_callback(call: CallbackQuery):
         logger.info(f"👩 Устанавливаем пол: женский")
         context.gender = "female"
         context.awaiting_context = None
+        
+        # Сохраняем в БД
+        asyncio.create_task(save_context_to_db(user_id))
         
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
@@ -233,6 +250,9 @@ def handle_context_callback(call: CallbackQuery):
         context.gender = "other"
         context.awaiting_context = None
         
+        # Сохраняем в БД
+        asyncio.create_task(save_context_to_db(user_id))
+        
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
         logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
@@ -255,6 +275,9 @@ def handle_context_callback(call: CallbackQuery):
     elif data == "skip_context":
         logger.info(f"⏭️ Пропускаем сбор контекста")
         context.awaiting_context = None
+        
+        # Сохраняем в БД
+        asyncio.create_task(save_context_to_db(user_id))
         
         safe_send_message(
             call.message,
@@ -332,6 +355,9 @@ def handle_context_message(message: Message) -> bool:
         logger.info(f"🌍 Определяем часовой пояс...")
         context.detect_timezone_from_city()
         
+        # Сохраняем в БД
+        asyncio.create_task(save_context_to_db(user_id))
+        
         # Получаем следующий вопрос
         logger.info(f"❓ Получаем следующий вопрос от ask_for_context()...")
         question, keyboard = context.ask_for_context()
@@ -362,6 +388,9 @@ def handle_context_message(message: Message) -> bool:
                 logger.info(f"✅ Возраст корректен: {age}")
                 context.age = age
                 context.awaiting_context = None
+                
+                # Сохраняем в БД
+                asyncio.create_task(save_context_to_db(user_id))
                 
                 # Получаем следующий вопрос
                 logger.info(f"❓ Получаем следующий вопрос после возраста...")
@@ -416,6 +445,9 @@ def handle_context_message(message: Message) -> bool:
         
         context.awaiting_context = None
         
+        # Сохраняем в БД
+        asyncio.create_task(save_context_to_db(user_id))
+        
         # Получаем следующий вопрос
         logger.info(f"❓ Получаем следующий вопрос после пола...")
         question, keyboard = context.ask_for_context()
@@ -454,6 +486,9 @@ def show_context_complete(message: Message, context: UserContext):
     # 👇 СИНХРОННЫЙ ВЫЗОВ
     logger.info(f"🌤️ Обновляем погоду для итогового экрана...")
     context.update_weather()
+    
+    # Сохраняем в БД
+    asyncio.create_task(save_context_to_db(user_id))
     
     # Формируем сводку
     summary = f"✅ **Отлично! Теперь я знаю о вас:**\n\n"
@@ -518,6 +553,9 @@ def cmd_context(message: Message):
     context.age = None
     context.weather_cache = {}
     context.life_context_complete = False
+    
+    # Сохраняем сброс в БД
+    asyncio.create_task(save_context_to_db(user_id))
     
     safe_send_message(
         message,
@@ -667,6 +705,9 @@ def save_life_context(user_id: int, answers: dict):
     context.resistance_people = answers.get('resistance_people')
     context.energy_level = answers.get('energy_level')
     context.life_context_complete = True
+    
+    # Сохраняем в БД
+    asyncio.create_task(save_context_to_db(user_id))
 
 def parse_life_context_from_text(text: str) -> dict:
     """
