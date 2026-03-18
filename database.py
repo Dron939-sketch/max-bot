@@ -1,8 +1,11 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Модуль для работы с PostgreSQL базой данных бота "Фреди"
 Все таблицы имеют префикс fredi_ для избежания конфликтов
 
 Версия 1.0 - ПОЛНАЯ ИНТЕГРАЦИЯ со всеми структурами данных
+ИСПРАВЛЕНО: Добавлены недостающие импорты и исправлены синтаксические ошибки
 """
 
 import asyncpg
@@ -218,11 +221,11 @@ class BotDatabase:
                     
                     -- 🎯 СПЕЦИФИЧЕСКИЕ ПОЛЯ ДЛЯ РАЗНЫХ ЭТАПОВ
                     scores JSONB,                 -- для этапа 1: {"EXTERNAL": 2, ...}
-                    measures TEXT,                  -- для этапа 2: 'СБ', 'ТФ', 'ЧВ', 'УБ', 'thinking'
-                    strategy TEXT,                  -- для этапа 3: 'СБ', 'ТФ', 'УБ', 'ЧВ'
-                    dilts TEXT,                      -- для этапа 4: 'ENVIRONMENT', 'BEHAVIOR', etc
-                    pattern TEXT,                    -- для этапа 5: 'secure', 'avoidant', etc
-                    target TEXT,                      -- для этапа 5: 'attachment', 'defense', etc
+                    measures TEXT,                -- для этапа 2: 'СБ', 'ТФ', 'ЧВ', 'УБ', 'thinking'
+                    strategy TEXT,                -- для этапа 3: 'СБ', 'ТФ', 'УБ', 'ЧВ'
+                    dilts TEXT,                    -- для этапа 4: 'ENVIRONMENT', 'BEHAVIOR', etc
+                    pattern TEXT,                  -- для этапа 5: 'secure', 'avoidant', etc
+                    target TEXT,                    -- для этапа 5: 'attachment', 'defense', etc
                     
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                 )
@@ -239,7 +242,8 @@ class BotDatabase:
                     emoji TEXT,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                     last_used TIMESTAMP WITH TIME ZONE,
-                    use_count INTEGER DEFAULT 0
+                    use_count INTEGER DEFAULT 0,
+                    UNIQUE(user_id, anchor_name)
                 )
             """)
             
@@ -458,7 +462,7 @@ class BotDatabase:
                 getattr(context_obj, 'awaiting_context', None)
             )
     
-    async def load_user_context(self, user_id: int):
+    async def load_user_context(self, user_id: int) -> Optional[Dict[str, Any]]:
         """
         Загружает данные для создания объекта UserContext
         
@@ -1105,7 +1109,7 @@ class BotDatabase:
             # Удаляем старые события
             await conn.execute("""
                 DELETE FROM fredi_events
-                WHERE created_at < NOW() - INTERVAL '$1 days'
+                WHERE created_at < NOW() - INTERVAL '1 day' * $1
             """, days)
             
             # Деактивируем старые неактивные маршруты (старше 90 дней)
@@ -1226,7 +1230,7 @@ class BotDatabase:
                 route_data = user_routes_dict[user_id]
                 await self.save_user_route(
                     user_id=user_id,
-                    route_data=route_data,
+                    route_data=route_data.get('route_data', {}),
                     current_step=route_data.get('current_step', 1),
                     progress=route_data.get('progress', [])
                 )
