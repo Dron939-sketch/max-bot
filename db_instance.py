@@ -3,7 +3,7 @@
 """
 Централизованный доступ к экземпляру базы данных
 ИСПРАВЛЕНИЕ: Устранение циклического импорта с main.py
-ВЕРСИЯ 2.2 - ДОБАВЛЕНО: execute_with_retry для автоматического восстановления соединения
+ВЕРСИЯ 2.3 - ДОБАВЛЕНО: Паузы при переподключении, улучшена обработка ошибок
 """
 
 import os
@@ -44,7 +44,7 @@ async def close_db():
         logger.error(f"❌ Ошибка при закрытии подключения: {e}")
 
 # ============================================
-# ✅ ДОБАВЛЕНО: ФУНКЦИЯ ПРОВЕРКИ СОЕДИНЕНИЯ С БД
+# ✅ ДОБАВЛЕНО: ФУНКЦИЯ ПРОВЕРКИ СОЕДИНЕНИЯ С БД (С ПАУЗАМИ)
 # ============================================
 
 async def ensure_db_connection():
@@ -61,15 +61,39 @@ async def ensure_db_connection():
             await conn.execute("SELECT 1")
         return True
     except Exception as e:
+        error_str = str(e).lower()
         logger.error(f"❌ Ошибка при проверке соединения с БД: {e}")
-        # Пробуем переподключиться
-        try:
-            logger.info("🔄 Пробуем переподключиться к БД...")
-            await db.disconnect()
-            await db.connect()
-            return True
-        except Exception as e2:
-            logger.error(f"❌ Не удалось переподключиться к БД: {e2}")
+        
+        # Проверяем, связана ли ошибка с соединением
+        if any(phrase in error_str for phrase in [
+            "пул закрыт", "pool is closed", "connection", 
+            "timeout", "ssl", "network", "reset", "another operation"
+        ]):
+            # Пробуем переподключиться
+            try:
+                logger.info("🔄 Пробуем переподключиться к БД...")
+                
+                # ✅ Добавляем паузу перед переподключением
+                await asyncio.sleep(0.5)
+                
+                # Пытаемся закрыть существующее соединение
+                try:
+                    await db.disconnect()
+                except:
+                    pass
+                
+                # ✅ Еще одна пауза между закрытием и открытием
+                await asyncio.sleep(0.5)
+                
+                # Подключаемся заново
+                await db.connect()
+                logger.info("✅ Успешное переподключение к БД")
+                return True
+            except Exception as e2:
+                logger.error(f"❌ Не удалось переподключиться к БД: {e2}")
+                return False
+        else:
+            # Если это не ошибка соединения, возвращаем False
             return False
 
 # ============================================
@@ -89,6 +113,8 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
     Returns:
         Результат выполнения функции или None в случае ошибки
     """
+    last_error = None
+    
     for attempt in range(max_retries):
         try:
             # Проверяем соединение перед выполнением
@@ -102,33 +128,39 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(None, lambda: coro_func(*args, **kwargs))
             
+            # Если успешно, возвращаем результат
             return result
             
         except Exception as e:
+            last_error = e
             error_str = str(e).lower()
+            
             # Проверяем, связана ли ошибка с соединением
             if any(phrase in error_str for phrase in [
                 "пул закрыт", "pool is closed", "connection", 
-                "timeout", "ssl", "network", "reset"
+                "timeout", "ssl", "network", "reset", "another operation",
+                "different loop", "attached to a different loop"
             ]):
                 logger.warning(f"⚠️ Ошибка соединения с БД (попытка {attempt+1}/{max_retries}): {e}")
+                
                 if attempt < max_retries - 1:
                     # Увеличиваем задержку с каждой попыткой
                     wait_time = 1 * (attempt + 1)
                     logger.info(f"⏳ Ожидание {wait_time}с перед следующей попыткой...")
                     await asyncio.sleep(wait_time)
                     
-                    # Принудительно переподключаемся
+                    # Принудительно сбрасываем соединение
                     try:
                         await db.disconnect()
                     except:
                         pass
                     continue
-            # Если это не ошибка соединения или кончились попытки
-            raise e
+            else:
+                # Если это не ошибка соединения, сразу выбрасываем исключение
+                raise e
     
     # Если все попытки исчерпаны
-    logger.error(f"❌ Все {max_retries} попыток выполнения исчерпаны")
+    logger.error(f"❌ Все {max_retries} попыток выполнения исчерпаны. Последняя ошибка: {last_error}")
     return None
 
 # ============================================
