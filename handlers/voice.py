@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики голосовых сообщений для MAX
-Версия 2.6 - ДОБАВЛЕНО ЛОГИРОВАНИЕ В БД
+Версия 2.7 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
 """
 
 import os
@@ -11,6 +11,7 @@ import logging
 import asyncio
 import aiohttp
 import json
+import threading  # ✅ ДОБАВЛЕНО
 from typing import Optional
 
 from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -32,6 +33,27 @@ from config import COMMUNICATION_MODES, MAX_TOKEN
 from db_instance import db
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# ============================================
+
+def run_async_task(coro_func, *args, **kwargs):
+    """
+    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
+    """
+    def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            coro = coro_func(*args, **kwargs)
+            loop.run_until_complete(coro)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+        finally:
+            loop.close()
+    
+    threading.Thread(target=_wrapper, daemon=True).start()
 
 # ============================================
 # ФУНКЦИЯ ДЛЯ ОТПРАВКИ ГОЛОСОВЫХ СООБЩЕНИЙ В MAX
@@ -275,12 +297,12 @@ async def handle_voice_message(message: Message):
     
     logger.info(f"🎤 Получено голосовое сообщение от пользователя {user_id}, состояние: {current_state}")
     
-    # ✅ ЛОГИРУЕМ СОБЫТИЕ В БД
-    asyncio.create_task(db.log_event(
+    # ✅ ИСПРАВЛЕНО: Логируем событие через run_async_task
+    run_async_task(db.log_event,
         user_id, 
         'voice_received', 
         {'state': current_state, 'voice_duration': message.voice.duration if message.voice else None}
-    ))
+    )
     
     # Проверяем, в правильном ли состоянии получено сообщение
     allowed_states = [
@@ -343,12 +365,8 @@ async def handle_voice_message(message: Message):
         if not recognized_text:
             await safe_delete_message(message.chat.id, status_msg.message_id)
             
-            # ✅ ЛОГИРУЕМ ОШИБКУ
-            asyncio.create_task(db.log_event(
-                user_id, 
-                'voice_recognition_failed', 
-                {}
-            ))
+            # ✅ ИСПРАВЛЕНО: Логируем ошибку через run_async_task
+            run_async_task(db.log_event, user_id, 'voice_recognition_failed', {})
             
             await safe_send_message(
                 message,
@@ -359,12 +377,12 @@ async def handle_voice_message(message: Message):
         
         logger.info(f"✅ Распознан текст ({len(recognized_text)} символов): {recognized_text[:100]}...")
         
-        # ✅ ЛОГИРУЕМ УСПЕШНОЕ РАСПОЗНАВАНИЕ
-        asyncio.create_task(db.log_event(
+        # ✅ ИСПРАВЛЕНО: Логируем успешное распознавание через run_async_task
+        run_async_task(db.log_event,
             user_id, 
             'voice_recognized', 
             {'text_length': len(recognized_text), 'state': current_state}
-        ))
+        )
         
         # Удаляем статусное сообщение
         await safe_delete_message(message.chat.id, status_msg.message_id)
@@ -399,12 +417,8 @@ async def handle_voice_message(message: Message):
     except Exception as e:
         logger.error(f"❌ Ошибка при обработке голосового сообщения: {e}", exc_info=True)
         
-        # ✅ ЛОГИРУЕМ ОШИБКУ
-        asyncio.create_task(db.log_event(
-            user_id, 
-            'voice_error', 
-            {'error': str(e)}
-        ))
+        # ✅ ИСПРАВЛЕНО: Логируем ошибку через run_async_task
+        run_async_task(db.log_event, user_id, 'voice_error', {'error': str(e)})
         
         if status_msg:
             try:
@@ -435,12 +449,12 @@ async def handle_pretest_voice(message: Message, user_id: int, recognized_text: 
         delete_previous=True
     )
     
-    # ✅ ЛОГИРУЕМ ВОПРОС ДО ТЕСТА
-    asyncio.create_task(db.log_event(
+    # ✅ ИСПРАВЛЕНО: Логируем вопрос до теста через run_async_task
+    run_async_task(db.log_event,
         user_id, 
         'pretest_question_voice', 
         {'text_preview': recognized_text[:100]}
-    ))
+    )
     
     # Сбрасываем состояние
     set_state(user_id, None)
@@ -461,12 +475,8 @@ async def test_voice_message(message: Message, text: str = "Привет! Это
         await safe_send_message(message, "⛔ Только для администраторов", delete_previous=True)
         return
     
-    # ✅ ЛОГИРУЕМ ТЕСТ
-    asyncio.create_task(db.log_event(
-        user_id, 
-        'voice_test_started', 
-        {'text_length': len(text)}
-    ))
+    # ✅ ИСПРАВЛЕНО: Логируем тест через run_async_task
+    run_async_task(db.log_event, user_id, 'voice_test_started', {'text_length': len(text)})
     
     status_msg = await safe_send_message(
         message,
@@ -490,12 +500,8 @@ async def test_voice_message(message: Message, text: str = "Привет! Это
     
     await safe_delete_message(message.chat.id, status_msg.message_id)
     
-    # ✅ ЛОГИРУЕМ РЕЗУЛЬТАТЫ
-    asyncio.create_task(db.log_event(
-        user_id, 
-        'voice_test_completed', 
-        {'results': results}
-    ))
+    # ✅ ИСПРАВЛЕНО: Логируем результаты через run_async_task
+    run_async_task(db.log_event, user_id, 'voice_test_completed', {'results': results})
     
     await safe_send_message(
         message,
