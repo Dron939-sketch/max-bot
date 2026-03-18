@@ -2,9 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики выбора и подтверждения режима для MAX
+ИСПРАВЛЕНО: все f-строки с кавычками
 """
 import logging
 import asyncio
+import time
 from maxibot import types
 from bot_instance import bot
 from config import COMMUNICATION_MODES
@@ -30,7 +32,6 @@ from state import (
     set_state,
     TestStates
 )
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -280,15 +281,15 @@ def choose_mode(call: types.CallbackQuery, mode: str):
     
     mode_info = COMMUNICATION_MODES.get(new_mode, COMMUNICATION_MODES["coach"])
     
-    # Отправляем подтверждение
-    text = f"{mode_info['emoji']} {bold(f'Режим выбран: {mode_info["display_name"]}')}\n\n"
+    # 👇 ИСПРАВЛЕНО: вынесли значение в отдельную переменную
+    mode_display_name = mode_info["display_name"]
+    text = f"{mode_info['emoji']} {bold(f'Режим выбран: {mode_display_name}')}\n\n"
     text += f"{mode_info.get('responsibility', '')}\n\n"
     text += "Теперь давайте познакомимся поближе."
     
     safe_send_message(call.message, text, delete_previous=True)
     
     # Небольшая пауза
-    import time
     time.sleep(1)
     
     # Проверяем, заполнен ли контекст
@@ -569,7 +570,9 @@ def show_main_menu_after_mode(message: types.Message, context: UserContext):
     context.update_weather()
     day_context = context.get_day_context()
     
-    text = f"{mode_config['emoji']} {bold(f'РЕЖИМ {mode_config["display_name"]}')}\n\n"
+    # 👇 ИСПРАВЛЕНО: вынесли значение в отдельную переменную
+    mode_display_name = mode_config["display_name"]
+    text = f"{mode_config['emoji']} {bold(f'РЕЖИМ {mode_display_name}')}\n\n"
     text += context.get_greeting(context.name) + "\n"
     text += f"📅 Сегодня {day_context['weekday']}, {day_context['day']} {day_context['month']}, {day_context['time_str']}\n"
     
