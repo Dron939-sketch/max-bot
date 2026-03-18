@@ -3,13 +3,19 @@
 """
 МОДУЛЬ 2: АНАЛИЗ ПЕТЕЛЬ (loop_analyzer.py)
 Анализирует рекурсивные петли в конфайнмент-модели
+ВЕРСИЯ 2.0 - ДОБАВЛЕНО СОХРАНЕНИЕ РЕЗУЛЬТАТОВ В БД
 """
 
 from typing import List, Dict, Optional, Any, Set, Tuple
 from datetime import datetime
 import logging
+import json
+import asyncio
 
 from confinement_model import ConfinementModel9, ConfinementElement
+
+# ✅ ДОБАВЛЕНО: импорт для БД
+from db_instance import db
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -81,6 +87,104 @@ class LoopAnalyzer:
         
         logger.info(f"LoopAnalyzer инициализирован для модели пользователя {model.user_id}")
     
+    # ============================================
+    # ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
+    # ============================================
+    
+    async def save_analysis_results(self, user_id: int):
+        """Сохраняет результаты анализа в БД"""
+        try:
+            # Сохраняем как событие
+            await db.log_event(
+                user_id,
+                'loop_analysis_completed',
+                {
+                    'total_loops': len(self.significant_loops),
+                    'strongest_impact': self.get_strongest_loop().get('impact', 0) if self.significant_loops else 0,
+                    'loop_types': self._get_loop_types_summary(),
+                    'analysis_time': self._analysis_time.isoformat() if self._analysis_time else None
+                }
+            )
+            
+            # Сохраняем детальную информацию о каждой петле
+            for i, loop in enumerate(self.significant_loops):
+                await self._save_loop_details(user_id, loop, i)
+            
+            logger.info(f"💾 Результаты анализа сохранены в БД для пользователя {user_id}")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения результатов анализа для {user_id}: {e}")
+    
+    async def _save_loop_details(self, user_id: int, loop: Dict[str, Any], index: int):
+        """Сохраняет детали конкретной петли"""
+        try:
+            # Получаем названия элементов в петле
+            element_names = []
+            for elem_id in loop.get('cycle', []):
+                elem = self.model.elements.get(elem_id)
+                if elem:
+                    element_names.append(elem.name)
+            
+            # Получаем точки вмешательства
+            intervention_points = self.get_intervention_points(loop)
+            
+            await db.log_event(
+                user_id,
+                'loop_detail',
+                {
+                    'loop_index': index,
+                    'loop_type': loop.get('type'),
+                    'loop_description': loop.get('description'),
+                    'impact': loop.get('impact', 0),
+                    'cycle': loop.get('cycle', []),
+                    'element_names': element_names,
+                    'length': loop.get('length', 0),
+                    'best_intervention': intervention_points[0] if intervention_points else None,
+                    'intervention_points_count': len(intervention_points)
+                }
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения деталей петли: {e}")
+    
+    def _get_loop_types_summary(self) -> Dict[str, int]:
+        """Возвращает сводку по типам петель"""
+        summary = {}
+        for loop_type in self.LOOP_DESCRIPTIONS.keys():
+            count = len(self.get_loops_by_type(loop_type))
+            if count > 0:
+                summary[loop_type] = count
+        return summary
+    
+    async def get_saved_analysis(self, user_id: int, limit: int = 1) -> List[Dict]:
+        """Получает сохраненные результаты анализа из БД"""
+        try:
+            async with db.get_connection() as conn:
+                rows = await conn.fetch("""
+                    SELECT event_data, created_at
+                    FROM fredi_events
+                    WHERE user_id = $1 AND event_type = 'loop_analysis_completed'
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                """, user_id, limit)
+                
+                results = []
+                for row in rows:
+                    data = row['event_data']
+                    if isinstance(data, str):
+                        data = json.loads(data)
+                    results.append({
+                        'data': data,
+                        'time': row['created_at']
+                    })
+                return results
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения сохраненных анализов для {user_id}: {e}")
+            return []
+    
+    # ============================================
+    # ОСНОВНЫЕ МЕТОДЫ АНАЛИЗА
+    # ============================================
+    
     def analyze(self) -> List[Dict[str, Any]]:
         """
         Главный метод анализа - возвращает все значимые петли
@@ -96,6 +200,10 @@ class LoopAnalyzer:
         self._rank_loops_by_impact()
         self._describe_loops()
         self._filter_insignificant_loops()
+        
+        # ✅ Асинхронно сохраняем результаты, если есть user_id
+        if hasattr(self.model, 'user_id') and self.model.user_id:
+            asyncio.create_task(self.save_analysis_results(self.model.user_id))
         
         logger.info(f"Анализ завершен. Найдено {len(self.significant_loops)} петель")
         return self.significant_loops.copy()
@@ -538,6 +646,42 @@ def format_loop_for_display(loop: Dict[str, Any], detailed: bool = False) -> str
         return f"{loop['description']} (сила {loop['impact']:.0%})"
 
 
+async def get_user_loop_analysis_history(user_id: int, limit: int = 5) -> List[Dict]:
+    """
+    Получает историю анализов петель пользователя из БД
+    
+    Args:
+        user_id: ID пользователя
+        limit: максимальное количество записей
+        
+    Returns:
+        list: история анализов
+    """
+    try:
+        async with db.get_connection() as conn:
+            rows = await conn.fetch("""
+                SELECT event_data, created_at
+                FROM fredi_events
+                WHERE user_id = $1 AND event_type = 'loop_analysis_completed'
+                ORDER BY created_at DESC
+                LIMIT $2
+            """, user_id, limit)
+            
+            history = []
+            for row in rows:
+                data = row['event_data']
+                if isinstance(data, str):
+                    data = json.loads(data)
+                history.append({
+                    'data': data,
+                    'time': row['created_at']
+                })
+            return history
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения истории анализов для {user_id}: {e}")
+        return []
+
+
 # ============================================
 # ПРИМЕР ИСПОЛЬЗОВАНИЯ (для тестирования)
 # ============================================
@@ -584,3 +728,15 @@ if __name__ == "__main__":
         print(analyzer.get_break_points_summary())
     
     print("\n✅ Тест завершен")
+
+
+# ============================================
+# ЭКСПОРТ
+# ============================================
+
+__all__ = [
+    'LoopAnalyzer',
+    'create_analyzer_from_model_data',
+    'format_loop_for_display',
+    'get_user_loop_analysis_history'
+]
