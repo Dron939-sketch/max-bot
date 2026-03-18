@@ -5,7 +5,7 @@
 ВЕРСИЯ ДЛЯ MAX
 ИСПРАВЛЕНО: обработка вопросов без await для синхронных функций
 ДОБАВЛЕНО: FastAPI для мини-приложения
-ИСПРАВЛЕНО: f-strings quotes error (финальная версия)
+ИСПРАВЛЕНО: f-strings quotes error (финальное решение)
 """
 
 import os
@@ -807,8 +807,9 @@ def show_main_menu_after_mode(message: types.Message, context: UserContext):
     context.update_weather()
     day_context = context.get_day_context()
     
-    # 👇 ИСПРАВЛЕННАЯ СТРОКА - используются одинарные кавычки внутри f-строки
-    text = f"{mode_config['emoji']} {bold(f'РЕЖИМ {mode_config['display_name']}')}\n\n"
+    # 👇 ИСПРАВЛЕНО: вынесли значение в отдельную переменную
+    mode_name = mode_config['display_name']
+    text = f"{mode_config['emoji']} {bold(f'РЕЖИМ {mode_name}')}\n\n"
     text += context.get_greeting(context.name) + "\n"
     text += f"📅 Сегодня {day_context['weekday']}, {day_context['day']} {day_context['month']}, {day_context['time_str']}\n"
     
