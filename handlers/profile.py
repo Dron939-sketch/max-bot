@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики профиля пользователя для MAX
-Версия 2.5 - ДОБАВЛЕНО СОХРАНЕНИЕ В БД
-ИСПРАВЛЕНО: добавлена синхронная show_final_profile
+Версия 2.6 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
 ПОЛНАЯ ВЕРСИЯ СО ВСЕМИ ФУНКЦИЯМИ
 """
 
@@ -11,6 +10,7 @@ import logging
 import asyncio
 import time
 import traceback
+import threading  # ✅ ДОБАВЛЕНО
 from typing import Optional, List, Dict, Any
 
 from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -41,6 +41,27 @@ logger = logging.getLogger(__name__)
 
 # Флаг для предотвращения одновременной генерации для одного пользователя
 _profile_generation_in_progress = {}
+
+# ============================================
+# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# ============================================
+
+def run_async_task(coro_func, *args, **kwargs):
+    """
+    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
+    """
+    def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            coro = coro_func(*args, **kwargs)
+            loop.run_until_complete(coro)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+        finally:
+            loop.close()
+    
+    threading.Thread(target=_wrapper, daemon=True).start()
 
 # ============================================
 # ФУНКЦИЯ ДЛЯ РАЗБИВКИ ДЛИННЫХ СООБЩЕНИЙ
@@ -440,8 +461,8 @@ async def show_ai_profile_async(message: Message, user_id: int):
                     user_data[user_id] = {}
                 user_data[user_id]["ai_generated_profile"] = ai_profile
                 
-                # ✅ СОХРАНЯЕМ В БД
-                asyncio.create_task(save_profile_to_db(user_id))
+                # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+                run_async_task(save_profile_to_db, user_id)
         
         if status_msg:
             try:
@@ -724,11 +745,11 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                     logger.error(f"❌ Ошибка при отправке части мысли {i+1}: {e}")
                     continue
             
-            # ✅ СОХРАНЯЕМ МЫСЛЬ В БД
+            # ✅ ИСПРАВЛЕНО: Сохраняем мысль в БД через run_async_task
             if user_id not in user_data:
                 user_data[user_id] = {}
             user_data[user_id]["psychologist_thought"] = thought
-            asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, {}))
+            run_async_task(save_user_to_db, user_id, user_data, user_contexts, {})
             
             logger.info(f"🎉 Все {len(merged_parts)} частей мысли успешно отправлены")
             return
@@ -836,8 +857,8 @@ async def show_final_profile_async(message: Message, user_id: int):
             user_data[user_id] = {}
         user_data[user_id]["ai_generated_profile"] = ai_profile
         
-        # ✅ СОХРАНЯЕМ В БД
-        asyncio.create_task(save_profile_to_db(user_id))
+        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+        run_async_task(save_profile_to_db, user_id)
         
         if status_msg:
             try:
