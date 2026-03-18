@@ -48,7 +48,7 @@ from state import (
 )
 
 # Импортируем базу данных из main
-from main import db, save_user_to_db
+from db_instance import db, save_user_to_db
 
 logger = logging.getLogger(__name__)
 
