@@ -283,7 +283,7 @@ def choose_mode(call: types.CallbackQuery, mode: str):
     
     # 👇 ИСПРАВЛЕНО: вынесли значение в отдельную переменную
     mode_display_name = mode_info["display_name"]
-    text = f"{mode_info['emoji']} {bold(f'Режим выбран: {mode_display_name}')}\n\n"
+    text = f"{mode_info['emoji']} {bold(f'Выбранный режим: {mode_display_name}')}\n\n"
     text += f"{mode_info.get('responsibility', '')}\n\n"
     text += "Теперь давайте познакомимся поближе."
     
