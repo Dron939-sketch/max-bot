@@ -1,7 +1,7 @@
 // ============================================
 // script.js - ФРЕДИ: ВИРТУАЛЬНЫЙ ПСИХОЛОГ
 // Все тексты взяты из Telegram-бота
-// ИСПРАВЛЕНО: подстановка имени, рабочая кнопка
+// ПОЛНАЯ ВЕРСИЯ С РАБОЧИМИ ЭКРАНАМИ
 // ============================================
 
 // ============================================
@@ -14,7 +14,128 @@ let app = {
     userData: {},
     hasProfile: false,
     selectedMode: null,
-    messages: []
+    messages: [],
+    
+    // Данные теста
+    testData: {
+        stage1: {
+            current: 0,
+            total: 8,
+            answers: [],
+            scores: { EXTERNAL: 0, INTERNAL: 0, SYMBOLIC: 0, MATERIAL: 0 }
+        },
+        stage2: {
+            current: 0,
+            total: 0, // будет определено после выбора режима
+            answers: [],
+            levelScores: { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0, "6": 0, "7": 0, "8": 0, "9": 0 },
+            strategyLevels: { "СБ": [], "ТФ": [], "УБ": [], "ЧВ": [] }
+        },
+        stage3: {
+            current: 0,
+            total: 8,
+            answers: [],
+            behavioralLevels: { "СБ": [], "ТФ": [], "УБ": [], "ЧВ": [] }
+        },
+        stage4: {
+            current: 0,
+            total: 8,
+            answers: [],
+            diltsCounts: { "ENVIRONMENT": 0, "BEHAVIOR": 0, "CAPABILITIES": 0, "VALUES": 0, "IDENTITY": 0 }
+        },
+        stage5: {
+            current: 0,
+            total: 10,
+            answers: []
+        }
+    },
+    
+    // Вопросы этапа 1
+    stage1Questions: [
+        {
+            text: "Как вы обычно реагируете, когда кто-то критикует вашу работу?",
+            options: {
+                "a": { text: "Долго переживаю, прокручиваю в голове", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "b": { text: "Сразу начинаю защищаться или оправдываться", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "c": { text: "Анализирую, есть ли в критике польза", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 0, "MATERIAL": 1 } },
+                "d": { text: "Забиваю — подумаешь, дело житейское", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 0, "MATERIAL": 1 } }
+            }
+        },
+        {
+            text: "Что для вас важнее при выборе одежды?",
+            options: {
+                "a": { text: "Чтобы выглядеть стильно и соответствовать моде", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "b": { text: "Чтобы было комфортно и удобно", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 0, "MATERIAL": 1 } },
+                "c": { text: "Чтобы подчеркнуть мою индивидуальность", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "d": { text: "Чтобы было практично и не марко", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 0, "MATERIAL": 1 } }
+            }
+        },
+        {
+            text: "Когда вы попадаете в новую компанию, вы:",
+            options: {
+                "a": { text: "Сначала наблюдаете, прислушиваетесь к своим ощущениям", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "b": { text: "Активно знакомитесь, вступаете в разговоры", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "c": { text: "Оцениваете, кто здесь может быть полезен", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 0, "MATERIAL": 1 } },
+                "d": { text: "Думаете: 'Главное, чтобы не доставали'", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 0, "MATERIAL": 1 } }
+            }
+        },
+        {
+            text: "Что вас больше всего тревожит в нестабильные времена?",
+            options: {
+                "a": { text: "Что я могу потерять связь с близкими", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "b": { text: "Что я потеряю контроль над своей жизнью", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 0, "MATERIAL": 1 } },
+                "c": { text: "Что обесценятся мои знания и опыт", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "d": { text: "Что останусь без денег и ресурсов", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 0, "MATERIAL": 1 } }
+            }
+        },
+        {
+            text: "Как вы обычно принимаете важные решения?",
+            options: {
+                "a": { text: "Прислушиваюсь к интуиции, внутреннему голосу", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "b": { text: "Советуюсь с теми, кому доверяю", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "c": { text: "Просчитываю риски и выгоду", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 0, "MATERIAL": 1 } },
+                "d": { text: "Смотрю, как другие в такой ситуации поступили", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 0, "MATERIAL": 1 } }
+            }
+        },
+        {
+            text: "Что для вас означает 'успех'?",
+            options: {
+                "a": { text: "Быть признанным, уважаемым в обществе", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "b": { text: "Чувствовать гармонию и удовлетворение", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "c": { text: "Иметь стабильный доход и активы", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 0, "MATERIAL": 1 } },
+                "d": { text: "Достичь конкретных целей, которые поставил", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 0, "MATERIAL": 1 } }
+            }
+        },
+        {
+            text: "Когда кто-то обещает вам что-то важное, вы:",
+            options: {
+                "a": { text: "Верю на слово, пока не докажут обратное", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "b": { text: "Надеюсь, но внутренне готовлюсь к худшему", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "c": { text: "Проверяю, создаю запасной план", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 0, "MATERIAL": 1 } },
+                "d": { text: "Жду результата, слова — не главное", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 0, "MATERIAL": 1 } }
+            }
+        },
+        {
+            text: "Что вы чувствуете, когда долго находитесь в одиночестве?",
+            options: {
+                "a": { text: "Тревогу, хочется к людям", scores: { "EXTERNAL": 1, "INTERNAL": 0, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "b": { text: "Умиротворение, наконец-то тишина", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "c": { text: "Начинаю думать о смысле жизни", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 1, "MATERIAL": 0 } },
+                "d": { text: "Планирую дела, строю планы", scores: { "EXTERNAL": 0, "INTERNAL": 1, "SYMBOLIC": 0, "MATERIAL": 1 } }
+            }
+        }
+    ],
+    
+    // Результаты этапа 1 по типам восприятия
+    stage1Results: {
+        "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ": "🧠 ВАШЕ ВОСПРИЯТИЕ: СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ\n\nВы смотрите на мир через людей. Для вас важны отношения, статус, признание. Ваша тревога — быть отвергнутым, непонятым, остаться в одиночестве. Вы чутко считываете настроение других и часто подстраиваетесь под ожидания. Это делает вас прекрасным коммуникатором, но иногда вы теряете себя в угоду другим.",
+        
+        "СТАТУСНО-ОРИЕНТИРОВАННЫЙ": "🧠 ВАШЕ ВОСПРИЯТИЕ: СТАТУСНО-ОРИЕНТИРОВАННЫЙ\n\nВы смотрите на мир через достижения. Для вас важны результаты, ресурсы, контроль. Ваша тревога — потерять позиции, оказаться не у дел, лишиться ресурсов. Вы прагматичны, цените эффективность и умеете добиваться своего. Это помогает вам в карьере, но иногда вы забываете о чувствах — своих и чужих.",
+        
+        "СМЫСЛО-ОРИЕНТИРОВАННЫЙ": "🧠 ВАШЕ ВОСПРИЯТИЕ: СМЫСЛО-ОРИЕНТИРОВАННЫЙ\n\nВы смотрите на мир через идеи и смыслы. Для вас важны понимание, глубина, истина. Ваша тревога — жить бессмысленно, не найти своего пути. Вы склонны к рефлексии, ищете закономерности и часто углублены в себя. Это даёт вам мудрость, но может отрывать от реальности.",
+        
+        "ПРАКТИКО-ОРИЕНТИРОВАННЫЙ": "🧠 ВАШЕ ВОСПРИЯТИЕ: ПРАКТИКО-ОРИЕНТИРОВАННЫЙ\n\nВы смотрите на мир через конкретику. Для вас важны факты, действия, результат здесь и сейчас. Ваша тревога — не справиться, не успеть, не получить нужного. Вы живёте в реальности, цените практичность и умеете действовать. Это делает вас эффективным, но иногда вы упускаете общую картину."
+    }
 };
 
 // ============================================
@@ -25,23 +146,27 @@ function getUserId() {
     // 1. Из URL параметров
     const urlParams = new URLSearchParams(window.location.search);
     const urlUserId = urlParams.get('user_id');
+    const urlName = urlParams.get('first_name');
     
     if (urlUserId) {
         console.log('✅ User ID из URL:', urlUserId);
+        if (urlName) app.userData.user_name = urlName;
         return urlUserId;
     }
     
     // 2. Из MAX WebApp
     try {
-        if (window.WebApp?.initDataUnsafe?.user?.id) {
-            const maxId = window.WebApp.initDataUnsafe.user.id;
-            console.log('✅ User ID из MAX WebApp:', maxId);
-            return maxId;
+        if (window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
+            const tgUser = window.Telegram.WebApp.initDataUnsafe.user;
+            console.log('✅ User ID из Telegram WebApp:', tgUser.id);
+            app.userData.user_name = tgUser.first_name;
+            return tgUser.id;
         }
     } catch (e) {}
     
     // 3. Тестовый ID
     console.log('⚠️ Использую тестовый ID: 213102077');
+    app.userData.user_name = 'Андрей';
     return '213102077';
 }
 
@@ -63,6 +188,12 @@ function getTimeGreeting() {
 
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('🚀 ФРЕДИ: Мини-приложение запущено');
+    
+    // Инициализируем Telegram WebApp
+    if (window.Telegram?.WebApp) {
+        window.Telegram.WebApp.ready();
+        window.Telegram.WebApp.expand();
+    }
     
     // Получаем ID пользователя
     app.userId = getUserId();
@@ -86,25 +217,47 @@ async function loadUserData() {
         const response = await fetch(`/api/user-data?user_id=${app.userId}`);
         if (!response.ok) throw new Error('Ошибка загрузки');
         
-        app.userData = await response.json();
+        const data = await response.json();
+        app.userData = { ...app.userData, ...data };
         app.hasProfile = app.userData.has_profile || false;
         
         // Показываем соответствующий экран
         if (app.hasProfile) {
-            // У пользователя есть профиль - показываем главное меню
+            // Загружаем профиль, если есть
+            await loadProfile();
             showScreen('main');
-            // Показываем навигацию
             document.getElementById('navBar').style.display = 'flex';
         } else {
-            // Новый пользователь - показываем приветствие
             showScreen('welcome');
-            // Скрываем навигацию
             document.getElementById('navBar').style.display = 'none';
         }
         
     } catch (error) {
         console.error('Ошибка загрузки данных:', error);
-        showError('Не удалось загрузить данные пользователя');
+        // Если API не доступен, показываем локальную версию
+        if (app.userData.user_name) {
+            showScreen('welcome');
+        } else {
+            showError('Не удалось загрузить данные пользователя');
+        }
+    }
+}
+
+async function loadProfile() {
+    try {
+        const response = await fetch(`/api/profile?user_id=${app.userId}`);
+        if (response.ok) {
+            const data = await response.json();
+            app.userData.profile = data.profile;
+        }
+        
+        const thoughtResponse = await fetch(`/api/thought?user_id=${app.userId}`);
+        if (thoughtResponse.ok) {
+            const data = await thoughtResponse.json();
+            app.userData.thought = data.thought;
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки профиля:', error);
     }
 }
 
@@ -115,21 +268,32 @@ async function loadUserData() {
 function setupBackButton() {
     const backBtn = document.getElementById('backBtn');
     backBtn.addEventListener('click', () => {
-        if (app.currentScreen === 'welcome' || app.currentScreen === 'main') {
-            // На главной - закрываем приложение
-            if (window.WebApp?.close) window.WebApp.close();
-        } else if (app.currentScreen === 'why') {
-            // С экрана "А ты кто" возвращаемся к приветствию
-            showScreen('welcome');
-        } else if (app.currentScreen === 'mode') {
-            // С выбора режима возвращаемся к главному меню
-            showScreen('main');
-        } else if (app.currentScreen === 'stage1') {
-            // С этапа 1 возвращаемся к приветствию
-            showScreen('welcome');
-        } else {
-            // По умолчанию - на главную
-            showScreen('main');
+        switch(app.currentScreen) {
+            case 'welcome':
+            case 'main':
+                if (window.Telegram?.WebApp) {
+                    window.Telegram.WebApp.close();
+                }
+                break;
+            case 'why':
+            case 'stage1':
+            case 'stage2':
+            case 'stage3':
+            case 'stage4':
+            case 'stage5':
+            case 'profile':
+            case 'thought':
+            case 'goals':
+                showScreen('main');
+                break;
+            case 'mode':
+                showScreen('main');
+                break;
+            case 'ask':
+                showScreen('main');
+                break;
+            default:
+                showScreen('main');
         }
     });
 }
@@ -148,7 +312,11 @@ function showScreen(screen) {
         'why': '🧐 ФРЕДИ',
         'main': '🏠 ФРЕДИ',
         'mode': '🔮 ФРЕДИ',
-        'stage1': '🧠 ЭТАП 1',
+        'stage1': '🧠 ЭТАП 1/5',
+        'stage2': '🧠 ЭТАП 2/5',
+        'stage3': '🧠 ЭТАП 3/5',
+        'stage4': '🧠 ЭТАП 4/5',
+        'stage5': '🧠 ЭТАП 5/5',
         'profile': '📊 ПОРТРЕТ',
         'thought': '🧠 МЫСЛИ',
         'goals': '🎯 ЦЕЛИ',
@@ -159,6 +327,14 @@ function showScreen(screen) {
     // Показываем/скрываем кнопку назад
     const backBtn = document.getElementById('backBtn');
     backBtn.style.display = (screen === 'welcome' || screen === 'main') ? 'none' : 'flex';
+    
+    // Показываем/скрываем нижнюю навигацию
+    const navBar = document.getElementById('navBar');
+    if (screen === 'main' || screen === 'profile' || screen === 'thought' || screen === 'goals' || screen === 'ask') {
+        navBar.style.display = 'flex';
+    } else {
+        navBar.style.display = 'none';
+    }
     
     // Загружаем контент
     const content = document.getElementById('content');
@@ -180,6 +356,18 @@ function showScreen(screen) {
                 break;
             case 'stage1':
                 renderStage1Screen(content);
+                break;
+            case 'stage2':
+                renderStage2Screen(content);
+                break;
+            case 'stage3':
+                renderStage3Screen(content);
+                break;
+            case 'stage4':
+                renderStage4Screen(content);
+                break;
+            case 'stage5':
+                renderStage5Screen(content);
                 break;
             case 'profile':
                 renderProfileScreen(content);
@@ -206,7 +394,6 @@ function showScreen(screen) {
 // ============================================
 
 function renderWelcomeScreen(container) {
-    // ✅ Берем имя из данных пользователя
     const userName = app.userData.user_name || 'Андрей';
     
     const html = `
@@ -257,7 +444,7 @@ function renderWelcomeScreen(container) {
             </div>
             
             <div class="action-buttons">
-                <button class="action-btn primary" onclick="startTest()">
+                <button class="action-btn primary" onclick="startStage1()">
                     🚀 ДАВАЙ, ПОГНАЛИ!
                 </button>
                 <button class="action-btn secondary" onclick="showScreen('why')">
@@ -311,7 +498,7 @@ function renderWhyScreen(container) {
             </div>
             
             <div class="action-buttons">
-                <button class="action-btn primary" onclick="startTest()">
+                <button class="action-btn primary" onclick="startStage1()">
                     🚀 ПОГНАЛИ!
                 </button>
                 <button class="action-btn secondary" onclick="showScreen('welcome')">
@@ -325,35 +512,258 @@ function renderWhyScreen(container) {
 }
 
 // ============================================
-// ЭКРАН ЭТАПА 1 (ПОСЛЕ НАЖАТИЯ "ДАВАЙ, ПОГНАЛИ!")
+// ЭКРАН ЭТАПА 1 (ВОПРОСЫ)
 // ============================================
 
 function renderStage1Screen(container) {
+    const current = app.testData.stage1.current;
+    const total = app.testData.stage1.total;
+    
+    if (current >= total) {
+        finishStage1();
+        return;
+    }
+    
+    const question = app.stage1Questions[current];
+    const progress = Math.round((current / total) * 100);
+    
+    let optionsHtml = '';
+    for (const [key, option] of Object.entries(question.options)) {
+        optionsHtml += `
+            <button class="option-btn" onclick="answerStage1('${key}')">
+                ${option.text}
+            </button>
+        `;
+    }
+    
     const html = `
-        <div class="welcome-screen">
+        <div class="stage-screen">
+            <div class="stage-header">
+                <span class="stage-title">🧠 ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ</span>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: ${progress}%"></div>
+                </div>
+                <span class="progress-text">Вопрос ${current + 1}/${total}</span>
+            </div>
+            
+            <div class="question-text">
+                ${question.text}
+            </div>
+            
+            <div class="options-container">
+                ${optionsHtml}
+            </div>
+        </div>
+    `;
+    
+    container.innerHTML = html;
+}
+
+function answerStage1(optionKey) {
+    const current = app.testData.stage1.current;
+    const question = app.stage1Questions[current];
+    const selectedOption = question.options[optionKey];
+    
+    // Сохраняем ответ
+    app.testData.stage1.answers.push({
+        question: current,
+        answer: optionKey,
+        text: selectedOption.text
+    });
+    
+    // Обновляем счета
+    const scores = selectedOption.scores;
+    for (const [key, value] of Object.entries(scores)) {
+        app.testData.stage1.scores[key] += value;
+    }
+    
+    // Переходим к следующему вопросу
+    app.testData.stage1.current++;
+    
+    if (app.testData.stage1.current >= app.testData.stage1.total) {
+        finishStage1();
+    } else {
+        showScreen('stage1');
+    }
+}
+
+function finishStage1() {
+    // Определяем тип восприятия
+    const scores = app.testData.stage1.scores;
+    const external = scores.EXTERNAL || 0;
+    const internal = scores.INTERNAL || 0;
+    const symbolic = scores.SYMBOLIC || 0;
+    const material = scores.MATERIAL || 0;
+    
+    const attention = external > internal ? "EXTERNAL" : "INTERNAL";
+    const anxiety = symbolic > material ? "SYMBOLIC" : "MATERIAL";
+    
+    let perceptionType = "";
+    if (attention === "EXTERNAL" && anxiety === "SYMBOLIC") {
+        perceptionType = "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ";
+    } else if (attention === "EXTERNAL" && anxiety === "MATERIAL") {
+        perceptionType = "СТАТУСНО-ОРИЕНТИРОВАННЫЙ";
+    } else if (attention === "INTERNAL" && anxiety === "SYMBOLIC") {
+        perceptionType = "СМЫСЛО-ОРИЕНТИРОВАННЫЙ";
+    } else {
+        perceptionType = "ПРАКТИКО-ОРИЕНТИРОВАННЫЙ";
+    }
+    
+    app.testData.perceptionType = perceptionType;
+    
+    // Показываем результат
+    const resultText = app.stage1Results[perceptionType] || app.stage1Results["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"];
+    
+    const content = document.getElementById('content');
+    content.innerHTML = `
+        <div class="result-screen">
+            <div class="result-text">${resultText.replace(/\n/g, '<br>')}</div>
+            <button class="action-btn primary" onclick="startStage2()">
+                ▶️ ПЕРЕЙТИ К ЭТАПУ 2
+            </button>
+        </div>
+    `;
+}
+
+// ============================================
+// ЭКРАН ЭТАПА 2 (ЗАГОТОВКА)
+// ============================================
+
+function renderStage2Screen(container) {
+    const html = `
+        <div class="stage-screen">
+            <div class="stage-header">
+                <span class="stage-title">🧠 ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ</span>
+            </div>
+            
             <div class="welcome-text">
-                <p>🧠 <strong>ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ</strong></p>
+                <p>Восприятие определяет, что вы видите. Мышление — как вы это понимаете.</p>
                 
-                <p>Восприятие — это линза, через которую вы смотрите на мир.</p>
+                <p>🎯 <strong>Самое важное:</strong><br>
+                Конфигурация мышления — это траектория с чётким пунктом назначения: результат, к которому вы придёте. Если ничего не менять — вы попадёте именно туда.</p>
                 
-                <p>🔍 <strong>Что мы исследуем:</strong><br>
-                • Куда направлено ваше внимание — вовне или внутрь<br>
-                • Какая тревога доминирует — страх отвержения или страх потери контроля</p>
+                <p>📊 <strong>Вопросов:</strong> зависит от типа восприятия<br>
+                ⏱ <strong>Время:</strong> ~3-4 минуты</p>
+                
+                <p>Продолжим исследование?</p>
+            </div>
+            
+            <button class="action-btn primary" onclick="startStage2Questions()">
+                ▶️ НАЧАТЬ ИССЛЕДОВАНИЕ
+            </button>
+        </div>
+    `;
+    
+    container.innerHTML = html;
+}
+
+function startStage2() {
+    showScreen('stage2');
+}
+
+function startStage2Questions() {
+    // Здесь будет логика вопросов этапа 2
+    alert('Этап 2 в разработке');
+}
+
+// ============================================
+// ЭКРАН ЭТАПА 3 (ЗАГОТОВКА)
+// ============================================
+
+function renderStage3Screen(container) {
+    const html = `
+        <div class="stage-screen">
+            <div class="stage-header">
+                <span class="stage-title">🧠 ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ</span>
+            </div>
+            
+            <div class="welcome-text">
+                <p>Восприятие определяет, что вы видите.<br>
+                Мышление — как вы это понимаете.</p>
+                
+                <p>Конфигурация поведения — это то, как вы на это реагируете.</p>
+                
+                <p>🔍 <strong>Здесь мы исследуем:</strong><br>
+                • Ваши автоматические реакции<br>
+                • Как вы действуете в разных ситуациях<br>
+                • Какие стратегии поведения закреплены</p>
                 
                 <p>📊 <strong>Вопросов:</strong> 8<br>
                 ⏱ <strong>Время:</strong> ~3 минуты</p>
-                
-                <p>Отвечайте честно — это поможет мне лучше понять вас.</p>
             </div>
             
-            <div class="action-buttons">
-                <button class="action-btn primary" onclick="startStage1()">
-                    ▶️ НАЧАТЬ ИССЛЕДОВАНИЕ
-                </button>
-                <button class="action-btn secondary" onclick="showScreen('welcome')">
-                    ◀️ НАЗАД
-                </button>
+            <button class="action-btn primary" onclick="alert('Этап 3 в разработке')">
+                ▶️ НАЧАТЬ ИССЛЕДОВАНИЕ
+            </button>
+        </div>
+    `;
+    
+    container.innerHTML = html;
+}
+
+// ============================================
+// ЭКРАН ЭТАПА 4 (ЗАГОТОВКА)
+// ============================================
+
+function renderStage4Screen(container) {
+    const html = `
+        <div class="stage-screen">
+            <div class="stage-header">
+                <span class="stage-title">🧠 ЭТАП 4: ТОЧКА РОСТА</span>
             </div>
+            
+            <div class="welcome-text">
+                <p>Восприятие — что вы видите.<br>
+                Мышление — как понимаете.<br>
+                Поведение — как реагируете.</p>
+                
+                <p>🌍 Но она живёт внутри внешней системы — общества, которое постоянно меняется.</p>
+                
+                <p>⚡ Когда одна система меняется, а другая — нет, возникает напряжение.</p>
+                
+                <p>🔍 <strong>Здесь мы найдём:</strong> где именно находится рычаг — место, где минимальное усилие даёт максимальные изменения.</p>
+                
+                <p>📊 <strong>Вопросов:</strong> 8<br>
+                ⏱ <strong>Время:</strong> ~3 минуты</p>
+            </div>
+            
+            <button class="action-btn primary" onclick="alert('Этап 4 в разработке')">
+                ▶️ НАЧАТЬ ИССЛЕДОВАНИЕ
+            </button>
+        </div>
+    `;
+    
+    container.innerHTML = html;
+}
+
+// ============================================
+// ЭКРАН ЭТАПА 5 (ЗАГОТОВКА)
+// ============================================
+
+function renderStage5Screen(container) {
+    const html = `
+        <div class="stage-screen">
+            <div class="stage-header">
+                <span class="stage-title">🧠 ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ</span>
+            </div>
+            
+            <div class="welcome-text">
+                <p>Мы узнали, как вы воспринимаете мир, мыслите и действуете.<br>
+                Теперь пришло время заглянуть глубже — в то, что сформировало вас.</p>
+                
+                <p>🔍 <strong>Здесь мы исследуем:</strong><br>
+                • Какой у вас тип привязанности (из детства)<br>
+                • Какие защитные механизмы вы используете<br>
+                • Какие глубинные убеждения управляют вами<br>
+                • Чего вы боитесь на самом деле</p>
+                
+                <p>📊 <strong>Вопросов:</strong> 10<br>
+                ⏱ <strong>Время:</strong> ~5 минут</p>
+            </div>
+            
+            <button class="action-btn primary" onclick="alert('Этап 5 в разработке')">
+                ▶️ НАЧАТЬ ИССЛЕДОВАНИЕ
+            </button>
         </div>
     `;
     
@@ -367,11 +777,6 @@ function renderStage1Screen(container) {
 function renderMainScreen(container) {
     const greeting = getTimeGreeting();
     const userName = app.userData.user_name || 'друг';
-    
-    // Погода (заглушка)
-    const weatherEmoji = '☁️';
-    const weatherDesc = 'пасмурно';
-    const weatherTemp = '+5°C';
     
     // Определяем контекст по времени
     const hour = new Date().getHours();
@@ -390,42 +795,49 @@ function renderMainScreen(container) {
         contextMessage = '🏖 Сегодня выходной! Как настроение?';
     }
     
+    const profileCode = app.userData.profile_code || 'СБ-4_ТФ-4_УБ-4_ЧВ-4';
+    
     const html = `
-        <div class="welcome-screen">
-            <div class="greeting">👋 ${greeting}, ${userName}!</div>
+        <div class="main-screen">
+            <div class="greeting">${greeting}, ${userName}!</div>
             
-            <div class="weather">
-                <span>${weatherEmoji}</span>
-                <span>${weatherDesc}, ${weatherTemp}</span>
+            <div class="profile-badge" onclick="showScreen('profile')">
+                <span class="profile-code">${profileCode}</span>
+                <span class="profile-arrow">📊</span>
             </div>
             
             <div class="context-message">
                 ${contextMessage}
             </div>
             
-            <div class="mode-buttons">
-                <div class="mode-row">
-                    <button class="mode-btn hard" onclick="selectMode('hard')">
-                        🔴 ЖЕСТКИЙ
-                    </button>
-                    <button class="mode-btn medium" onclick="selectMode('medium')">
-                        🟡 СРЕДНИЙ
-                    </button>
-                </div>
-                <div class="mode-row">
-                    <button class="mode-btn soft" onclick="selectMode('soft')">
-                        🟢 МЯГКИЙ
-                    </button>
-                </div>
+            <div class="main-menu">
+                <button class="menu-card" onclick="showScreen('mode')">
+                    <span class="menu-emoji">🔮</span>
+                    <span class="menu-title">ВЫБРАТЬ РЕЖИМ</span>
+                    <span class="menu-desc">Коуч / Психолог / Тренер</span>
+                </button>
+                
+                <button class="menu-card" onclick="showScreen('thought')">
+                    <span class="menu-emoji">🧠</span>
+                    <span class="menu-title">МЫСЛИ ПСИХОЛОГА</span>
+                    <span class="menu-desc">Глубинный анализ</span>
+                </button>
+                
+                <button class="menu-card" onclick="showScreen('goals')">
+                    <span class="menu-emoji">🎯</span>
+                    <span class="menu-title">ВЫБРАТЬ ЦЕЛЬ</span>
+                    <span class="menu-desc">Индивидуальный маршрут</span>
+                </button>
+                
+                <button class="menu-card" onclick="showScreen('ask')">
+                    <span class="menu-emoji">❓</span>
+                    <span class="menu-title">ЗАДАТЬ ВОПРОС</span>
+                    <span class="menu-desc">Текст или голос</span>
+                </button>
             </div>
             
-            <div class="menu-buttons">
-                <button class="menu-btn" onclick="showBenefits()">
-                    📖 ЧТО ДАЕТ ТЕСТ
-                </button>
-                <button class="menu-btn" onclick="showScreen('ask')">
-                    ❓ ЗАДАТЬ ВОПРОС
-                </button>
+            <div class="weekend-hint" onclick="showWeekendIdeas()">
+                🎨 Идеи на выходные →
             </div>
         </div>
     `;
@@ -458,6 +870,7 @@ function renderModeScreen(container) {
                     <li>• Жить станет легче — перестанешь закапываться в сомнениях</li>
                     <li>• Появится больше радости от простых вещей</li>
                     <li>• Начнёшь замечать возможности вместо проблем</li>
+                    <li>• Перестанешь чувствовать вину за каждый шаг</li>
                 </ul>
             </div>
             
@@ -467,8 +880,9 @@ function renderModeScreen(container) {
                     Если хочешь копнуть вглубь, разобраться с причинами, а не следствиями.
                 </div>
                 <ul class="mode-benefits">
-                    <li>• Перестанешь реагировать на триггеры</li>
+                    <li>• Перестанешь реагировать на триггеры — будешь выбирать реакцию сам</li>
                     <li>• Исчезнут старые сценарии, которые портили жизнь</li>
+                    <li>• Поймёшь, откуда растут ноги у твоих страхов</li>
                     <li>• Внутри станет легче и спокойнее</li>
                 </ul>
             </div>
@@ -479,15 +893,43 @@ function renderModeScreen(container) {
                     Если нужны чёткие инструменты, навыки и результат.
                 </div>
                 <ul class="mode-benefits">
-                    <li>• Научишься чётко формулировать мысли</li>
+                    <li>• Научишься чётко формулировать мысли — тебя будут понимать</li>
                     <li>• Освоишь алгоритмы ведения переговоров</li>
                     <li>• Сформируешь полезные привычки</li>
+                    <li>• Будешь уверенно действовать в стрессовых ситуациях</li>
                 </ul>
             </div>
+            
+            <button class="apply-mode-btn" onclick="applyMode()">
+                ✅ ПРИМЕНИТЬ РЕЖИМ
+            </button>
         </div>
     `;
     
     container.innerHTML = html;
+}
+
+function setMode(mode) {
+    app.selectedMode = mode;
+    
+    // Подсвечиваем выбранный режим
+    const cards = document.querySelectorAll('.mode-card');
+    cards.forEach(card => {
+        card.classList.remove('active');
+    });
+    event.currentTarget.classList.add('active');
+}
+
+function applyMode() {
+    if (!app.selectedMode) {
+        alert('Выберите режим');
+        return;
+    }
+    
+    console.log('✅ Режим установлен:', app.selectedMode);
+    
+    // Здесь будет вызов API для сохранения режима
+    showScreen('main');
 }
 
 // ============================================
@@ -495,40 +937,34 @@ function renderModeScreen(container) {
 // ============================================
 
 function renderProfileScreen(container) {
-    // Заглушка для профиля
+    const profile = app.userData.profile || `
+🧠 ВАШ ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ
+
+🔍 Тип восприятия: СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ
+🧠 Уровень мышления: 5/9
+
+🔑 КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА
+Вы — командир крепости с тревожным сердцем. Снаружи — неприступные стены, отлаженные системы управления.
+
+💪 СИЛЬНЫЕ СТОРОНЫ
+• Высокоразвитые социальные навыки
+• Системное мышление
+• Устойчивость к стрессу
+• Прагматизм
+
+🎯 ЗОНЫ РОСТА
+• Страх конфликтов
+• Энергией
+• Временем
+
+⚠️ ГЛАВНАЯ ЛОВУШКА
+⚡ Поведение
+    `;
+    
     const html = `
         <div class="profile-screen">
-            <div class="profile-header">
-                <div class="profile-code">СБ-5_ТФ-5_УБ-5_ЧВ-3</div>
-            </div>
-            
-            <div class="profile-section">
-                <h2><span>🔑</span> КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА</h2>
-                <p>Вы — командир крепости с тревожным сердцем. Снаружи — неприступные стены, отлаженные системы управления.</p>
-            </div>
-            
-            <div class="profile-section">
-                <h2><span>💪</span> СИЛЬНЫЕ СТОРОНЫ</h2>
-                <ul>
-                    <li>Высокоразвитые социальные навыки</li>
-                    <li>Системное мышление</li>
-                    <li>Устойчивость к стрессу</li>
-                    <li>Прагматизм</li>
-                </ul>
-            </div>
-            
-            <div class="profile-section">
-                <h2><span>🎯</span> ЗОНЫ РОСТА</h2>
-                <ul>
-                    <li>Страх конфликтов</li>
-                    <li>Энергией</li>
-                    <li>Временем</li>
-                </ul>
-            </div>
-            
-            <div class="profile-section">
-                <h2><span>⚠️</span> ГЛАВНАЯ ЛОВУШКА</h2>
-                <p>⚡ Поведение</p>
+            <div class="profile-content">
+                ${profile.replace(/\n/g, '<br>')}
             </div>
         </div>
     `;
@@ -541,26 +977,26 @@ function renderProfileScreen(container) {
 // ============================================
 
 function renderThoughtScreen(container) {
+    const thought = app.userData.thought || `
+🧠 МЫСЛИ ПСИХОЛОГА
+
+🔐 КЛЮЧЕВОЙ ЭЛЕМЕНТ
+Ключ ко всей системе — твоя «Реакция на угрозу». Это как бронированная дверь, которая всегда на замке.
+
+🔄 ПЕТЛЯ
+Анализ → Сомнения → Ещё больший анализ
+
+🚪 ТОЧКА ВХОДА
+Спроси себя: "Что я чувствую прямо сейчас?"
+
+📊 ПРОГНОЗ
+Если продолжишь в том же духе, рискуешь упустить несколько хороших возможностей.
+    `;
+    
     const html = `
         <div class="thought-screen">
-            <div class="thought-block">
-                <div class="thought-title">🔐 КЛЮЧЕВОЙ ЭЛЕМЕНТ</div>
-                <p>Ключ ко всей системе — твоя «Реакция на угрозу». Это как бронированная дверь, которая всегда на замке.</p>
-            </div>
-            
-            <div class="thought-block">
-                <div class="thought-title">🔄 ПЕТЛЯ</div>
-                <p>Анализ → Сомнения → Ещё больший анализ</p>
-            </div>
-            
-            <div class="thought-block">
-                <div class="thought-title">🚪 ТОЧКА ВХОДА</div>
-                <p>Спроси себя: "Что я чувствую прямо сейчас?"</p>
-            </div>
-            
-            <div class="thought-block">
-                <div class="thought-title">📊 ПРОГНОЗ</div>
-                <p>Если продолжишь в том же духе, рискуешь упустить несколько хороших возможностей.</p>
+            <div class="thought-content">
+                ${thought.replace(/\n/g, '<br>')}
             </div>
         </div>
     `;
@@ -574,15 +1010,16 @@ function renderThoughtScreen(container) {
 
 function renderGoalsScreen(container) {
     const goals = [
-        { id: 'boundaries', name: 'Научиться защищать границы', time: '2-3 недели', difficulty: 'medium' },
-        { id: 'income', name: 'Увеличить доход', time: '4-6 недель', difficulty: 'hard' },
-        { id: 'purpose', name: 'Найти предназначение', time: '5-7 недель', difficulty: 'hard' },
-        { id: 'relations', name: 'Улучшить отношения', time: '4-6 недель', difficulty: 'medium' },
-        { id: 'calm', name: 'Найти внутреннее спокойствие', time: '3-5 недель', difficulty: 'medium' }
+        { id: 'fear_work', name: 'Проработать страхи', time: '3-4 недели', difficulty: 'medium', desc: 'Научиться справляться с тревогой' },
+        { id: 'boundaries', name: 'Научиться защищать границы', time: '2-3 недели', difficulty: 'medium', desc: 'Говорить "нет" без чувства вины' },
+        { id: 'income', name: 'Увеличить доход', time: '4-6 недель', difficulty: 'hard', desc: 'Найти новые источники' },
+        { id: 'purpose', name: 'Найти предназначение', time: '5-7 недель', difficulty: 'hard', desc: 'Понять, куда двигаться' },
+        { id: 'relations', name: 'Улучшить отношения', time: '4-6 недель', difficulty: 'medium', desc: 'С партнёром, детьми, родителями' },
+        { id: 'calm', name: 'Найти внутреннее спокойствие', time: '3-5 недель', difficulty: 'medium', desc: 'Перестать тревожиться' }
     ];
     
     let html = '<div class="goals-screen">';
-    html += '<h2>👇 Выберите цель:</h2>';
+    html += '<h2 class="goals-title">👇 Выберите цель:</h2>';
     
     goals.forEach(goal => {
         const difficultyClass = goal.difficulty;
@@ -597,7 +1034,8 @@ function renderGoalsScreen(container) {
                 <div class="goal-difficulty ${difficultyClass}">${difficultyEmoji}</div>
                 <div class="goal-info">
                     <div class="goal-name">${goal.name}</div>
-                    <div class="goal-time">${goal.time}</div>
+                    <div class="goal-desc">${goal.desc}</div>
+                    <div class="goal-time">⏱ ${goal.time}</div>
                 </div>
             </div>
         `;
@@ -610,6 +1048,109 @@ function renderGoalsScreen(container) {
     </div>`;
     
     container.innerHTML = html;
+}
+
+function selectGoal(goalId) {
+    console.log('🎯 Выбрана цель:', goalId);
+    
+    // Показываем теоретический путь
+    const content = document.getElementById('content');
+    content.innerHTML = `
+        <div class="goal-path-screen">
+            <h2>🧠 ТВОЯ ЦЕЛЬ</h2>
+            
+            <p>👇 <strong>ТЕОРЕТИЧЕСКИЙ МАРШРУТ:</strong></p>
+            
+            <div class="path-steps">
+                <div class="path-step">
+                    <span class="step-number">1</span>
+                    <span class="step-text">Диагностика текущей ситуации</span>
+                </div>
+                <div class="path-step">
+                    <span class="step-number">2</span>
+                    <span class="step-text">Выявление ключевых блоков</span>
+                </div>
+                <div class="path-step">
+                    <span class="step-number">3</span>
+                    <span class="step-text">Пошаговый план действий</span>
+                </div>
+                <div class="path-step">
+                    <span class="step-number">4</span>
+                    <span class="step-text">Первые шаги и закрепление</span>
+                </div>
+            </div>
+            
+            <p>⚠️ Это в идеале. В реальности всё зависит от твоих условий.</p>
+            
+            <div class="action-buttons">
+                <button class="action-btn primary" onclick="checkReality()">
+                    🔍 ПРОВЕРИТЬ РЕАЛЬНОСТЬ
+                </button>
+                <button class="action-btn secondary" onclick="showScreen('goals')">
+                    ◀️ ДРУГАЯ ЦЕЛЬ
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+function checkReality() {
+    const content = document.getElementById('content');
+    content.innerHTML = `
+        <div class="reality-check-screen">
+            <h2>🧠 ФРЕДИ: ПРОВЕРКА РЕАЛЬНОСТИ</h2>
+            
+            <p>👇 <strong>ЧТО ПОТРЕБУЕТСЯ:</strong></p>
+            <p>• Время: 3-4 часа в неделю<br>
+            • Энергия: средняя (6/10)<br>
+            • Поддержка: желательна</p>
+            
+            <p>👇 <strong>ЧТО У ТЕБЯ ЕСТЬ:</strong></p>
+            <p>• Время: 2 часа в неделю<br>
+            • Энергия: низкая (3/10)<br>
+            • Поддержка: нет</p>
+            
+            <p>📊 <strong>ДЕФИЦИТ РЕСУРСОВ:</strong> 60%</p>
+            
+            <p>Рекомендуется увеличить срок или снизить планку.</p>
+            
+            <div class="action-buttons">
+                <button class="action-btn primary" onclick="showScreen('main')">
+                    ✅ ПОНЯТНО
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+function customGoal() {
+    const content = document.getElementById('content');
+    content.innerHTML = `
+        <div class="custom-goal-screen">
+            <h2>✏️ СФОРМУЛИРУЙТЕ ЦЕЛЬ</h2>
+            
+            <p>Расскажите своими словами, чего хотите достичь.</p>
+            
+            <textarea id="goalInput" class="goal-input" 
+                placeholder="Например: Хочу научиться зарабатывать удаленно и путешествовать..." 
+                rows="4"></textarea>
+            
+            <button class="action-btn primary" onclick="submitCustomGoal()">
+                🚀 ПОСТРОИТЬ МАРШРУТ
+            </button>
+        </div>
+    `;
+}
+
+function submitCustomGoal() {
+    const goalText = document.getElementById('goalInput').value;
+    if (!goalText) {
+        alert('Напишите вашу цель');
+        return;
+    }
+    
+    console.log('🎯 Пользовательская цель:', goalText);
+    alert('Функция в разработке!');
 }
 
 // ============================================
@@ -625,17 +1166,27 @@ function renderAskScreen(container) {
         "Как проработать детскую травму?"
     ];
     
+    let messagesHtml = '';
+    app.messages.forEach(msg => {
+        messagesHtml += `
+            <div class="message ${msg.role}">
+                ${msg.text}
+            </div>
+        `;
+    });
+    
+    if (messagesHtml === '') {
+        messagesHtml = `
+            <div class="message system">
+                👋 Задайте любой вопрос, и я отвечу с учётом вашего профиля
+            </div>
+        `;
+    }
+    
     const html = `
         <div class="ask-screen">
-            <div class="ask-header">
-                <h2>Задайте вопрос</h2>
-                <p>Напишите текст или отправьте голосовое сообщение</p>
-            </div>
-            
             <div class="messages-container" id="messagesContainer">
-                <div class="message system">
-                    👋 Задайте любой вопрос, и я отвечу с учётом вашего профиля
-                </div>
+                ${messagesHtml}
             </div>
             
             <div class="input-panel">
@@ -646,7 +1197,6 @@ function renderAskScreen(container) {
             </div>
             
             <div class="examples-section">
-                <h3>Примеры вопросов:</h3>
                 <div class="example-buttons">
                     ${examples.map(ex => `
                         <button class="example-btn" onclick="setExampleQuestion('${ex}')">
@@ -659,6 +1209,153 @@ function renderAskScreen(container) {
     `;
     
     container.innerHTML = html;
+    
+    // Прокручиваем вниз
+    setTimeout(() => {
+        const messagesContainer = document.getElementById('messagesContainer');
+        if (messagesContainer) {
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+    }, 100);
+}
+
+function sendMessage() {
+    const input = document.getElementById('messageInput');
+    const text = input.value.trim();
+    
+    if (!text) return;
+    
+    // Добавляем сообщение пользователя
+    app.messages.push({
+        role: 'user',
+        text: escapeHtml(text)
+    });
+    
+    // Очищаем поле
+    input.value = '';
+    
+    // Показываем индикатор печати
+    const messagesContainer = document.getElementById('messagesContainer');
+    messagesContainer.innerHTML += `
+        <div class="message bot typing">
+            <span class="typing-dots">...</span>
+        </div>
+    `;
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    
+    // Имитируем ответ бота
+    setTimeout(() => {
+        // Убираем индикатор
+        const typingIndicator = document.querySelector('.message.typing');
+        if (typingIndicator) typingIndicator.remove();
+        
+        // Добавляем ответ
+        const response = generateBotResponse(text);
+        app.messages.push({
+            role: 'bot',
+            text: response
+        });
+        
+        renderAskScreen(document.getElementById('content'));
+    }, 1500);
+}
+
+function generateBotResponse(question) {
+    const lowercaseQ = question.toLowerCase();
+    
+    if (lowercaseQ.includes('предназначен') || lowercaseQ.includes('смысл')) {
+        return "Вопрос о предназначении — один из самых глубоких. Часто мы ищем его вовне, хотя ответ уже внутри. Что для вас важно настолько, что вы готовы делать это бесплатно? А что приносит энергию, даже когда вы устали?";
+    }
+    
+    if (lowercaseQ.includes('тревог') || lowercaseQ.includes('страх')) {
+        return "Тревога — это сигнал, а не враг. Она говорит о том, что что-то требует внимания. Что именно вызывает тревогу? Попробуйте описать её: где в теле она живёт? Какого она цвета?";
+    }
+    
+    if (lowercaseQ.includes('отношен') || lowercaseQ.includes('любов')) {
+        return "В отношениях мы часто повторяем сценарии, усвоенные в детстве. Какой паттерн вы замечаете? Возможно, вы выбираете партнёров, похожих на кого-то из родителей?";
+    }
+    
+    if (lowercaseQ.includes('деньг') || lowercaseQ.includes('финанс')) {
+        return "Деньги — это энергия. Как вы относитесь к деньгам? Чувствуете, что достойны их? Часто наши денежные блоки родом из убеждений, которые мы впитали в семье.";
+    }
+    
+    return "Спасибо за вопрос. Чтобы ответить точнее, мне нужно знать ваш профиль. Пройдите тест — это займёт 15 минут.";
+}
+
+function handleKeyPress(event) {
+    if (event.key === 'Enter') {
+        sendMessage();
+    }
+}
+
+function setExampleQuestion(question) {
+    const input = document.getElementById('messageInput');
+    if (input) {
+        input.value = question;
+        input.focus();
+    }
+}
+
+function toggleRecording() {
+    console.log('🎤 Запись голоса');
+    alert('Голосовой ввод будет доступен в следующей версии!');
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// ============================================
+// ИДЕИ НА ВЫХОДНЫЕ
+// ============================================
+
+function showWeekendIdeas() {
+    const content = document.getElementById('content');
+    content.innerHTML = `
+        <div class="weekend-ideas-screen">
+            <h2>🎨 ИДЕИ НА ВЫХОДНЫЕ</h2>
+            
+            <div class="ideas-container">
+                <div class="idea-card">
+                    <div class="idea-emoji">🧘</div>
+                    <div class="idea-text">
+                        <strong>Практика осознанности</strong><br>
+                        Попробуй 10 минут тишины без телефона. Просто посиди и понаблюдай за дыханием.
+                    </div>
+                </div>
+                
+                <div class="idea-card">
+                    <div class="idea-emoji">🌳</div>
+                    <div class="idea-text">
+                        <strong>Прогулка в новом месте</strong><br>
+                        Найди парк или район, где никогда не был. Обрати внимание на детали.
+                    </div>
+                </div>
+                
+                <div class="idea-card">
+                    <div class="idea-emoji">📝</div>
+                    <div class="idea-text">
+                        <strong>Дневник благодарности</strong><br>
+                        Запиши 3 вещи, за которые ты благодарен прошедшей неделе.
+                    </div>
+                </div>
+                
+                <div class="idea-card">
+                    <div class="idea-emoji">🎨</div>
+                    <div class="idea-text">
+                        <strong>Творчество без цели</strong><br>
+                        Порисуй, полепи, потанцуй — не для результата, а для процесса.
+                    </div>
+                </div>
+            </div>
+            
+            <button class="action-btn primary" onclick="showScreen('main')">
+                ◀️ НАЗАД
+            </button>
+        </div>
+    `;
 }
 
 // ============================================
@@ -685,131 +1382,23 @@ function showError(message) {
 }
 
 // ============================================
-// НАЧАЛО ТЕСТА
-// ============================================
-
-function startTest() {
-    console.log('🚀 Начинаем тест');
-    showScreen('stage1');
-}
-
-function startStage1() {
-    console.log('▶️ Начинаем этап 1');
-    // Здесь будет логика первого вопроса
-    alert('Этап 1: Первый вопрос появится здесь');
-}
-
-// ============================================
-// ОБРАБОТЧИКИ ДЕЙСТВИЙ
-// ============================================
-
-function showBenefits() {
-    console.log('📖 Показываем преимущества теста');
-    showScreen('why');
-}
-
-function selectMode(mode) {
-    console.log('🎯 Выбран режим:', mode);
-    
-    // Маппинг
-    const modeMap = {
-        'hard': 'trainer',
-        'medium': 'coach',
-        'soft': 'psychologist'
-    };
-    
-    app.selectedMode = modeMap[mode];
-    showScreen('mode');
-}
-
-function setMode(mode) {
-    console.log('✅ Установлен режим:', mode);
-    app.selectedMode = mode;
-    
-    // Здесь будет вызов API для сохранения режима
-    showScreen('main');
-}
-
-function selectGoal(goalId) {
-    console.log('🎯 Выбрана цель:', goalId);
-    alert('Функция выбора цели будет доступна в следующей версии!');
-}
-
-function customGoal() {
-    console.log('✏️ Пользователь хочет сформулировать свою цель');
-    alert('Функция будет доступна в следующей версии!');
-}
-
-function setExampleQuestion(question) {
-    const input = document.getElementById('messageInput');
-    if (input) {
-        input.value = question;
-        input.focus();
-    }
-}
-
-function handleKeyPress(event) {
-    if (event.key === 'Enter') {
-        sendMessage();
-    }
-}
-
-function sendMessage() {
-    const input = document.getElementById('messageInput');
-    const text = input.value.trim();
-    
-    if (!text) return;
-    
-    console.log('📤 Отправляем вопрос:', text);
-    
-    // Добавляем сообщение пользователя
-    const messagesContainer = document.getElementById('messagesContainer');
-    messagesContainer.innerHTML += `
-        <div class="message user">${escapeHtml(text)}</div>
-    `;
-    
-    // Очищаем поле
-    input.value = '';
-    
-    // Прокручиваем вниз
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    
-    // Имитируем ответ бота
-    setTimeout(() => {
-        messagesContainer.innerHTML += `
-            <div class="message bot">
-                Спасибо за вопрос! Чтобы ответить точнее, мне нужно знать ваш профиль. 
-                Пройдите тест — это займёт 15 минут.
-            </div>
-        `;
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    }, 1000);
-}
-
-function toggleRecording() {
-    console.log('🎤 Запись голоса');
-    alert('Голосовой ввод будет доступен в следующей версии!');
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-// ============================================
 // ЭКСПОРТ (для глобального доступа)
 // ============================================
 
 window.showScreen = showScreen;
-window.startTest = startTest;
 window.startStage1 = startStage1;
+window.startStage2 = startStage2;
+window.startStage2Questions = startStage2Questions;
+window.answerStage1 = answerStage1;
 window.selectMode = selectMode;
 window.setMode = setMode;
+window.applyMode = applyMode;
 window.selectGoal = selectGoal;
+window.checkReality = checkReality;
 window.customGoal = customGoal;
+window.submitCustomGoal = submitCustomGoal;
 window.setExampleQuestion = setExampleQuestion;
 window.handleKeyPress = handleKeyPress;
 window.sendMessage = sendMessage;
 window.toggleRecording = toggleRecording;
-window.showBenefits = showBenefits;
+window.showWeekendIdeas = showWeekendIdeas;
