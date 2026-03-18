@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики этапов тестирования (1-5) для MAX
-Версия 2.1 - ДОБАВЛЕНО сохранение в PostgreSQL
+Версия 2.2 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
 """
 
 import time
@@ -11,6 +11,7 @@ import os
 import json
 import re
 import asyncio
+import threading  # ✅ ДОБАВЛЕНО
 from typing import Dict, Any, Optional, List
 
 from bot_instance import bot
@@ -47,10 +48,31 @@ from state import (
     clear_state, TestStates
 )
 
-# Импортируем базу данных из main
+# ✅ ИСПРАВЛЕНО: импорт из db_instance
 from db_instance import db, save_user_to_db
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# ============================================
+
+def run_async_task(coro_func, *args, **kwargs):
+    """
+    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
+    """
+    def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            coro = coro_func(*args, **kwargs)
+            loop.run_until_complete(coro)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+        finally:
+            loop.close()
+    
+    threading.Thread(target=_wrapper, daemon=True).start()
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ БД
@@ -532,8 +554,8 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 1 complete, type={perception_type}")
     
-    # 💾 Сохраняем в БД
-    asyncio.create_task(save_user_to_db(user_id))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_user_to_db, user_id)
     
     result_text = STAGE_1_FEEDBACK.get(perception_type, STAGE_1_FEEDBACK["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"])
     
@@ -728,8 +750,8 @@ def finish_stage_2(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 2 complete, level={thinking_level}")
     
-    # 💾 Сохраняем в БД
-    asyncio.create_task(save_user_to_db(user_id))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_user_to_db, user_id)
     
     result_text = STAGE_2_FEEDBACK.get((perception_type, level_group))
     if not result_text:
@@ -921,8 +943,8 @@ def finish_stage_3(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 3 complete, final_level={final_level}")
     
-    # 💾 Сохраняем в БД
-    asyncio.create_task(save_user_to_db(user_id))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_user_to_db, user_id)
     
     result_text = STAGE_3_FEEDBACK.get(behavior_level, STAGE_3_FEEDBACK[1])
     
@@ -1097,8 +1119,8 @@ def finish_stage_4(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 4 complete, profile={profile_data.get('display_name', 'unknown')}")
     
-    # 💾 Сохраняем в БД
-    asyncio.create_task(save_user_to_db(user_id))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_user_to_db, user_id)
     
     show_preliminary_profile(message, user_id)
 
@@ -1555,9 +1577,9 @@ def finish_stage_5(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 5 complete")
     
-    # 💾 Сохраняем в БД полный результат теста
-    asyncio.create_task(save_test_result_to_db(user_id, 'full_profile'))
-    asyncio.create_task(save_user_to_db(user_id))
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД полный результат теста через run_async_task
+    run_async_task(save_test_result_to_db, user_id, 'full_profile')
+    run_async_task(save_user_to_db, user_id)
     
     try:
         from handlers.profile import show_final_profile
