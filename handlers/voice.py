@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики голосовых сообщений для MAX
-Версия 2.5 - РАСШИРЕННАЯ ДИАГНОСТИКА ТОКЕНА
+Версия 2.6 - ДОБАВЛЕНО ЛОГИРОВАНИЕ В БД
 """
 
 import os
@@ -27,6 +27,9 @@ from state import (
 from modes import get_mode
 from formatters import bold, clean_text_for_safe_display
 from config import COMMUNICATION_MODES, MAX_TOKEN
+
+# ✅ ДОБАВЛЕНО: импорт для БД
+from db_instance import db
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +275,13 @@ async def handle_voice_message(message: Message):
     
     logger.info(f"🎤 Получено голосовое сообщение от пользователя {user_id}, состояние: {current_state}")
     
+    # ✅ ЛОГИРУЕМ СОБЫТИЕ В БД
+    asyncio.create_task(db.log_event(
+        user_id, 
+        'voice_received', 
+        {'state': current_state, 'voice_duration': message.voice.duration if message.voice else None}
+    ))
+    
     # Проверяем, в правильном ли состоянии получено сообщение
     allowed_states = [
         TestStates.awaiting_question,
@@ -332,6 +342,14 @@ async def handle_voice_message(message: Message):
         
         if not recognized_text:
             await safe_delete_message(message.chat.id, status_msg.message_id)
+            
+            # ✅ ЛОГИРУЕМ ОШИБКУ
+            asyncio.create_task(db.log_event(
+                user_id, 
+                'voice_recognition_failed', 
+                {}
+            ))
+            
             await safe_send_message(
                 message,
                 "❌ Не удалось распознать речь\n\nПопробуйте еще раз или напишите текстом.",
@@ -340,6 +358,13 @@ async def handle_voice_message(message: Message):
             return
         
         logger.info(f"✅ Распознан текст ({len(recognized_text)} символов): {recognized_text[:100]}...")
+        
+        # ✅ ЛОГИРУЕМ УСПЕШНОЕ РАСПОЗНАВАНИЕ
+        asyncio.create_task(db.log_event(
+            user_id, 
+            'voice_recognized', 
+            {'text_length': len(recognized_text), 'state': current_state}
+        ))
         
         # Удаляем статусное сообщение
         await safe_delete_message(message.chat.id, status_msg.message_id)
@@ -374,6 +399,13 @@ async def handle_voice_message(message: Message):
     except Exception as e:
         logger.error(f"❌ Ошибка при обработке голосового сообщения: {e}", exc_info=True)
         
+        # ✅ ЛОГИРУЕМ ОШИБКУ
+        asyncio.create_task(db.log_event(
+            user_id, 
+            'voice_error', 
+            {'error': str(e)}
+        ))
+        
         if status_msg:
             try:
                 await safe_delete_message(message.chat.id, status_msg.message_id)
@@ -403,6 +435,13 @@ async def handle_pretest_voice(message: Message, user_id: int, recognized_text: 
         delete_previous=True
     )
     
+    # ✅ ЛОГИРУЕМ ВОПРОС ДО ТЕСТА
+    asyncio.create_task(db.log_event(
+        user_id, 
+        'pretest_question_voice', 
+        {'text_preview': recognized_text[:100]}
+    ))
+    
     # Сбрасываем состояние
     set_state(user_id, None)
 
@@ -421,6 +460,13 @@ async def test_voice_message(message: Message, text: str = "Привет! Это
     if user_id not in ADMIN_IDS:
         await safe_send_message(message, "⛔ Только для администраторов", delete_previous=True)
         return
+    
+    # ✅ ЛОГИРУЕМ ТЕСТ
+    asyncio.create_task(db.log_event(
+        user_id, 
+        'voice_test_started', 
+        {'text_length': len(text)}
+    ))
     
     status_msg = await safe_send_message(
         message,
@@ -443,6 +489,14 @@ async def test_voice_message(message: Message, text: str = "Привет! Это
         await asyncio.sleep(1)
     
     await safe_delete_message(message.chat.id, status_msg.message_id)
+    
+    # ✅ ЛОГИРУЕМ РЕЗУЛЬТАТЫ
+    asyncio.create_task(db.log_event(
+        user_id, 
+        'voice_test_completed', 
+        {'results': results}
+    ))
+    
     await safe_send_message(
         message,
         "📊 Результаты тестирования:\n" + "\n".join(results),
