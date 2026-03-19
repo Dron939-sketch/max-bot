@@ -1,14 +1,15 @@
 // ========== script.js ==========
-// ТЕСТОВАЯ ВЕРСИЯ - ПРОВЕРКА ОТОБРАЖЕНИЯ
+// ПОЛНАЯ ВЕРСИЯ С ПРАВИЛЬНОЙ ЛОГИКОЙ
 
 const App = {
     userId: 'test_user_123',
     userName: 'Александр',
+    userData: {},
+    userContext: null,
+    testProgress: {},
 
     async init() {
         console.log('🚀 Фреди: инициализация');
-        console.log('✅ screenContainer:', document.getElementById('screenContainer'));
-        console.log('✅ onboardingScreen1:', document.getElementById('onboardingScreen1'));
         
         // Скрываем шапку чата
         const chatHeader = document.getElementById('chatHeader');
@@ -18,8 +19,38 @@ const App = {
         const userNameEl = document.getElementById('userName');
         if (userNameEl) userNameEl.textContent = this.userName;
         
-        // Показываем первый экран
-        this.showOnboardingScreen1();
+        // Получаем статус пользователя с сервера
+        await this.checkUserStatus();
+    },
+
+    async checkUserStatus() {
+        try {
+            // Здесь должен быть запрос к вашему API
+            // Пока используем тестовые данные
+            const status = {
+                first_visit: true,
+                context_complete: false,
+                test_completed: false
+            };
+            
+            if (status.first_visit || !status.context_complete) {
+                this.showOnboardingScreen1();
+            } else if (!status.test_completed) {
+                // Контекст есть, тест не пройден
+                if (typeof Context !== 'undefined') {
+                    Context.showCompleteScreen(this.userContext);
+                } else {
+                    this.showOnboardingScreen1();
+                }
+            } else {
+                // Всё пройдено - показываем чат
+                this.showMainChat();
+            }
+            
+        } catch (error) {
+            console.error('Ошибка:', error);
+            this.showOnboardingScreen1();
+        }
     },
 
     showOnboardingScreen1() {
@@ -29,14 +60,11 @@ const App = {
             return;
         }
         
-        // Клонируем шаблон
         const clone = document.importNode(template.content, true);
         
-        // Подставляем имя
         const nameSpan = clone.querySelector('#userNamePlaceholder');
         if (nameSpan) nameSpan.textContent = this.userName;
         
-        // Вставляем в контейнер
         const container = document.getElementById('screenContainer');
         if (!container) {
             console.error('❌ Контейнер screenContainer не найден!');
@@ -46,53 +74,56 @@ const App = {
         container.innerHTML = '';
         container.appendChild(clone);
         
-        console.log('✅ Экран 1 отображен');
-        
-        // Назначаем обработчики
         setTimeout(() => {
             const startBtn = document.getElementById('startTestBtn');
             const whoBtn = document.getElementById('whoAreYouBtn');
             
             if (startBtn) {
                 startBtn.addEventListener('click', () => {
-                    alert('🚀 Начинаем тест!');
+                    if (typeof Context !== 'undefined') {
+                        Context.startCollection();
+                    } else {
+                        alert('Функция сбора контекста временно недоступна');
+                    }
                 });
-                console.log('✅ startTestBtn найден');
-            } else {
-                console.error('❌ startTestBtn не найден');
             }
             
             if (whoBtn) {
                 whoBtn.addEventListener('click', () => {
                     this.showOnboardingScreen2();
                 });
-                console.log('✅ whoAreYouBtn найден');
             }
         }, 100);
     },
 
     showOnboardingScreen2() {
         const template = document.getElementById('onboardingScreen2');
-        if (!template) {
-            console.error('❌ Шаблон onboardingScreen2 не найден!');
-            return;
-        }
+        if (!template) return;
         
         const clone = document.importNode(template.content, true);
         const container = document.getElementById('screenContainer');
         container.innerHTML = '';
         container.appendChild(clone);
         
-        console.log('✅ Экран 2 отображен');
-        
         setTimeout(() => {
             const letsGoBtn = document.getElementById('letsGoBtn');
             if (letsGoBtn) {
                 letsGoBtn.addEventListener('click', () => {
-                    alert('👌 Погнали!');
+                    if (typeof Context !== 'undefined') {
+                        Context.startCollection();
+                    } else {
+                        alert('Начинаем тест!');
+                    }
                 });
             }
         }, 100);
+    },
+
+    showMainChat() {
+        console.log('💬 Показываем основной чат');
+        document.getElementById('screenContainer').innerHTML = 
+            '<div style="padding: 20px; text-align: center;">Чат с ботом будет здесь</div>';
+        document.getElementById('chatHeader').style.display = 'flex';
     }
 };
 
