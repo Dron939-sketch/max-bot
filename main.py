@@ -5,6 +5,7 @@
 ВЕРСИЯ ДЛЯ MAX
 ИСПРАВЛЕНО: Все патчи для Python 3.14, anyio, sniffio, PostgreSQL
 ИСПРАВЛЕНО: Корневой маршрут теперь возвращает JSON (обходит баг anyio)
+ИСПРАВЛЕНО: Дополнительный патч для anyio.to_thread
 """
 
 # ========== КРИТИЧЕСКИЕ ПАТЧИ ДЛЯ PYTHON 3.14 ==========
@@ -35,6 +36,32 @@ if sys.version_info >= (3, 14):
         print("✅ Применён критический патч для anyio в Python 3.14")
     except Exception as e:
         print(f"⚠️ Не удалось применить патч anyio: {e}")
+    
+    # Дополнительный патч для anyio.to_thread
+    try:
+        from anyio import to_thread
+        from anyio._backends._asyncio import CapacityLimiter
+        
+        # Сохраняем оригинальный метод
+        original_run_sync = to_thread.run_sync
+        
+        async def patched_run_sync(func, *args, cancellable=False, limiter=None):
+            """Безопасная версия run_sync, обрабатывающая None"""
+            try:
+                return await original_run_sync(func, *args, cancellable=cancellable, limiter=limiter)
+            except TypeError as e:
+                if 'weak reference' in str(e) and limiter is None:
+                    # Создаём новый лимитер, если проблема с weakref
+                    from anyio.to_thread import current_default_thread_limiter
+                    limiter = current_default_thread_limiter()
+                    return await original_run_sync(func, *args, cancellable=cancellable, limiter=limiter)
+                raise
+        
+        # Применяем патч
+        to_thread.run_sync = patched_run_sync
+        print("✅ Применён дополнительный патч для anyio.to_thread")
+    except Exception as e:
+        print(f"⚠️ Не удалось применить дополнительный патч: {e}")
 # =========================================================
 
 import os
@@ -438,9 +465,9 @@ os.makedirs(MINIAPP_PATH, exist_ok=True)
 # Обслуживаем статические файлы из папки miniapp
 if os.path.exists(MINIAPP_PATH) and os.path.isdir(MINIAPP_PATH):
     try:
-        # Монтируем статические файлы по пути /miniapp
-        api_app.mount("/miniapp", StaticFiles(directory=MINIAPP_PATH, html=True), name="miniapp")
-        logger.info(f"✅ Статические файлы подключены из {MINIAPP_PATH} (путь /miniapp)")
+        # Монтируем на /static, чтобы не конфликтовать с корневым маршрутом
+        api_app.mount("/static", StaticFiles(directory=MINIAPP_PATH), name="static")
+        logger.info(f"✅ Статические файлы подключены из {MINIAPP_PATH} (путь /static)")
     except Exception as e:
         logger.error(f"❌ Ошибка при монтировании статических файлов: {e}")
 else:
@@ -453,16 +480,25 @@ else:
 @api_app.get("/")
 async def root():
     """Главная страница API - возвращает JSON (обходит баг anyio)"""
+    try:
+        # Пробуем вернуть index.html если есть (без использования статики)
+        index_path = os.path.join(MINIAPP_PATH, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось вернуть index.html: {e}")
+    
+    # Возвращаем JSON в случае ошибки
     return {
         "name": "MAX Bot",
         "version": "9.6",
         "status": "online",
-        "message": "API работает. Мини-приложение доступно по пути /miniapp/",
+        "message": "API работает. Мини-приложение доступно по пути /static/",
         "endpoints": {
             "health": "/health",
             "docs": "/docs",
             "api": "/api/*",
-            "miniapp": "/miniapp/"
+            "miniapp": "/static/"
         }
     }
 
