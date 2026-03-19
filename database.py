@@ -4,19 +4,55 @@
 Модуль для работы с PostgreSQL базой данных бота "Фреди"
 Все таблицы имеют префикс fredi_ для избежания конфликтов
 
-Версия 1.0 - ПОЛНАЯ ИНТЕГРАЦИЯ со всеми структурами данных
-ИСПРАВЛЕНО: Добавлены недостающие импорты и исправлены синтаксические ошибки
+Версия 2.0 - ИСПРАВЛЕНО: Поддержка Python 3.14, добавлены патчи для asyncpg
 """
 
 import asyncpg
 import pickle
 import json
 import logging
+import sys
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Union
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
+
+# ========== ГЛОБАЛЬНЫЙ ФИКС ДЛЯ PYTHON 3.14 ==========
+# Патчим create_pool для работы в Python 3.14
+original_create_pool = asyncpg.create_pool
+
+async def patched_create_pool(*args, **kwargs):
+    """
+    Исправленная версия create_pool для Python 3.14
+    Добавляет явный loop и таймауты
+    """
+    # Получаем или создаем цикл событий
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    # Для Python 3.14 добавляем loop в kwargs
+    if sys.version_info >= (3, 14):
+        kwargs['loop'] = loop
+    
+    # Убеждаемся, что есть таймауты
+    if 'timeout' not in kwargs:
+        kwargs['timeout'] = 60
+    if 'command_timeout' not in kwargs:
+        kwargs['command_timeout'] = 60
+    
+    # Добавляем небольшую задержку для инициализации контекста
+    await asyncio.sleep(0.01)
+    
+    return await original_create_pool(*args, **kwargs)
+
+# Применяем патч
+asyncpg.create_pool = patched_create_pool
+# ====================================================
 
 
 class BotDatabase:
@@ -41,13 +77,39 @@ class BotDatabase:
             max_size: Максимальное количество соединений в пуле
         """
         try:
-            self.pool = await asyncpg.create_pool(
-                self.dsn,
-                min_size=min_size,
-                max_size=max_size,
-                command_timeout=60,
-                max_inactive_connection_lifetime=300
-            )
+            # Проверяем, не подключены ли уже
+            if self.pool:
+                logger.info("✅ Пул соединений уже существует")
+                return
+            
+            # Для Python 3.14 используем явный loop
+            if sys.version_info >= (3, 14):
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                self.pool = await asyncpg.create_pool(
+                    self.dsn,
+                    min_size=min_size,
+                    max_size=max_size,
+                    command_timeout=60,
+                    max_inactive_connection_lifetime=300,
+                    timeout=60,
+                    loop=loop  # Явно передаем loop
+                )
+            else:
+                # Для старых версий Python
+                self.pool = await asyncpg.create_pool(
+                    self.dsn,
+                    min_size=min_size,
+                    max_size=max_size,
+                    command_timeout=60,
+                    max_inactive_connection_lifetime=300,
+                    timeout=60
+                )
+            
             logger.info("✅ Пул соединений с PostgreSQL создан")
             
             # Создаем таблицы при подключении
@@ -61,6 +123,7 @@ class BotDatabase:
         """Закрытие пула соединений"""
         if self.pool:
             await self.pool.close()
+            self.pool = None
             logger.info("🔌 Пул соединений с PostgreSQL закрыт")
     
     @asynccontextmanager
@@ -69,8 +132,24 @@ class BotDatabase:
         if not self.pool:
             raise RuntimeError("Пул соединений не инициализирован. Вызовите connect()")
         
-        async with self.pool.acquire() as conn:
-            yield conn
+        max_retries = 3
+        retry_delay = 0.5
+        
+        for attempt in range(max_retries):
+            try:
+                async with self.pool.acquire() as conn:
+                    yield conn
+                return
+            except asyncpg.exceptions._base.InterfaceError as e:
+                if "different loop" in str(e).lower() and attempt < max_retries - 1:
+                    logger.warning(f"⚠️ Ошибка цикла событий, повтор через {retry_delay}с...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
+                else:
+                    raise
+            except Exception as e:
+                logger.error(f"❌ Ошибка при получении соединения: {e}")
+                raise
     
     # ====================== СОЗДАНИЕ ТАБЛИЦ ======================
     
@@ -374,7 +453,7 @@ class BotDatabase:
                 UPDATE fredi_users SET last_activity = NOW() WHERE user_id = $1
             """, user_id)
     
-    # ====================== КОНТЕКСТ ПОЛЬЗОВАТЕЛЯ (СОХРАНЯЕМ ВСЕ!) ======================
+    # ====================== КОНТЕКСТ ПОЛЬЗОВАТЕЛЯ ======================
     
     async def save_user_context(self, user_id: int, context_obj) -> None:
         """
