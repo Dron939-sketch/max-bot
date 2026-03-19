@@ -6,6 +6,7 @@
 ДОБАВЛЕНО: Сохранение контекста в PostgreSQL
 ИСПРАВЛЕНО: Устранен циклический импорт с main.py
 ИСПРАВЛЕНО: Асинхронные вызовы обернуты в threading
+ИСПРАВЛЕНО: Город обрабатывается в отдельном потоке без зависаний
 """
 
 import logging
@@ -14,6 +15,7 @@ import time
 import threading
 import asyncio
 from typing import Dict, Any, Optional, Tuple
+from concurrent.futures import Future
 
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 
@@ -58,6 +60,28 @@ def run_async_task(coro_func, *args, **kwargs):
             loop.close()
     
     threading.Thread(target=_wrapper, daemon=True).start()
+
+def run_async_task_with_result(coro_func, *args, **kwargs):
+    """
+    Запускает асинхронную корутину и возвращает Future для получения результата
+    """
+    future = Future()
+    
+    def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            coro = coro_func(*args, **kwargs)
+            result = loop.run_until_complete(coro)
+            future.set_result(result)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+            future.set_exception(e)
+        finally:
+            loop.close()
+    
+    threading.Thread(target=_wrapper, daemon=True).start()
+    return future
 
 # ============================================
 # ГЛОБАЛЬНАЯ БЛОКИРОВКА ДЛЯ ПРЕДОТВРАЩЕНИЯ ДВОЙНЫХ ВЫЗОВОВ
@@ -336,7 +360,7 @@ def skip_context(call: CallbackQuery):
     handle_context_callback(call)
 
 # ============================================
-# ОБРАБОТКА ТЕКСТОВЫХ ОТВЕТОВ
+# ОБРАБОТКА ТЕКСТОВЫХ ОТВЕТОВ - ИСПРАВЛЕНО!
 # ============================================
 
 def handle_context_message(message: Message) -> bool:
@@ -367,38 +391,70 @@ def handle_context_message(message: Message) -> bool:
     logger.info(f"📝 Обрабатываем текст: '{text}' для поля {context.awaiting_context}")
     
     if context.awaiting_context == "city":
-        # Обработка города
+        # ========== ИСПРАВЛЕННАЯ ОБРАБОТКА ГОРОДА ==========
         logger.info(f"🏙️ Сохраняем город: {text}")
         context.city = text
         context.awaiting_context = None
         
-        # 👇 СИНХРОННЫЕ ВЫЗОВЫ
-        logger.info(f"🌤️ Обновляем погоду...")
-        context.update_weather()
-        logger.info(f"🌍 Определяем часовой пояс...")
-        context.detect_timezone_from_city()
+        # Отправляем сообщение о загрузке
+        loading_msg = safe_send_message(
+            message,
+            "🔄 Получаю данные о погоде и часовом поясе...\nЭто займёт несколько секунд.",
+            delete_previous=True
+        )
         
-        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-        run_async_task(save_context_to_db, user_id)
+        # Запускаем обновление погоды и часового пояса в отдельном потоке
+        def update_weather_and_continue():
+            """Обновляет погоду и продолжает диалог в отдельном потоке"""
+            try:
+                logger.info(f"🌤️ Обновляем погоду для города {text}...")
+                # Синхронный вызов update_weather (но в отдельном потоке)
+                context.update_weather()
+                logger.info(f"✅ Погода обновлена")
+                
+                # Определяем часовой пояс
+                logger.info(f"🌍 Определяем часовой пояс для города {text}...")
+                context.detect_timezone_from_city()
+                logger.info(f"✅ Часовой пояс определен")
+                
+                # Сохраняем в БД асинхронно
+                run_async_task(save_context_to_db, user_id)
+                
+                # Получаем следующий вопрос
+                question, keyboard = context.ask_for_context()
+                logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
+                
+                # Отправляем следующий вопрос
+                if question:
+                    safe_send_message(
+                        message,
+                        f"📝 **Давайте познакомимся**\n\n{question}",
+                        reply_markup=keyboard,
+                        parse_mode=None,
+                        delete_previous=True
+                    )
+                else:
+                    # Если вопросов больше нет, показываем завершение
+                    # Запускаем в основном потоке через run_async_task
+                    run_async_task(lambda: show_context_complete(message, context))
+                    
+            except Exception as e:
+                logger.error(f"❌ Ошибка при обновлении погоды: {e}")
+                # В случае ошибки всё равно показываем следующий вопрос
+                question, keyboard = context.ask_for_context()
+                if question:
+                    safe_send_message(
+                        message,
+                        f"📝 **Давайте познакомимся**\n\n{question}",
+                        reply_markup=keyboard,
+                        parse_mode=None,
+                        delete_previous=True
+                    )
+                else:
+                    run_async_task(lambda: show_context_complete(message, context))
         
-        # Получаем следующий вопрос
-        logger.info(f"❓ Получаем следующий вопрос от ask_for_context()...")
-        question, keyboard = context.ask_for_context()
-        logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
-        
-        if question:
-            logger.info(f"📤 Отправляем вопрос о поле...")
-            safe_send_message(
-                message,
-                f"📝 **Давайте познакомимся**\n\n{question}",
-                reply_markup=keyboard,
-                parse_mode=None,
-                delete_previous=True
-            )
-            logger.info(f"✅ Вопрос о поле отправлен")
-        else:
-            logger.info(f"🎉 Вопросов больше нет, показываем завершение")
-            show_context_complete(message, context)
+        # Запускаем в отдельном потоке
+        threading.Thread(target=update_weather_and_continue, daemon=True).start()
         
         return True
     
@@ -506,7 +562,7 @@ def show_context_complete(message: Message, context: UserContext):
     user_id = message.chat.id
     logger.info(f"🎉 show_context_complete вызван для user {user_id}")
     
-    # 👇 СИНХРОННЫЙ ВЫЗОВ
+    # 👇 СИНХРОННЫЙ ВЫЗОВ (НО В ОТДЕЛЬНОМ ПОТОКЕ)
     logger.info(f"🌤️ Обновляем погоду для итогового экрана...")
     context.update_weather()
     
