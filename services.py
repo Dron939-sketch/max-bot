@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Сервисные функции для работы с API и генерации ответов
-Версия 9.6: ПОЛНЫЕ ПРОМТЫ с жирным текстом и эмодзи
+Версия 9.6.1 - ИСПРАВЛЕНО: Добавлены патчи для aiohttp в Python 3.14
 """
 
 import os
@@ -11,6 +11,7 @@ import logging
 import aiohttp
 import asyncio
 import re
+import sys
 import traceback
 from typing import Optional, Dict, List, Any, Tuple
 from datetime import datetime
@@ -26,6 +27,57 @@ from config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ AIOHTTP (Python 3.14) ==========
+if sys.version_info >= (3, 14):
+    try:
+        from aiohttp.helpers import TimerContext
+        
+        # Сохраняем оригинальные классы
+        original_TimerContext = TimerContext
+        original_ClientSession = aiohttp.ClientSession
+        
+        class PatchedTimerContext(TimerContext):
+            """Исправленный таймер для Python 3.14"""
+            def __enter__(self):
+                # Для Python 3.14 просто возвращаем self без вызова super()
+                # Это обходит ошибку с таймаутами вне задачи
+                return self
+        
+        class PatchedClientSession(aiohttp.ClientSession):
+            """Исправленная сессия для Python 3.14"""
+            def __init__(self, *args, **kwargs):
+                # Убираем loop если он есть (для Python 3.14)
+                if 'loop' in kwargs:
+                    kwargs.pop('loop')
+                super().__init__(*args, **kwargs)
+        
+        # Применяем патчи
+        aiohttp.helpers.TimerContext = PatchedTimerContext
+        aiohttp.ClientSession = PatchedClientSession
+        
+        # Дополнительный патч для ClientSession._request
+        original_request = aiohttp.ClientSession._request
+        
+        async def patched_request(self, *args, **kwargs):
+            """Обёртка для _request с обработкой таймаутов"""
+            try:
+                return await original_request(self, *args, **kwargs)
+            except RuntimeError as e:
+                if "Timeout context manager" in str(e):
+                    logger.warning("⚠️ Перехвачена ошибка таймаута, пробуем без таймаута")
+                    # Пробуем ещё раз без таймаута
+                    kwargs.pop('timeout', None)
+                    return await original_request(self, *args, **kwargs)
+                raise
+        
+        aiohttp.ClientSession._request = patched_request
+        
+        logger.info("✅ Применён критический патч для aiohttp в Python 3.14")
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось применить патч для aiohttp: {e}")
+# ================================================================
 
 
 # ============================================
@@ -113,12 +165,15 @@ async def call_deepseek(prompt: str, system_prompt: str = None, max_tokens: int 
             logger.info(f"🔄 Попытка {attempt + 1}/{retry_count + 1}")
             start_time = datetime.now()
             
-            async with aiohttp.ClientSession() as session:
+            # Создаем сессию с явной обработкой таймаутов
+            timeout = aiohttp.ClientTimeout(total=60)
+            connector = aiohttp.TCPConnector(force_close=True)
+            
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
                 async with session.post(
                     DEEPSEEK_API_URL, 
                     headers=headers, 
-                    json=payload, 
-                    timeout=60
+                    json=payload
                 ) as response:
                     elapsed = (datetime.now() - start_time).total_seconds()
                     logger.info(f"⏱️ Время ответа: {elapsed:.2f} сек, статус: {response.status}")
@@ -126,7 +181,6 @@ async def call_deepseek(prompt: str, system_prompt: str = None, max_tokens: int 
                     # ПОЛУЧАЕМ ТЕКСТ ОТВЕТА
                     response_text = await response.text()
                     logger.info(f"📄 Получен ответ, длина: {len(response_text)} символов")
-                    logger.info(f"📄 Первые 200 символов ответа: {response_text[:200]}")
                     
                     if response.status == 200:
                         try:
@@ -143,7 +197,6 @@ async def call_deepseek(prompt: str, system_prompt: str = None, max_tokens: int 
                                     if 'content' in data['choices'][0]['message']:
                                         content = data['choices'][0]['message']['content'].strip()
                                         logger.info(f"✅ Найден content, длина: {len(content)} символов")
-                                        logger.info(f"📝 Первые 200 символов content: {content[:200]}")
                                         
                                         if content:
                                             logger.info(f"✅ Возвращаем ответ пользователю")
@@ -337,7 +390,6 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
 """
     
     logger.info(f"📝 Промпт создан, длина: {len(prompt)} символов")
-    logger.info(f"📝 Первые 500 символов промпта: {prompt[:500]}")
     
     # Проверяем длину промпта
     if len(prompt) > 15000:
@@ -352,16 +404,13 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
     
     if response:
         logger.info(f"✅ AI-профиль сгенерирован ({len(response)} символов)")
-        logger.info(f"📝 Первые 300 символов ответа: {response[:300]}")
         
         # Проверяем структуру ответа
         if "🔑" in response and "💪" in response and "🎯" in response:
             logger.info("✅ Ответ содержит все необходимые эмодзи")
         else:
             logger.warning("⚠️ В ответе отсутствуют некоторые обязательные эмодзи")
-            logger.info(f"🔍 Содержимое ответа для отладки: {response[:500]}")
         
-        # ВАЖНО: Принудительно возвращаем ответ
         return response
     else:
         logger.error("❌ Не удалось сгенерировать AI-профиль (пустой ответ)")
@@ -502,7 +551,6 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
     
     if response:
         logger.info(f"✅ Мысли психолога сгенерированы ({len(response)} символов)")
-        logger.info(f"📝 Первые 200 символов ответа: {response[:200]}")
         return response
     else:
         logger.error("❌ Не удалось сгенерировать мысли психолога")
@@ -637,7 +685,6 @@ async def generate_route_ai(user_id: int, data: dict, goal: dict) -> Optional[Di
     
     if response:
         logger.info(f"✅ Маршрут сгенерирован ({len(response)} символов)")
-        logger.info(f"📝 Первые 200 символов ответа: {response[:200]}")
         return {
             "full_text": response,
             "steps": response.split("\n\n")  # Простое разбиение, можно улучшить
@@ -798,6 +845,13 @@ async def generate_suggestions(question: str, answer: str, profile_code: str, mo
     """
     Генерирует предложения для продолжения диалога
     """
+    if not answer:
+        return [
+            "Расскажи подробнее",
+            "Что ты чувствуешь?",
+            "Какие есть варианты?"
+        ]
+    
     prompt = f"""На основе вопроса и ответа придумай 3 коротких варианта, что спросить дальше.
 
 ВОПРОС: {question}
@@ -865,19 +919,20 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
             "smart_format": True
         }
         
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=30)
+        connector = aiohttp.TCPConnector(force_close=True)
+        
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             async with session.post(
                 DEEPGRAM_API_URL,
                 headers=headers,
                 params=params,
-                data=audio_data,
-                timeout=30
+                data=audio_data
             ) as response:
                 if response.status == 200:
                     data = await response.json()
                     transcript = data['results']['channels'][0]['alternatives'][0]['transcript']
                     logger.info(f"✅ Речь распознана: {len(transcript)} символов")
-                    logger.info(f"📝 Текст: {transcript[:200]}")
                     return transcript
                 else:
                     error_text = await response.text()
@@ -933,12 +988,14 @@ async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
     }
     
     try:
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=30)
+        connector = aiohttp.TCPConnector(force_close=True)
+        
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             async with session.post(
                 YANDEX_TTS_API_URL,
                 headers=headers,
-                data=data,
-                timeout=30
+                data=data
             ) as response:
                 if response.status == 200:
                     audio_data = await response.read()
