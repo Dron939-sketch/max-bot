@@ -1,15 +1,14 @@
 /* ========== STYLES.CSS ========== */
-/* ПОЛНЫЙ ДИЗАЙН КАК В TELEGRAM:
-   - Зеленоватый фон с паттерном
-   - Белые сообщения с правильными отступами
-   - Точная ширина сообщений 75%
-   - Правильные скругления углов
-   - Время внутри сообщения справа
+/* СВЕТЛАЯ ТЕМА:
+   - Зеленоватый фон #d7e9d7
+   - Белые сообщения бота
+   - Светло-зеленые сообщения пользователя
+   - Скругления как в Telegram
 */
 
 :root {
-    /* Основные цвета Telegram */
-    --tg-bg: #d7e9d7;              /* Зеленоватый базовый фон */
+    /* Основные цвета */
+    --tg-bg: #d7e9d7;              /* Светлый зеленоватый фон */
     --tg-panel-bg: #ffffff;         /* Белый для панелей */
     --tg-header-bg: #ffffff;        /* Белая шапка */
     --tg-input-bg: #f0f2f5;         /* Светло-серое поле ввода */
@@ -24,8 +23,8 @@
     --tg-button-secondary: #e4e6eb;  /* Серая кнопка */
     --tg-button-text: #3390ec;       /* Синий текст на кнопках */
     
-    /* Параметры сообщений как в Telegram */
-    --message-max-width: 75%;        /* Точная ширина сообщений */
+    /* Параметры сообщений */
+    --message-max-width: 75%;        /* Ширина сообщений 75% */
     --message-min-width: 80px;       /* Минимальная ширина */
     --message-bubble-radius: 18px;    /* Радиус скругления */
     --message-padding-vertical: 8px;  /* Вертикальный отступ внутри */
@@ -51,7 +50,6 @@
     --text-xxl: 28px;
 }
 
-/* ===== БАЗОВЫЕ СБРОСЫ И 100% ВЫСОТА ===== */
 * {
     margin: 0;
     padding: 0;
@@ -62,38 +60,18 @@ html, body {
     height: 100%;
     width: 100%;
     overflow: hidden;
-    position: fixed;
 }
 
 body {
     background-color: var(--tg-bg);
-    /* Паттерн с рыбками, курочками и парашютиками */
-    background-image: 
-        radial-gradient(circle at 15% 20%, rgba(255, 200, 150, 0.2) 4px, transparent 4px),
-        radial-gradient(circle at 25% 45%, rgba(255, 200, 150, 0.2) 6px, transparent 6px),
-        radial-gradient(circle at 75% 60%, rgba(255, 200, 150, 0.2) 5px, transparent 5px),
-        radial-gradient(circle at 85% 30%, rgba(255, 200, 150, 0.2) 7px, transparent 7px),
-        radial-gradient(circle at 40% 15%, rgba(240, 200, 150, 0.25) 8px, transparent 8px),
-        radial-gradient(circle at 55% 75%, rgba(240, 200, 150, 0.25) 10px, transparent 10px),
-        radial-gradient(circle at 10% 80%, rgba(240, 200, 150, 0.25) 6px, transparent 6px),
-        radial-gradient(circle at 90% 85%, rgba(150, 200, 255, 0.2) 12px, transparent 12px),
-        radial-gradient(circle at 65% 25%, rgba(150, 200, 255, 0.2) 8px, transparent 8px),
-        radial-gradient(circle at 30% 65%, rgba(150, 200, 255, 0.2) 10px, transparent 10px),
-        repeating-linear-gradient(45deg, 
-            rgba(200, 230, 200, 0.1) 0px,
-            rgba(200, 230, 200, 0.1) 20px,
-            transparent 20px,
-            transparent 40px
-        );
-    background-blend-mode: overlay;
     color: var(--tg-text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     font-size: var(--text-md);
     line-height: 1.4;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 }
 
-/* ===== ГЛАВНЫЙ КОНТЕЙНЕР ===== */
 .app {
     display: flex;
     height: 100vh;
@@ -104,7 +82,7 @@ body {
     position: relative;
 }
 
-/* ===== ЛЕВАЯ ПАНЕЛЬ (СПИСОК ЧАТОВ) ===== */
+/* ===== ЛЕВАЯ ПАНЕЛЬ ===== */
 .chats-panel {
     width: 320px;
     height: 100%;
@@ -212,6 +190,10 @@ body {
 }
 
 .chat-item:hover {
+    background-color: var(--tg-hover);
+}
+
+.chat-item.active {
     background-color: var(--tg-hover);
 }
 
@@ -472,7 +454,26 @@ body {
     gap: var(--message-gap);
 }
 
-/* ===== СООБЩЕНИЯ КАК В TELEGRAM ===== */
+/* Разделитель даты */
+.date-divider {
+    display: flex;
+    justify-content: center;
+    margin: var(--spacing-md) 0;
+}
+
+.date-divider span {
+    background-color: rgba(255, 255, 255, 0.8);
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: var(--text-xs);
+    color: var(--tg-text-secondary);
+    backdrop-filter: blur(5px);
+    border: 1px solid var(--tg-border);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ===== СООБЩЕНИЯ ===== */
 .message {
     display: flex;
     flex-direction: column;
@@ -550,7 +551,7 @@ body {
     clear: both;
 }
 
-/* Стили для текста внутри сообщения */
+/* Стили для текста */
 .message-text strong {
     font-weight: 600;
     color: var(--tg-text);
@@ -569,60 +570,21 @@ body {
     margin-bottom: 2px;
 }
 
-.message-text code {
-    background-color: #f0f2f5;
-    padding: 2px 4px;
-    border-radius: 4px;
-    font-family: 'Courier New', monospace;
-    font-size: 14px;
-}
-
-.message-text pre {
-    background-color: #f0f2f5;
-    padding: 8px;
-    border-radius: 8px;
-    overflow-x: auto;
-    margin: 8px 0;
-}
-
-.message-text a {
-    color: var(--tg-button-primary);
-    text-decoration: none;
-}
-
-.message-text a:hover {
-    text-decoration: underline;
-}
-
-/* Разделитель даты */
-.date-divider {
-    display: flex;
-    justify-content: center;
-    max-width: 100%;
-    margin: 16px 0;
-}
-
-.date-divider span {
-    background-color: rgba(255, 255, 255, 0.8);
-    padding: 4px 12px;
-    border-radius: 20px;
-    font-size: 11px;
-    color: var(--tg-text-secondary);
-    backdrop-filter: blur(5px);
-    border: 1px solid var(--tg-border);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
 /* Индикатор печати */
 .typing-indicator {
     display: flex;
     gap: 4px;
-    padding: 8px 12px;
+    padding: 10px 14px;
     background-color: var(--tg-message-bot);
     border-radius: var(--message-bubble-radius) var(--message-bubble-radius) var(--message-bubble-radius) 4px;
     width: fit-content;
     border: 1px solid var(--tg-border);
+    margin-top: var(--spacing-xs);
+    display: none;
+}
+
+.typing-indicator.visible {
+    display: flex;
 }
 
 .typing-indicator span {
@@ -644,48 +606,6 @@ body {
 @keyframes typingPulse {
     0%, 100% { opacity: 0.3; transform: scale(1); }
     50% { opacity: 1; transform: scale(1.2); }
-}
-
-/* ===== ИНЛАЙН-КНОПКИ ===== */
-.inline-buttons-container {
-    padding: 4px var(--spacing-lg) 8px;
-    background-color: transparent;
-}
-
-.inline-buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    justify-content: flex-start;
-}
-
-.inline-button {
-    background-color: var(--tg-message-bot);
-    color: var(--tg-button-text);
-    border: 1px solid var(--tg-border);
-    padding: 6px 12px;
-    border-radius: 30px;
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s;
-    white-space: nowrap;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-}
-
-.inline-button:hover {
-    background-color: var(--tg-hover);
-    border-color: var(--tg-button-primary);
-}
-
-.inline-button.primary {
-    background-color: var(--tg-button-primary);
-    color: white;
-    border: none;
-}
-
-.inline-button.primary:hover {
-    background-color: var(--tg-button-primary-hover);
 }
 
 /* ===== ПАНЕЛЬ ВВОДА ===== */
@@ -784,150 +704,6 @@ body {
     z-index: 1;
 }
 
-/* ===== ЭКРАН ПРИВЕТСТВИЯ ===== */
-.onboarding-container {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: flex-start;
-    padding: var(--spacing-md);
-    min-height: 0;
-    overflow-y: auto;
-}
-
-.onboarding-content {
-    max-width: 500px;
-    width: 100%;
-    background-color: var(--tg-message-bot);
-    border-radius: 20px;
-    padding: var(--spacing-lg);
-    margin: var(--spacing-md) auto;
-    border: 1px solid var(--tg-border);
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
-}
-
-.onboarding-avatar {
-    font-size: 48px;
-    text-align: center;
-    margin-bottom: var(--spacing-xs);
-}
-
-.onboarding-title {
-    font-size: var(--text-lg);
-    font-weight: 600;
-    text-align: center;
-    color: var(--tg-text);
-    margin-bottom: 2px;
-}
-
-.onboarding-subtitle {
-    font-size: var(--text-xs);
-    text-align: center;
-    color: var(--tg-text-secondary);
-    margin-bottom: var(--spacing-md);
-}
-
-.onboarding-text {
-    font-size: var(--text-md);
-    line-height: 1.5;
-    color: var(--tg-text);
-    margin-bottom: var(--spacing-md);
-    white-space: pre-wrap;
-}
-
-.onboarding-text ul {
-    margin: var(--spacing-sm) 0;
-    padding-left: 0;
-    list-style-type: none;
-}
-
-.onboarding-text li {
-    margin-bottom: var(--spacing-xs);
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-}
-
-.emoji-line {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    margin-bottom: var(--spacing-xs);
-}
-
-.emoji-symbol {
-    font-size: 1.2em;
-    min-width: 24px;
-    text-align: left;
-}
-
-.section-title {
-    font-weight: 600;
-    margin: var(--spacing-md) 0 var(--spacing-xs);
-    font-size: var(--text-md);
-}
-
-.numbered-list {
-    margin: var(--spacing-sm) 0;
-}
-
-.numbered-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    margin-bottom: var(--spacing-xs);
-}
-
-.number-emoji {
-    min-width: 28px;
-    font-size: 1.1em;
-}
-
-#userNamePlaceholder {
-    font-weight: 600;
-    color: var(--tg-button-primary);
-}
-
-.onboarding-buttons {
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-sm);
-    margin-top: var(--spacing-md);
-}
-
-.onboarding-btn {
-    padding: var(--spacing-sm) var(--spacing-md);
-    border-radius: 20px;
-    font-size: var(--text-md);
-    font-weight: 500;
-    border: none;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    width: 100%;
-    text-align: center;
-}
-
-.onboarding-btn.primary {
-    background-color: var(--tg-button-primary);
-    color: white;
-}
-
-.onboarding-btn.primary:hover {
-    background-color: var(--tg-button-primary-hover);
-    transform: translateY(-1px);
-}
-
-.onboarding-btn.secondary {
-    background-color: var(--tg-button-secondary);
-    color: var(--tg-text);
-}
-
-.onboarding-btn.secondary:hover {
-    background-color: #d1d3d8;
-    transform: translateY(-1px);
-}
-
 /* Анимации */
 @keyframes fadeIn {
     from { opacity: 0; transform: translateY(5px); }
@@ -971,25 +747,9 @@ body {
     :root {
         --message-text-font: 14px;
     }
-    
-    .message-bubble {
-        padding: 5px 8px;
-    }
 }
 
 /* Вспомогательные классы */
 .hidden {
     display: none !important;
-}
-
-.loading {
-    text-align: center;
-    padding: var(--spacing-md);
-    color: var(--tg-text-secondary);
-    animation: pulse 1.5s infinite;
-}
-
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
 }
