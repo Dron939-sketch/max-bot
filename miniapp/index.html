@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Фреди · виртуальный психолог</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="/miniapp/styles.css">
     <style>
         /* Базовые стили на время загрузки (до применения темы) */
         body {
@@ -364,11 +364,12 @@
         </div>
     </template>
 
-    <!-- Подключение скриптов -->
-    <script src="api.js"></script>
-    <script src="onboarding.js"></script>
-    <script src="context.js"></script>
-    <script src="test.js"></script>
-    <script src="script.js"></script>
+    <!-- Подключение скриптов с правильными путями через /miniapp/ -->
+    <link rel="stylesheet" href="/miniapp/styles.css">
+    <script src="/miniapp/api.js"></script>
+    <script src="/miniapp/onboarding.js"></script>
+    <script src="/miniapp/context.js"></script>
+    <script src="/miniapp/test.js"></script>
+    <script src="/miniapp/script.js"></script>
 </body>
 </html>
