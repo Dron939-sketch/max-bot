@@ -3,1879 +3,309 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>ФРЕДИ - Виртуальный психолог</title>
-    
-    <!-- MAX Bridge (нужно для работы в MAX) -->
-    <script src="https://max.ru/webapps/js/bridge.js"></script>
-    
-    <style>
-        /* ========== ОСНОВНЫЕ ПЕРЕМЕННЫЕ ========== */
-        :root {
-            /* Светлая тема (Telegram/MAX) */
-            --tg-bg: #ffffff;
-            --tg-text: #000000;
-            --tg-hint: #707579;
-            --tg-link: #0047b3;
-            --tg-button: #40a7e3;
-            --tg-button-text: #ffffff;
-            --tg-secondary-bg: #f0f0f0;
-            --tg-border: #e0e0e0;
-            --tg-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-            --tg-radius: 14px;
-            --tg-radius-small: 8px;
-            --header-height: 60px;
-            --nav-height: 70px;
-            
-            /* Цвета сообщений */
-            --message-user-bg: #40a7e3;
-            --message-user-text: #ffffff;
-            --message-bot-bg: #f0f0f0;
-            --message-bot-text: #000000;
-            
-            /* MAX specific */
-            --max-safe-top: 0px;
-            --max-safe-bottom: 0px;
-            --max-surface-light: rgba(255, 255, 255, 0.9);
-            --max-surface-dark: rgba(31, 31, 31, 0.9);
-            
-            /* Фирменные цвета ФРЕДИ */
-            --fredi-blue: #40a7e3;
-            --fredi-blue-light: rgba(64, 167, 227, 0.1);
-            --fredi-blue-medium: rgba(64, 167, 227, 0.2);
-        }
-
-        /* Темная тема */
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --tg-bg: #1f1f1f;
-                --tg-text: #ffffff;
-                --tg-hint: #aaaaaa;
-                --tg-secondary-bg: #2d2d2d;
-                --tg-border: #3a3a3a;
-                --message-user-bg: #40a7e3;
-                --message-user-text: #ffffff;
-                --message-bot-bg: #2d2d2d;
-                --message-bot-text: #ffffff;
-                --max-surface-dark: rgba(31, 31, 31, 0.95);
-            }
-        }
-
-        /* ========== MAX ТЕМЫ (через data-атрибут) ========== */
-        [data-max-theme="light"] {
-            --tg-bg: #f5f7fa;
-            --tg-surface: var(--max-surface-light);
-        }
-
-        [data-max-theme="dark"] {
-            --tg-bg: #0e1621;
-            --tg-text: #ffffff;
-            --tg-hint: #8e8e93;
-            --tg-secondary-bg: #1e2530;
-            --tg-border: #2b3139;
-            --message-bot-bg: #1e2530;
-            --message-bot-text: #ffffff;
-            --tg-surface: var(--max-surface-dark);
-        }
-
-        /* ========== БАЗОВЫЕ СТИЛИ ========== */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            -webkit-tap-highlight-color: transparent;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background: var(--tg-bg);
-            color: var(--tg-text);
-            line-height: 1.5;
-            font-size: 16px;
-            -webkit-font-smoothing: antialiased;
-            height: 100vh;
-            overflow: hidden;
-            transition: background-color 0.3s ease, color 0.2s ease;
-            position: relative;
-        }
-
-        /* ========== ПОДЛОЖКА ========== */
-        body::before {
-            content: "";
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-image: 
-                radial-gradient(circle at 25px 25px, var(--tg-border) 1px, transparent 1px),
-                radial-gradient(circle at 75px 75px, var(--tg-border) 1px, transparent 1px);
-            background-size: 100px 100px;
-            opacity: 0.15;
-            pointer-events: none;
-            z-index: -1;
-            transition: opacity 0.3s ease;
-        }
-
-        [data-max-theme="dark"] body::before {
-            opacity: 0.1;
-        }
-
-        /* ========== КОНТЕЙНЕР ========== */
-        #app {
-            max-width: 600px;
-            margin: 0 auto;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-            background: transparent;
-            position: relative;
-            padding-top: env(safe-area-inset-top, 0);
-            padding-bottom: env(safe-area-inset-bottom, 0);
-        }
-
-        /* ========== ШАПКА ========== */
-        .header {
-            height: var(--header-height);
-            padding: 0 16px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            border-bottom: 1px solid var(--tg-border);
-            background: var(--max-surface-light);
-            backdrop-filter: blur(15px) saturate(180%);
-            -webkit-backdrop-filter: blur(15px) saturate(180%);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            transition: background 0.3s ease, border-color 0.3s ease;
-        }
-
-        [data-max-theme="dark"] .header {
-            background: var(--max-surface-dark);
-        }
-
-        .back-btn {
-            width: 40px;
-            height: 40px;
-            border: none;
-            background: transparent;
-            font-size: 24px;
-            cursor: pointer;
-            color: var(--tg-button);
-            display: none;
-            align-items: center;
-            justify-content: center;
-            border-radius: 50%;
-            transition: background 0.2s;
-        }
-
-        .back-btn.visible {
-            display: flex;
-        }
-
-        .back-btn:hover {
-            background: rgba(64, 167, 227, 0.1);
-        }
-
-        .header h1 {
-            font-size: 20px;
-            font-weight: 600;
-            color: var(--tg-text);
-            transition: color 0.2s;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .header-placeholder {
-            width: 40px;
-        }
-
-        /* ========== ОСНОВНОЙ КОНТЕНТ ========== */
-        .content {
-            flex: 1;
-            overflow-y: auto;
-            padding: 16px;
-            padding-bottom: calc(var(--nav-height) + 16px);
-            scroll-behavior: smooth;
-            background: transparent;
-            -webkit-overflow-scrolling: touch;
-        }
-
-        /* Стилизация скролла */
-        .content::-webkit-scrollbar {
-            width: 4px;
-        }
-
-        .content::-webkit-scrollbar-track {
-            background: transparent;
-        }
-
-        .content::-webkit-scrollbar-thumb {
-            background: var(--tg-hint);
-            border-radius: 4px;
-        }
-
-        /* ========== НИЖНЯЯ НАВИГАЦИЯ ========== */
-        .nav-bar {
-            height: var(--nav-height);
-            background: var(--max-surface-light);
-            backdrop-filter: blur(15px) saturate(180%);
-            -webkit-backdrop-filter: blur(15px) saturate(180%);
-            border-top: 1px solid var(--tg-border);
-            display: flex;
-            align-items: center;
-            justify-content: space-around;
-            padding: 0 8px;
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            max-width: 600px;
-            margin: 0 auto;
-            z-index: 100;
-            transition: background 0.3s ease, border-color 0.3s ease;
-            padding-bottom: env(safe-area-inset-bottom, 0);
-        }
-
-        [data-max-theme="dark"] .nav-bar {
-            background: var(--max-surface-dark);
-        }
-
-        .nav-btn {
-            flex: 1;
-            height: 48px;
-            border: none;
-            background: transparent;
-            color: var(--tg-hint);
-            font-size: 14px;
-            font-weight: 500;
-            border-radius: 24px;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 4px;
-        }
-
-        .nav-btn span {
-            font-size: 20px;
-        }
-
-        .nav-btn.active {
-            color: var(--tg-button);
-            background: rgba(64, 167, 227, 0.1);
-        }
-
-        [data-max-theme="dark"] .nav-btn.active {
-            background: rgba(64, 167, 227, 0.2);
-        }
-
-        /* ========== СТЕКЛЯННЫЕ КАРТОЧКИ ========== */
-        .glass-card {
-            background: var(--max-surface-light);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-            border: 1px solid var(--tg-border);
-            border-radius: var(--tg-radius);
-            transition: background 0.3s ease, border-color 0.3s ease, transform 0.2s ease;
-        }
-
-        [data-max-theme="dark"] .glass-card {
-            background: var(--max-surface-dark);
-        }
-
-        /* ========== ЭКРАН ПРИВЕТСТВИЯ ========== */
-        .welcome-screen {
-            animation: fadeIn 0.3s ease-out;
-        }
-
-        .greeting {
-            font-size: 24px;
-            font-weight: 600;
-            margin-bottom: 16px;
-            color: var(--tg-text);
-        }
-
-        .welcome-text {
-            font-size: 16px;
-            line-height: 1.6;
-            margin-bottom: 24px;
-        }
-
-        .welcome-text p {
-            margin-bottom: 16px;
-        }
-
-        .stages-list {
-            border-radius: var(--tg-radius);
-            padding: 16px;
-            margin: 20px 0;
-            background: var(--max-surface-light);
-            backdrop-filter: blur(8px);
-            border: 1px solid var(--tg-border);
-        }
-
-        [data-max-theme="dark"] .stages-list {
-            background: var(--max-surface-dark);
-        }
-
-        .stage-item {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 12px;
-        }
-
-        .stage-item:last-child {
-            margin-bottom: 0;
-        }
-
-        .stage-number {
-            font-size: 18px;
-            min-width: 32px;
-        }
-
-        .stage-text {
-            flex: 1;
-        }
-
-        /* ========== КАРТОЧКИ МЕНЮ ========== */
-        .main-menu {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            margin: 20px 0;
-        }
-
-        .menu-card {
-            padding: 16px;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            text-align: left;
-            background: var(--max-surface-light);
-            backdrop-filter: blur(8px);
-            border: 1px solid var(--tg-border);
-            border-radius: var(--tg-radius);
-        }
-
-        [data-max-theme="dark"] .menu-card {
-            background: var(--max-surface-dark);
-        }
-
-        .menu-card:hover {
-            background: rgba(64, 167, 227, 0.1);
-            transform: translateX(4px);
-        }
-
-        .menu-emoji {
-            font-size: 32px;
-            min-width: 48px;
-            text-align: center;
-        }
-
-        .menu-title {
-            font-weight: 600;
-            font-size: 16px;
-            margin-bottom: 4px;
-        }
-
-        .menu-desc {
-            font-size: 13px;
-            color: var(--tg-hint);
-        }
-
-        /* ========== ПРОФИЛЬ БЕЙДЖ ========== */
-        .profile-badge {
-            border-radius: 30px;
-            padding: 12px 16px;
-            margin: 16px 0;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            cursor: pointer;
-            background: var(--max-surface-light);
-            backdrop-filter: blur(8px);
-            border: 1px solid var(--tg-border);
-        }
-
-        [data-max-theme="dark"] .profile-badge {
-            background: var(--max-surface-dark);
-        }
-
-        .profile-badge:hover {
-            background: rgba(64, 167, 227, 0.1);
-            transform: translateY(-2px);
-        }
-
-        .profile-code {
-            font-weight: 600;
-            font-size: 15px;
-        }
-
-        .profile-arrow {
-            color: var(--tg-hint);
-            font-size: 18px;
-        }
-
-        /* ========== ЭКРАН ТЕСТА ========== */
-        .test-screen {
-            animation: fadeIn 0.3s;
-        }
-
-        .stage-title {
-            font-size: 20px;
-            font-weight: 600;
-            margin-bottom: 20px;
-            color: var(--tg-button);
-        }
-
-        .progress-bar {
-            height: 6px;
-            background: var(--tg-border);
-            border-radius: 3px;
-            margin: 8px 0 16px;
-            overflow: hidden;
-        }
-
-        .progress-fill {
-            height: 100%;
-            background: var(--tg-button);
-            border-radius: 3px;
-            transition: width 0.3s;
-        }
-
-        .progress-text {
-            font-size: 13px;
-            color: var(--tg-hint);
-            text-align: right;
-            display: block;
-        }
-
-        /* Карточка вопроса */
-        .question-card {
-            background: var(--max-surface-light);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-            border: 1px solid var(--tg-border);
-            border-radius: var(--tg-radius);
-            padding: 20px;
-            margin-bottom: 20px;
-            font-size: 18px;
-            font-weight: 500;
-            line-height: 1.6;
-            color: var(--tg-text);
-        }
-
-        [data-max-theme="dark"] .question-card {
-            background: var(--max-surface-dark);
-        }
-
-        /* Сетка для кнопок ответов */
-        .options-grid {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            margin: 20px 0;
-        }
-
-        /* Кнопки ответов */
-        .option-btn {
-            width: 100%;
-            padding: 16px 20px;
-            background: var(--max-surface-light);
-            backdrop-filter: blur(5px);
-            -webkit-backdrop-filter: blur(5px);
-            border: 1px solid var(--tg-border);
-            border-radius: var(--tg-radius);
-            font-size: 16px;
-            color: var(--tg-text);
-            cursor: pointer;
-            transition: all 0.2s;
-            text-align: left;
-            line-height: 1.5;
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-
-        [data-max-theme="dark"] .option-btn {
-            background: var(--max-surface-dark);
-        }
-
-        .option-btn:hover {
-            background: rgba(64, 167, 227, 0.1);
-            border-color: var(--tg-button);
-            transform: translateX(4px);
-        }
-
-        .option-btn:active {
-            transform: scale(0.98);
-        }
-
-        /* Буква на кнопке (А, Б, В, Г) */
-        .option-letter {
-            width: 32px;
-            height: 32px;
-            background: var(--tg-button);
-            color: white;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 600;
-            font-size: 16px;
-            flex-shrink: 0;
-        }
-
-        /* Стили для выбранного ответа */
-        .option-btn.selected {
-            background: rgba(64, 167, 227, 0.2);
-            border-color: var(--tg-button);
-        }
-
-        .option-btn.selected .option-letter {
-            background: white;
-            color: var(--tg-button);
-            border: 1px solid var(--tg-button);
-        }
-
-        /* ========== ЭКРАН РЕЗУЛЬТАТА ЭТАПА ========== */
-        .stage-result {
-            text-align: center;
-            padding: 20px;
-            animation: fadeIn 0.3s;
-        }
-
-        .result-emoji {
-            font-size: 64px;
-            margin-bottom: 20px;
-        }
-
-        .result-text {
-            font-size: 18px;
-            line-height: 1.6;
-            margin: 20px 0;
-            padding: 20px;
-            background: var(--max-surface-light);
-            backdrop-filter: blur(8px);
-            border: 1px solid var(--tg-border);
-            border-radius: var(--tg-radius);
-            color: var(--tg-text);
-            white-space: pre-line;
-        }
-
-        [data-max-theme="dark"] .result-text {
-            background: var(--max-surface-dark);
-        }
-
-        .continue-btn {
-            width: 100%;
-            height: 56px;
-            background: var(--tg-button);
-            color: white;
-            border: none;
-            border-radius: var(--tg-radius);
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            margin-top: 20px;
-            transition: all 0.2s;
-        }
-
-        .continue-btn:hover {
-            opacity: 0.9;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(64, 167, 227, 0.3);
-        }
-
-        /* ========== ЭКРАН ПРОФИЛЯ ========== */
-        .profile-screen {
-            animation: fadeIn 0.3s;
-        }
-
-        .profile-section {
-            background: var(--max-surface-light);
-            backdrop-filter: blur(8px);
-            border: 1px solid var(--tg-border);
-            border-radius: var(--tg-radius);
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-
-        [data-max-theme="dark"] .profile-section {
-            background: var(--max-surface-dark);
-        }
-
-        .profile-section h2 {
-            font-size: 18px;
-            font-weight: 600;
-            margin-bottom: 16px;
-            color: var(--tg-button);
-        }
-
-        .profile-section h3 {
-            font-size: 16px;
-            font-weight: 600;
-            margin: 16px 0 8px;
-            color: var(--tg-button);
-        }
-
-        .profile-section p {
-            margin-bottom: 8px;
-            line-height: 1.6;
-        }
-
-        /* Стили для векторов в профиле */
-        .profile-vector {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 12px 16px;
-            margin: 8px 0;
-            background: rgba(64, 167, 227, 0.05);
-            border-radius: var(--tg-radius);
-        }
-
-        .profile-vector .option-letter {
-            width: 28px;
-            height: 28px;
-            font-size: 14px;
-            background: var(--tg-button);
-            color: white;
-        }
-
-        /* ========== КНОПКИ ДЕЙСТВИЙ ========== */
-        .action-buttons {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            margin-top: 24px;
-        }
-
-        .action-btn {
-            width: 100%;
-            height: 56px;
-            border: none;
-            border-radius: var(--tg-radius);
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-
-        .action-btn.primary {
-            background: var(--tg-button);
-            color: white;
-        }
-
-        .action-btn.primary:hover {
-            opacity: 0.9;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(64, 167, 227, 0.3);
-        }
-
-        .action-btn.secondary {
-            background: var(--max-surface-light);
-            backdrop-filter: blur(5px);
-            border: 1px solid var(--tg-border);
-            color: var(--tg-text);
-        }
-
-        [data-max-theme="dark"] .action-btn.secondary {
-            background: var(--max-surface-dark);
-        }
-
-        .action-btn.secondary:hover {
-            background: rgba(64, 167, 227, 0.1);
-            border-color: var(--tg-button);
-        }
-
-        /* Кнопка перезапуска теста */
-        .restart-test-btn {
-            margin: 8px 0 16px;
-            background: rgba(64, 167, 227, 0.1) !important;
-            border: 1px dashed var(--tg-button) !important;
-            color: var(--tg-button) !important;
-        }
-
-        /* ========== ЗАГРУЗКА ========== */
-        .loading-screen {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100%;
-            min-height: 300px;
-        }
-
-        .spinner {
-            width: 40px;
-            height: 40px;
-            border: 3px solid var(--tg-border);
-            border-top-color: var(--tg-button);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin-bottom: 16px;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        /* ========== АНИМАЦИИ ========== */
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .fade-out {
-            opacity: 0;
-            transition: opacity 0.3s;
-        }
-
-        .fade-in {
-            opacity: 1;
-            transition: opacity 0.3s;
-        }
-
-        /* ========== УТИЛИТЫ ========== */
-        .hidden {
-            display: none !important;
-        }
-
-        .text-center {
-            text-align: center;
-        }
-
-        .mt-2 { margin-top: 8px; }
-        .mt-4 { margin-top: 16px; }
-        .mt-6 { margin-top: 24px; }
-        .mb-2 { margin-bottom: 8px; }
-        .mb-4 { margin-bottom: 16px; }
-        .mb-6 { margin-bottom: 24px; }
-
-        /* ========== АДАПТИВНОСТЬ ========== */
-        @media (max-width: 480px) {
-            .header h1 {
-                font-size: 18px;
-            }
-
-            .greeting {
-                font-size: 20px;
-            }
-
-            .stage-title {
-                font-size: 18px;
-            }
-
-            .menu-emoji {
-                font-size: 28px;
-                min-width: 40px;
-            }
-
-            .action-btn {
-                height: 48px;
-                font-size: 15px;
-            }
-
-            .option-btn {
-                padding: 14px 16px;
-            }
-
-            .question-card {
-                padding: 16px;
-                font-size: 16px;
-            }
-        }
-
-        /* ========== MAX СПЕЦИФИЧНЫЕ СТИЛИ ========== */
-        .max-webapp .header,
-        .max-webapp .nav-bar {
-            background: var(--max-surface-light);
-            backdrop-filter: blur(15px) saturate(180%);
-        }
-
-        [data-max-theme="dark"] .max-webapp .header,
-        [data-max-theme="dark"] .max-webapp .nav-bar {
-            background: var(--max-surface-dark);
-        }
-
-        /* Плавное переключение тем */
-        body, .header, .nav-bar, .mode-card, .message, .input-panel, .menu-card,
-        .option-btn, .question-card, .profile-section, .result-text {
-            transition: background-color 0.3s ease, color 0.2s ease, border-color 0.3s ease;
-        }
-    </style>
+    <title>Фреди · идеальный MAX</title>
+    <link rel="stylesheet" href="стили.css">
+    <!-- Эмодзи-поддержка -->
+    <meta name="theme-color" content="#248bf2">
+    <!-- Для идентификации в MAX -->
+    <script src="https://unpkg.com/@vkid/sdk@3.6.0/lib/sdk.min.js"></script>
 </head>
 <body>
-    <div id="app">
-        <header class="header">
-            <button class="back-btn" id="backBtn">←</button>
-            <h1 id="header-title">👋 ФРЕДИ</h1>
-            <div class="header-placeholder"></div>
-        </header>
-        
-        <main class="content" id="content">
-            <div class="loading-screen">
-                <div class="spinner"></div>
-                <p>Загрузка ФРЕДИ...</p>
+    <div class="app" id="app">
+        <!-- ========== ЛЕВАЯ ПАНЕЛЬ: СПИСОК ЧАТОВ (для десктопа) ========== -->
+        <div class="chats-panel" id="chatsPanel">
+            <div class="chats-header">
+                <div class="chats-title">Мессенджер</div>
+                <button class="new-chat-btn" id="newChatBtn" aria-label="Новый чат">✎</button>
             </div>
-        </main>
-        
-        <nav class="nav-bar" id="navBar">
-            <button class="nav-btn" data-screen="main">
-                <span>🏠</span> Главная
-            </button>
-            <button class="nav-btn" data-screen="profile">
-                <span>📊</span> Профиль
-            </button>
-            <button class="nav-btn" data-screen="goals">
-                <span>🎯</span> Цели
-            </button>
-            <button class="nav-btn" data-screen="ask">
-                <span>❓</span> Чат
-            </button>
-        </nav>
+            <div class="chats-search">
+                <input type="text" placeholder="Поиск" id="chatSearchInput">
+            </div>
+            <div class="chats-list" id="chatsList">
+                <!-- Активный чат с ботом -->
+                <div class="chat-item active" data-chat="fredi" id="chatFredi">
+                    <div class="chat-avatar">
+                        <img src="https://ui-avatars.com/api/?name=Ф&background=248bf2&color=fff&size=128" alt="Ф">
+                    </div>
+                    <div class="chat-info">
+                        <div class="chat-name">Фреди · психолог</div>
+                        <div class="chat-preview" id="chatPreview">🧠 Чем могу помочь?</div>
+                    </div>
+                    <div class="chat-time" id="chatTime">сейчас</div>
+                </div>
+                
+                <!-- Чат "Сохранённые" для заметок и профиля -->
+                <div class="chat-item" data-chat="saved" id="chatSaved">
+                    <div class="chat-avatar saved-avatar">
+                        <img src="https://ui-avatars.com/api/?name=★&background=34c759&color=fff&size=128" alt="★">
+                    </div>
+                    <div class="chat-info">
+                        <div class="chat-name">Сохранённые</div>
+                        <div class="chat-preview">Мой профиль и заметки</div>
+                    </div>
+                    <div class="chat-time" id="savedTime">вчера</div>
+                </div>
+
+                <!-- Чат "Мысли психолога" -->
+                <div class="chat-item" data-chat="thoughts" id="chatThoughts">
+                    <div class="chat-avatar thoughts-avatar">
+                        <img src="https://ui-avatars.com/api/?name=🧠&background=5856d6&color=fff&size=128" alt="🧠">
+                    </div>
+                    <div class="chat-info">
+                        <div class="chat-name">Мысли психолога</div>
+                        <div class="chat-preview">Глубинные инсайты</div>
+                    </div>
+                    <div class="chat-time" id="thoughtsTime"></div>
+                </div>
+
+                <!-- Чат "Идеи на выходные" -->
+                <div class="chat-item" data-chat="weekend" id="chatWeekend">
+                    <div class="chat-avatar weekend-avatar">
+                        <img src="https://ui-avatars.com/api/?name=🎯&background=ff9500&color=fff&size=128" alt="🎯">
+                    </div>
+                    <div class="chat-info">
+                        <div class="chat-name">Идеи на выходные</div>
+                        <div class="chat-preview">Что интересного?</div>
+                    </div>
+                    <div class="chat-time" id="weekendTime"></div>
+                </div>
+            </div>
+            
+            <div class="chats-footer" id="chatsFooter">
+                <div class="user-mini-profile" id="userMiniProfile">
+                    <div class="user-mini-avatar">
+                        <img src="https://ui-avatars.com/api/?name=Я&background=248bf2&color=fff&size=64" alt="Я" id="userAvatar">
+                    </div>
+                    <div class="user-mini-info">
+                        <div class="user-mini-name" id="userName">Загрузка...</div>
+                        <div class="user-mini-status" id="userStatus">🧠 профиль загружается</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========== ПРАВАЯ ПАНЕЛЬ: ОСНОВНОЙ ЧАТ ========== -->
+        <div class="chat-panel" id="chatPanel">
+            <!-- Шапка чата -->
+            <div class="chat-header" id="chatHeader">
+                <div class="chat-header-left">
+                    <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Меню">☰</button>
+                    <div class="chat-header-avatar" id="chatHeaderAvatar">
+                        <img src="https://ui-avatars.com/api/?name=Ф&background=248bf2&color=fff&size=128" alt="Ф">
+                    </div>
+                    <div class="chat-header-info">
+                        <div class="chat-header-name" id="chatHeaderName">Фреди</div>
+                        <div class="chat-header-status" id="chatHeaderStatus">🧠 психолог · онлайн</div>
+                    </div>
+                </div>
+                <div class="chat-header-right">
+                    <button class="header-btn" id="modeBtn" title="Режим общения">🎭</button>
+                    <button class="header-btn" id="profileBtn" title="Мой портрет">📊</button>
+                    <button class="header-btn" id="menuBtn" title="Меню">⋮</button>
+                </div>
+            </div>
+
+            <!-- Область сообщений -->
+            <div class="messages-container" id="messagesContainer">
+                <div id="messagesList" class="messages-list">
+                    <!-- Сообщения будут добавляться сюда через JavaScript -->
+                    
+                    <!-- Пример структуры сообщения (для понимания) -->
+                    <!-- 
+                    <div class="message date-divider">
+                        <span>19 марта 2026</span>
+                    </div>
+                    
+                    <div class="message bot-message" id="msg-1">
+                        <div class="message-avatar">
+                            <img src="https://ui-avatars.com/api/?name=Ф&background=248bf2&color=fff&size=128" alt="Ф">
+                        </div>
+                        <div class="message-bubble">
+                            <div class="message-sender">Фреди</div>
+                            <div class="message-text">
+                                Привет! Я Фреди, твой виртуальный психолог. 👋
+                                
+                                Я помогу тебе разобраться в себе через тест из 5 этапов, 
+                                исследовать глубинные паттерны и найти опоры.
+                                
+                                С чего начнём?
+                            </div>
+                            <div class="message-time">10:00</div>
+                        </div>
+                    </div>
+
+                    <div class="message user-message" id="msg-2">
+                        <div class="message-bubble">
+                            <div class="message-text">Расскажи про тест</div>
+                            <div class="message-time">10:01</div>
+                        </div>
+                    </div>
+
+                    <div class="message bot-message thought-message" id="msg-3">
+                        <div class="message-avatar">
+                            <img src="https://ui-avatars.com/api/?name=🧠&background=5856d6&color=fff&size=128" alt="🧠">
+                        </div>
+                        <div class="message-bubble">
+                            <div class="message-sender">Мысли психолога</div>
+                            <div class="message-text thought-text">
+                                "Интересно, что выбираешь структуру, но боишься её"
+                            </div>
+                            <div class="message-time">10:02</div>
+                        </div>
+                    </div>
+                    -->
+                </div>
+                <div id="messagesEnd"></div>
+            </div>
+
+            <!-- Область с кнопками (инлайн-клавиатура) -->
+            <div class="inline-buttons-container" id="inlineButtonsContainer" style="display: none;">
+                <div class="inline-buttons" id="inlineButtons"></div>
+            </div>
+
+            <!-- Нижняя панель: поле ввода и кнопки -->
+            <div class="input-panel" id="inputPanel">
+                <div class="attach-btn" id="attachBtn" title="Прикрепить">📎</div>
+                <div class="message-input-wrapper">
+                    <input type="text" class="message-input" id="messageInput" placeholder="Сообщение..." autocomplete="off">
+                    <button class="send-btn" id="sendBtn" aria-label="Отправить">📤</button>
+                </div>
+                <div class="voice-btn" id="voiceBtn" title="Голосовое сообщение">🎤</div>
+            </div>
+
+            <!-- Нижняя панель для тестирования (скрыта по умолчанию) -->
+            <div class="test-panel" id="testPanel" style="display: none;">
+                <!-- Контент будет заполняться динамически -->
+                <div class="test-progress" id="testProgress"></div>
+                <div class="test-question" id="testQuestion"></div>
+                <div class="test-options" id="testOptions"></div>
+                <div class="test-navigation" id="testNavigation"></div>
+            </div>
+        </div>
+
+        <!-- ========== ПАНЕЛЬ ПРОФИЛЯ (правая боковая панель) ========== -->
+        <div class="profile-panel" id="profilePanel" style="display: none;">
+            <div class="profile-header">
+                <button class="close-profile-btn" id="closeProfileBtn">✕</button>
+                <div class="profile-header-title">Мой портрет</div>
+            </div>
+            <div class="profile-content" id="profileContent">
+                <!-- Загружается через JS -->
+                <div class="profile-loading">Загрузка профиля...</div>
+            </div>
+        </div>
+
+        <!-- ========== ПАНЕЛЬ РЕЖИМОВ ========== -->
+        <div class="modes-panel" id="modesPanel" style="display: none;">
+            <div class="modes-header">
+                <button class="close-modes-btn" id="closeModesBtn">✕</button>
+                <div class="modes-header-title">Режим общения</div>
+            </div>
+            <div class="modes-content" id="modesContent">
+                <div class="mode-card" data-mode="coach">
+                    <div class="mode-emoji">🔮</div>
+                    <div class="mode-info">
+                        <div class="mode-name">Коуч</div>
+                        <div class="mode-desc">Задаёт вопросы, помогает найти ответы внутри себя</div>
+                    </div>
+                </div>
+                <div class="mode-card" data-mode="psychologist">
+                    <div class="mode-emoji">🧠</div>
+                    <div class="mode-info">
+                        <div class="mode-name">Психолог</div>
+                        <div class="mode-desc">Исследует глубинные паттерны и эмоции</div>
+                    </div>
+                </div>
+                <div class="mode-card" data-mode="trainer">
+                    <div class="mode-emoji">⚡</div>
+                    <div class="mode-info">
+                        <div class="mode-name">Тренер</div>
+                        <div class="mode-desc">Даёт конкретные шаги и упражнения</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
+
+    <!-- ========== ШАБЛОНЫ ДЛЯ ДИНАМИЧЕСКОГО СОЗДАНИЯ ========== -->
     
-    <script>
-        (function() {
-            console.log('📱 ФРЕДИ: Загрузка...');
-            
-            // ============================================
-            // ВОПРОСЫ ЭТАПА 1
-            // ============================================
-            
-            const STAGE_1_QUESTIONS = [
-                {
-                    text: "Как вы обычно реагируете, когда кто-то критикует вашу работу?",
-                    options: [
-                        { id: 'a', text: "Долго переживаю, прокручиваю в голове", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'b', text: "Сразу начинаю защищаться или оправдываться", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'c', text: "Анализирую, есть ли в критике польза", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 0, MATERIAL: 1 } },
-                        { id: 'd', text: "Забиваю — подумаешь, дело житейское", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 0, MATERIAL: 1 } }
-                    ]
-                },
-                {
-                    text: "Что для вас важнее при выборе одежды?",
-                    options: [
-                        { id: 'a', text: "Чтобы выглядеть стильно и соответствовать моде", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'b', text: "Чтобы было комфортно и удобно", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 0, MATERIAL: 1 } },
-                        { id: 'c', text: "Чтобы подчеркнуть мою индивидуальность", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'd', text: "Чтобы было практично и не марко", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 0, MATERIAL: 1 } }
-                    ]
-                },
-                {
-                    text: "Когда вы попадаете в новую компанию, вы:",
-                    options: [
-                        { id: 'a', text: "Сначала наблюдаете, прислушиваетесь к своим ощущениям", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'b', text: "Активно знакомитесь, вступаете в разговоры", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'c', text: "Оцениваете, кто здесь может быть полезен", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 0, MATERIAL: 1 } },
-                        { id: 'd', text: "Думаете: 'Главное, чтобы не доставали'", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 0, MATERIAL: 1 } }
-                    ]
-                },
-                {
-                    text: "Что вас больше всего тревожит в нестабильные времена?",
-                    options: [
-                        { id: 'a', text: "Что я могу потерять связь с близкими", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'b', text: "Что я потеряю контроль над своей жизнью", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 0, MATERIAL: 1 } },
-                        { id: 'c', text: "Что обесценятся мои знания и опыт", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'd', text: "Что останусь без денег и ресурсов", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 0, MATERIAL: 1 } }
-                    ]
-                },
-                {
-                    text: "Как вы обычно принимаете важные решения?",
-                    options: [
-                        { id: 'a', text: "Прислушиваюсь к интуиции, внутреннему голосу", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'b', text: "Советуюсь с теми, кому доверяю", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'c', text: "Просчитываю риски и выгоду", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 0, MATERIAL: 1 } },
-                        { id: 'd', text: "Смотрю, как другие в такой ситуации поступили", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 0, MATERIAL: 1 } }
-                    ]
-                },
-                {
-                    text: "Что для вас означает 'успех'?",
-                    options: [
-                        { id: 'a', text: "Быть признанным, уважаемым в обществе", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'b', text: "Чувствовать гармонию и удовлетворение", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'c', text: "Иметь стабильный доход и активы", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 0, MATERIAL: 1 } },
-                        { id: 'd', text: "Достичь конкретных целей, которые поставил", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 0, MATERIAL: 1 } }
-                    ]
-                },
-                {
-                    text: "Когда кто-то обещает вам что-то важное, вы:",
-                    options: [
-                        { id: 'a', text: "Верю на слово, пока не докажут обратное", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'b', text: "Надеюсь, но внутренне готовлюсь к худшему", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'c', text: "Проверяю, создаю запасной план", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 0, MATERIAL: 1 } },
-                        { id: 'd', text: "Жду результата, слова — не главное", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 0, MATERIAL: 1 } }
-                    ]
-                },
-                {
-                    text: "Что вы чувствуете, когда долго находитесь в одиночестве?",
-                    options: [
-                        { id: 'a', text: "Тревогу, хочется к людям", scores: { EXTERNAL: 1, INTERNAL: 0, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'b', text: "Умиротворение, наконец-то тишина", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'c', text: "Начинаю думать о смысле жизни", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 1, MATERIAL: 0 } },
-                        { id: 'd', text: "Планирую дела, строю планы", scores: { EXTERNAL: 0, INTERNAL: 1, SYMBOLIC: 0, MATERIAL: 1 } }
-                    ]
-                }
-            ];
-            
-            // ============================================
-            // ВОПРОСЫ ЭТАПА 2
-            // ============================================
-            
-            const STAGE_2_QUESTIONS = [
-                {
-                    text: "Когда вы решаете сложную задачу, вы...",
-                    options: [
-                        { id: 'a', text: "Действуете по инструкции", level: 2 },
-                        { id: 'b', text: "Ищете аналогии из прошлого опыта", level: 4 },
-                        { id: 'c', text: "Пытаетесь понять общие принципы", level: 6 },
-                        { id: 'd', text: "Создаете новую модель/теорию", level: 8 }
-                    ]
-                },
-                {
-                    text: "Как вы относитесь к новым идеям?",
-                    options: [
-                        { id: 'a', text: "С осторожностью, проверяю на практике", level: 3 },
-                        { id: 'b', text: "Анализирую, ищу подтверждения", level: 5 },
-                        { id: 'c', text: "С интересом, сразу вижу возможности", level: 7 },
-                        { id: 'd', text: "Пытаюсь развить и улучшить", level: 9 }
-                    ]
-                },
-                {
-                    text: "Что для вас важнее при планировании?",
-                    options: [
-                        { id: 'a', text: "Четкий пошаговый план", level: 2 },
-                        { id: 'b', text: "Понимание конечной цели", level: 4 },
-                        { id: 'c', text: "Гибкость и адаптация", level: 6 },
-                        { id: 'd', text: "Системный подход", level: 8 }
-                    ]
-                },
-                {
-                    text: "Как вы обрабатываете новую информацию?",
-                    options: [
-                        { id: 'a', text: "Запоминаю факты", level: 1 },
-                        { id: 'b', text: "Ищу закономерности", level: 3 },
-                        { id: 'c', text: "Строю связи с уже известным", level: 5 },
-                        { id: 'd', text: "Создаю новую структуру знаний", level: 7 }
-                    ]
-                },
-                {
-                    text: "В споре вы обычно...",
-                    options: [
-                        { id: 'a', text: "Придерживаетесь фактов", level: 2 },
-                        { id: 'b', text: "Апеллируете к логике", level: 4 },
-                        { id: 'c', text: "Ищете общие основания", level: 6 },
-                        { id: 'd', text: "Переводите на уровень принципов", level: 8 }
-                    ]
-                },
-                {
-                    text: "Как вы учитесь новому?",
-                    options: [
-                        { id: 'a', text: "По шагам, от простого к сложному", level: 2 },
-                        { id: 'b', text: "Пробую на практике", level: 4 },
-                        { id: 'c', text: "Понимаю теорию, потом применяю", level: 6 },
-                        { id: 'd', text: "Создаю свой метод", level: 8 }
-                    ]
-                }
-            ];
-            
-            // ============================================
-            // ВОПРОСЫ ЭТАПА 3
-            // ============================================
-            
-            const STAGE_3_QUESTIONS = [
-                {
-                    text: "Когда на вас давят, вы...",
-                    options: [
-                        { id: 'a', text: "Замираете и не знаете, что делать", level: 1, vector: 'СБ' },
-                        { id: 'b', text: "Уходите от конфликта", level: 2, vector: 'СБ' },
-                        { id: 'c', text: "Внешне соглашаетесь, внутри злитесь", level: 3, vector: 'СБ' },
-                        { id: 'd', text: "Спокойно отстаиваете свою позицию", level: 4, vector: 'СБ' }
-                    ]
-                },
-                {
-                    text: "Как вы относитесь к деньгам?",
-                    options: [
-                        { id: 'a', text: "Они приходят и уходят", level: 1, vector: 'ТФ' },
-                        { id: 'b', text: "Постоянно ищу возможности заработать", level: 2, vector: 'ТФ' },
-                        { id: 'c', text: "Умею зарабатывать и копить", level: 3, vector: 'ТФ' },
-                        { id: 'd', text: "Создаю системы дохода", level: 4, vector: 'ТФ' }
-                    ]
-                },
-                {
-                    text: "Как вы понимаете мир?",
-                    options: [
-                        { id: 'a', text: "Верю в знаки и судьбу", level: 1, vector: 'УБ' },
-                        { id: 'b', text: "Доверяю экспертам", level: 2, vector: 'УБ' },
-                        { id: 'c', text: "Анализирую факты", level: 3, vector: 'УБ' },
-                        { id: 'd', text: "Строю теории", level: 4, vector: 'УБ' }
-                    ]
-                },
-                {
-                    text: "Как вы строите отношения?",
-                    options: [
-                        { id: 'a', text: "Сильно привязываюсь", level: 1, vector: 'ЧВ' },
-                        { id: 'b', text: "Подстраиваюсь под других", level: 2, vector: 'ЧВ' },
-                        { id: 'c', text: "Стремлюсь нравиться", level: 3, vector: 'ЧВ' },
-                        { id: 'd', text: "Строю равные отношения", level: 4, vector: 'ЧВ' }
-                    ]
-                },
-                {
-                    text: "В стрессовой ситуации вы...",
-                    options: [
-                        { id: 'a', text: "Теряете контроль", level: 1, vector: 'СБ' },
-                        { id: 'b', text: "Избегаете источника стресса", level: 2, vector: 'СБ' },
-                        { id: 'c', text: "Мобилизуетесь", level: 3, vector: 'СБ' },
-                        { id: 'd', text: "Используете стресс для роста", level: 4, vector: 'СБ' }
-                    ]
-                },
-                {
-                    text: "Что для вас важно в карьере?",
-                    options: [
-                        { id: 'a', text: "Стабильность", level: 1, vector: 'ТФ' },
-                        { id: 'b', text: "Рост дохода", level: 2, vector: 'ТФ' },
-                        { id: 'c', text: "Развитие", level: 3, vector: 'ТФ' },
-                        { id: 'd', text: "Влияние", level: 4, vector: 'ТФ' }
-                    ]
-                },
-                {
-                    text: "Как вы принимаете важные решения?",
-                    options: [
-                        { id: 'a', text: "Полагаюсь на интуицию", level: 1, vector: 'УБ' },
-                        { id: 'b', text: "Советуюсь с авторитетами", level: 2, vector: 'УБ' },
-                        { id: 'c', text: "Анализирую все 'за' и 'против'", level: 3, vector: 'УБ' },
-                        { id: 'd', text: "Вижу системные последствия", level: 4, vector: 'УБ' }
-                    ]
-                },
-                {
-                    text: "В общении с людьми вы...",
-                    options: [
-                        { id: 'a', text: "Остро нуждаетесь в одобрении", level: 1, vector: 'ЧВ' },
-                        { id: 'b', text: "Стараетесь угодить", level: 2, vector: 'ЧВ' },
-                        { id: 'c', text: "Умеете влиять", level: 3, vector: 'ЧВ' },
-                        { id: 'd', text: "Создаете глубокие связи", level: 4, vector: 'ЧВ' }
-                    ]
-                }
-            ];
-            
-            // ============================================
-            // ВОПРОСЫ ЭТАПА 4
-            // ============================================
-            
-            const STAGE_4_QUESTIONS = [
-                {
-                    text: "Когда что-то не получается, вы думаете:",
-                    options: [
-                        { id: 'a', text: '"Всё против меня"', dilts: 'ENVIRONMENT' },
-                        { id: 'b', text: '"Я что-то делаю не так"', dilts: 'BEHAVIOR' },
-                        { id: 'c', text: '"Мне не хватает навыков"', dilts: 'CAPABILITIES' },
-                        { id: 'd', text: '"Это не то, что мне нужно"', dilts: 'VALUES' }
-                    ]
-                },
-                {
-                    text: "Что вас останавливает перед важным шагом?",
-                    options: [
-                        { id: 'a', text: "Обстоятельства", dilts: 'ENVIRONMENT' },
-                        { id: 'b', text: "Привычки", dilts: 'BEHAVIOR' },
-                        { id: 'c', text: "Неуверенность в себе", dilts: 'CAPABILITIES' },
-                        { id: 'd', text: "Сомнения в правильности", dilts: 'VALUES' }
-                    ]
-                },
-                {
-                    text: "Что бы вы хотели изменить в первую очередь?",
-                    options: [
-                        { id: 'a', text: "Окружение и условия", dilts: 'ENVIRONMENT' },
-                        { id: 'b', text: "Свои привычки и реакции", dilts: 'BEHAVIOR' },
-                        { id: 'c', text: "Свои способности", dilts: 'CAPABILITIES' },
-                        { id: 'd', text: "Свои ценности и убеждения", dilts: 'VALUES' }
-                    ]
-                },
-                {
-                    text: "Что для вас самое сложное?",
-                    options: [
-                        { id: 'a', text: "Влиять на других", dilts: 'ENVIRONMENT' },
-                        { id: 'b', text: "Менять свои привычки", dilts: 'BEHAVIOR' },
-                        { id: 'c', text: "Развивать новые навыки", dilts: 'CAPABILITIES' },
-                        { id: 'd', text: "Понять, чего я хочу", dilts: 'VALUES' }
-                    ]
-                },
-                {
-                    text: "Где вы видите свою главную проблему?",
-                    options: [
-                        { id: 'a', text: "Внешние обстоятельства", dilts: 'ENVIRONMENT' },
-                        { id: 'b', text: "Мои действия", dilts: 'BEHAVIOR' },
-                        { id: 'c', text: "Мои способности", dilts: 'CAPABILITIES' },
-                        { id: 'd', text: "Мои убеждения", dilts: 'VALUES' }
-                    ]
-                },
-                {
-                    text: "Что бы вы хотели развить в себе?",
-                    options: [
-                        { id: 'a', text: "Умение влиять на обстоятельства", dilts: 'ENVIRONMENT' },
-                        { id: 'b', text: "Новые привычки", dilts: 'BEHAVIOR' },
-                        { id: 'c', text: "Новые навыки", dilts: 'CAPABILITIES' },
-                        { id: 'd', text: "Понимание себя", dilts: 'VALUES' }
-                    ]
-                },
-                {
-                    text: "Что вызывает у вас наибольшее напряжение?",
-                    options: [
-                        { id: 'a', text: "Непредсказуемость мира", dilts: 'ENVIRONMENT' },
-                        { id: 'b', text: "Мои автоматические реакции", dilts: 'BEHAVIOR' },
-                        { id: 'c', text: "Ощущение некомпетентности", dilts: 'CAPABILITIES' },
-                        { id: 'd', text: "Внутренние конфликты", dilts: 'VALUES' }
-                    ]
-                },
-                {
-                    text: "Куда вы направляете энергию для изменений?",
-                    options: [
-                        { id: 'a', text: "На изменение обстоятельств", dilts: 'ENVIRONMENT' },
-                        { id: 'b', text: "На свои действия", dilts: 'BEHAVIOR' },
-                        { id: 'c', text: "На обучение", dilts: 'CAPABILITIES' },
-                        { id: 'd', text: "На поиск смысла", dilts: 'VALUES' }
-                    ]
-                }
-            ];
-            
-            // ============================================
-            // ВОПРОСЫ ЭТАПА 5
-            // ============================================
-            
-            const STAGE_5_QUESTIONS = [
-                {
-                    text: "Как вы чувствуете себя в близких отношениях?",
-                    options: [
-                        { id: 'a', text: "Боюсь, что меня бросят", pattern: 'тревожный', target: 'attachment' },
-                        { id: 'b', text: "Мне трудно открываться", pattern: 'избегающий', target: 'attachment' },
-                        { id: 'c', text: "Чувствую себя спокойно и уверенно", pattern: 'надежный', target: 'attachment' },
-                        { id: 'd', text: "То идеализирую, то обесцениваю", pattern: 'дезорганизованный', target: 'attachment' }
-                    ]
-                },
-                {
-                    text: "Когда вы сталкиваетесь с критикой...",
-                    options: [
-                        { id: 'a', text: "Отрицаю, что это правда", pattern: 'отрицание', target: 'defense' },
-                        { id: 'b', text: "Нахожу оправдания", pattern: 'рационализация', target: 'defense' },
-                        { id: 'c', text: "Обвиняю других", pattern: 'проекция', target: 'defense' },
-                        { id: 'd', text: "Анализирую и делаю выводы", pattern: 'зрелая', target: 'defense' }
-                    ]
-                },
-                {
-                    text: "Что вы думаете о себе?",
-                    options: [
-                        { id: 'a', text: "Я недостаточно хорош", pattern: 'неполноценность', target: 'belief' },
-                        { id: 'b', text: "Мир опасен", pattern: 'небезопасность', target: 'belief' },
-                        { id: 'c', text: "Я должен быть идеальным", pattern: 'перфекционизм', target: 'belief' },
-                        { id: 'd', text: "Я достоин любви и уважения", pattern: 'здоровое', target: 'belief' }
-                    ]
-                },
-                {
-                    text: "Чего вы боитесь больше всего?",
-                    options: [
-                        { id: 'a', text: "Быть отвергнутым", pattern: 'отвержение', target: 'fear' },
-                        { id: 'b', text: "Потерять контроль", pattern: 'потеря_контроля', target: 'fear' },
-                        { id: 'c', text: "Ошибиться", pattern: 'ошибка', target: 'fear' },
-                        { id: 'd', text: "Быть уязвимым", pattern: 'уязвимость', target: 'fear' }
-                    ]
-                },
-                {
-                    text: "Как вы реагируете на стресс?",
-                    options: [
-                        { id: 'a', text: "Ищу поддержки у других", pattern: 'поиск_поддержки', target: 'stress' },
-                        { id: 'b', text: "Замыкаюсь в себе", pattern: 'уход', target: 'stress' },
-                        { id: 'c', text: "Начинаю активно действовать", pattern: 'гиперактивность', target: 'stress' },
-                        { id: 'd', text: "Анализирую и планирую", pattern: 'анализ', target: 'stress' }
-                    ]
-                },
-                {
-                    text: "Что для вас самое важное в жизни?",
-                    options: [
-                        { id: 'a', text: "Отношения", pattern: 'отношения', target: 'value' },
-                        { id: 'b', text: "Достижения", pattern: 'достижения', target: 'value' },
-                        { id: 'c', text: "Развитие", pattern: 'развитие', target: 'value' },
-                        { id: 'd', text: "Гармония", pattern: 'гармония', target: 'value' }
-                    ]
-                },
-                {
-                    text: "Как вы обычно злитесь?",
-                    options: [
-                        { id: 'a', text: "Подавляю гнев", pattern: 'подавление', target: 'anger' },
-                        { id: 'b', text: "Взрываюсь", pattern: 'взрывной', target: 'anger' },
-                        { id: 'c', text: "Выражаю конструктивно", pattern: 'конструктивный', target: 'anger' },
-                        { id: 'd', text: "Направляю на себя", pattern: 'аутоагрессия', target: 'anger' }
-                    ]
-                },
-                {
-                    text: "Какую роль вы чаще играете в компании?",
-                    options: [
-                        { id: 'a', text: "Душа компании", pattern: 'душа_компании', target: 'role' },
-                        { id: 'b', text: "Наблюдатель", pattern: 'наблюдатель', target: 'role' },
-                        { id: 'c', text: "Лидер", pattern: 'лидер', target: 'role' },
-                        { id: 'd', text: "Помощник", pattern: 'помощник', target: 'role' }
-                    ]
-                },
-                {
-                    text: "Как вы справляетесь с чувством вины?",
-                    options: [
-                        { id: 'a', text: "Ищу оправдания", pattern: 'оправдание', target: 'guilt' },
-                        { id: 'b', text: "Наказываю себя", pattern: 'самонаказание', target: 'guilt' },
-                        { id: 'c', text: "Исправляю ошибку", pattern: 'исправление', target: 'guilt' },
-                        { id: 'd', text: "Принимаю и отпускаю", pattern: 'принятие', target: 'guilt' }
-                    ]
-                },
-                {
-                    text: "Что для вас главная проблема?",
-                    options: [
-                        { id: 'a', text: "Страх конфликтов", pattern: 'страх_конфликтов', target: 'core' },
-                        { id: 'b', text: "Проблемы с деньгами", pattern: 'деньги', target: 'core' },
-                        { id: 'c', text: "Непонимание себя", pattern: 'себя', target: 'core' },
-                        { id: 'd', text: "Одиночество", pattern: 'одиночество', target: 'core' }
-                    ]
-                }
-            ];
-            
-            // ============================================
-            // КОНСТАНТЫ ДЛЯ РЕЗУЛЬТАТОВ
-            // ============================================
-            
-            const PERCEPTION_TYPES = {
-                "EXTERNAL_SYMBOLIC": "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ",
-                "EXTERNAL_MATERIAL": "СТАТУСНО-ОРИЕНТИРОВАННЫЙ",
-                "INTERNAL_SYMBOLIC": "СМЫСЛО-ОРИЕНТИРОВАННЫЙ",
-                "INTERNAL_MATERIAL": "ПРАКТИКО-ОРИЕНТИРОВАННЫЙ"
-            };
-            
-            const STAGE_1_FEEDBACK = {
-                "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ": "Вы смотрите на мир через людей. Для вас важны отношения, статус, признание. Ваша тревога — быть отвергнутым, непонятым, остаться в одиночестве.",
-                "СТАТУСНО-ОРИЕНТИРОВАННЫЙ": "Вы смотрите на мир через достижения. Для вас важны результаты, ресурсы, контроль. Ваша тревога — потерять позиции, оказаться не у дел.",
-                "СМЫСЛО-ОРИЕНТИРОВАННЫЙ": "Вы смотрите на мир через идеи и смыслы. Для вас важны понимание, глубина, истина. Ваша тревога — жить бессмысленно, не найти своего пути.",
-                "ПРАКТИКО-ОРИЕНТИРОВАННЫЙ": "Вы смотрите на мир через конкретику. Для вас важны факты, действия, результат здесь и сейчас. Ваша тревога — не справиться, не успеть."
-            };
-            
-            const STAGE_3_FEEDBACK = {
-                1: "Вы действуете на автомате, под влиянием момента. Ваши реакции быстрые, но не всегда осознанные.",
-                2: "Вы реагируете на внешние стимулы, но уже можете замечать свои автоматизмы.",
-                3: "Вы начинаете выбирать реакции осознанно. В спокойной обстановке можете действовать мудро.",
-                4: "У вас есть отработанные стратегии поведения для разных ситуаций. Вы гибки.",
-                5: "Ваше поведение согласовано с ценностями и целями. Вы действуете аутентично."
-            };
-            
-            const DILTS_LEVELS = {
-                "ENVIRONMENT": "🌍 Среда — вы меняете окружение, ищете новые места и возможности",
-                "BEHAVIOR": "⚡ Поведение — вы действуете, пробуете, двигаетесь",
-                "CAPABILITIES": "🔧 Способности — вы развиваете навыки и компетенции",
-                "VALUES": "💎 Ценности — вы ищете смыслы и важное",
-                "IDENTITY": "🧿 Идентичность — вы меняете себя и своё понимание кто я"
-            };
-            
-            // ============================================
-            // ГЛОБАЛЬНЫЙ ОБЪЕКТ ПРИЛОЖЕНИЯ
-            // ============================================
-            
-            window.app = {
-                userId: null,
-                currentScreen: 'main',
-                hasProfile: false,
-                
-                // Состояние теста
-                testState: {
-                    stage: 1,
-                    questionIndex: 0,
-                    answers: [],
-                    
-                    stage1Scores: { EXTERNAL: 0, INTERNAL: 0, SYMBOLIC: 0, MATERIAL: 0 },
-                    perceptionType: null,
-                    
-                    stage2Levels: {},
-                    thinkingLevel: null,
-                    
-                    stage3Vectors: { "СБ": [], "ТФ": [], "УБ": [], "ЧВ": [] },
-                    
-                    stage4Dilts: { "ENVIRONMENT": 0, "BEHAVIOR": 0, "CAPABILITIES": 0, "VALUES": 0, "IDENTITY": 0 },
-                    dominantDilts: null,
-                    
-                    stage5Patterns: [],
-                    deepPatterns: {}
-                },
-                
-                // Результаты
-                profile: {
-                    perceptionType: null,
-                    thinkingLevel: null,
-                    vectors: {},
-                    dominantDilts: null,
-                    profileCode: null
-                },
-                
-                // ============================================
-                // ИНИЦИАЛИЗАЦИЯ
-                // ============================================
-                
-                init: function() {
-                    console.log('📱 Инициализация ФРЕДИ...');
-                    
-                    // Настройка навигации
-                    document.querySelectorAll('.nav-btn').forEach(btn => {
-                        btn.addEventListener('click', (e) => {
-                            const screen = e.currentTarget.dataset.screen;
-                            this.showScreen(screen);
-                        });
-                    });
-                    
-                    // Обработчик кнопки назад
-                    document.getElementById('backBtn').addEventListener('click', () => {
-                        this.handleBack();
-                    });
-                    
-                    // Проверяем MAX
-                    if (window.MAX) {
-                        try {
-                            const theme = window.MAX.theme || 'light';
-                            document.documentElement.setAttribute('data-max-theme', theme);
-                            
-                            window.MAX.onEvent('themeChanged', (newTheme) => {
-                                document.documentElement.setAttribute('data-max-theme', newTheme);
-                            });
-                            
-                            if (window.MAX.user && window.MAX.user.id) {
-                                this.userId = window.MAX.user.id;
-                            }
-                            
-                            window.MAX.ready();
-                        } catch (e) {
-                            console.log('⚠️ Ошибка MAX:', e);
-                        }
-                    } else {
-                        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-                        document.documentElement.setAttribute('data-max-theme', prefersDark ? 'dark' : 'light');
-                        this.userId = 12345; // Тестовый пользователь
-                    }
-                    
-                    // Показываем главный экран
-                    this.showScreen('main');
-                },
-                
-                // ============================================
-                // НАВИГАЦИЯ
-                // ============================================
-                
-                showScreen: function(screenName) {
-                    console.log('📱 Экран:', screenName);
-                    this.currentScreen = screenName;
-                    
-                    // Обновляем активную кнопку
-                    document.querySelectorAll('.nav-btn').forEach(btn => {
-                        btn.classList.remove('active');
-                        if (btn.dataset.screen === screenName) btn.classList.add('active');
-                    });
-                    
-                    // Обновляем кнопку назад
-                    const backBtn = document.getElementById('backBtn');
-                    if (screenName === 'main') {
-                        backBtn.classList.remove('visible');
-                    } else {
-                        backBtn.classList.add('visible');
-                    }
-                    
-                    // Обновляем заголовок
-                    const titles = {
-                        'main': '👋 ФРЕДИ',
-                        'profile': '📊 Мой профиль',
-                        'goals': '🎯 Мои цели',
-                        'ask': '❓ Задать вопрос',
-                        'test': '📝 Тест'
-                    };
-                    document.getElementById('header-title').textContent = titles[screenName] || '👋 ФРЕДИ';
-                    
-                    // Загружаем контент
-                    this.loadScreen(screenName);
-                },
-                
-                loadScreen: function(screenName) {
-                    switch(screenName) {
-                        case 'main': this.loadMainScreen(); break;
-                        case 'profile': this.loadProfileScreen(); break;
-                        case 'goals': this.loadGoalsScreen(); break;
-                        case 'ask': this.loadAskScreen(); break;
-                        default: this.loadMainScreen();
-                    }
-                },
-                
-                handleBack: function() {
-                    if (this.currentScreen === 'test') {
-                        if (confirm('Прервать тест? Результаты не сохранятся.')) {
-                            this.resetTest();
-                            this.showScreen('main');
-                        }
-                    } else {
-                        this.showScreen('main');
-                    }
-                },
-                
-                // ============================================
-                // ГЛАВНЫЙ ЭКРАН
-                // ============================================
-                
-                loadMainScreen: function() {
-                    let html = `
-                        <div class="welcome-screen">
-                            <div class="greeting">👋 Привет, друг!</div>
-                            <div class="welcome-text">
-                                <p>Я — Фреди, твой виртуальный психолог.</p>
-                                <p>Пройди тест из 5 этапов, и я составлю твой психологический профиль.</p>
-                            </div>
-                    `;
-                    
-                    if (this.hasProfile) {
-                        html += `
-                            <div class="profile-badge" onclick="window.app.showScreen('profile')">
-                                <span class="profile-code">📊 Твой профиль готов</span>
-                                <span class="profile-arrow">→</span>
-                            </div>
-                            
-                            <button class="action-btn secondary restart-test-btn" onclick="window.app.resetTest()">
-                                <span style="display: flex; align-items: center; gap: 8px; justify-content: center;">
-                                    <span>🔄</span>
-                                    <span>Пройти тест заново</span>
-                                </span>
-                            </button>
-                        `;
-                    } else {
-                        html += `
-                            <div class="stages-list">
-                                <div class="stage-item"><span class="stage-number">1️⃣</span><span class="stage-text">Конфигурация восприятия</span></div>
-                                <div class="stage-item"><span class="stage-number">2️⃣</span><span class="stage-text">Конфигурация мышления</span></div>
-                                <div class="stage-item"><span class="stage-number">3️⃣</span><span class="stage-text">Конфигурация поведения</span></div>
-                                <div class="stage-item"><span class="stage-number">4️⃣</span><span class="stage-text">Точка роста</span></div>
-                                <div class="stage-item"><span class="stage-number">5️⃣</span><span class="stage-text">Глубинные паттерны</span></div>
-                            </div>
-                            
-                            <div class="action-buttons">
-                                <button class="action-btn primary" onclick="window.app.startTest()">🚀 Начать тест</button>
-                            </div>
-                        `;
-                    }
-                    
-                    html += `
-                        <div class="main-menu">
-                            <div class="menu-card" onclick="window.app.showScreen('ask')">
-                                <span class="menu-emoji">❓</span>
-                                <div><div class="menu-title">Задать вопрос</div><div class="menu-desc">Спроси Фреди о чем угодно</div></div>
-                            </div>
-                            <div class="menu-card" onclick="window.app.showScreen('goals')">
-                                <span class="menu-emoji">🎯</span>
-                                <div><div class="menu-title">Цели</div><div class="menu-desc">Поставь цель и получи маршрут</div></div>
-                            </div>
-                        </div>
-                    `;
-                    
-                    document.getElementById('content').innerHTML = html;
-                },
-                
-                // ============================================
-                // ТЕСТ
-                // ============================================
-                
-                startTest: function() {
-                    this.resetTest();
-                    this.showTestScreen();
-                },
-                
-                resetTest: function() {
-                    this.testState = {
-                        stage: 1,
-                        questionIndex: 0,
-                        answers: [],
-                        stage1Scores: { EXTERNAL: 0, INTERNAL: 0, SYMBOLIC: 0, MATERIAL: 0 },
-                        perceptionType: null,
-                        stage2Levels: {},
-                        thinkingLevel: null,
-                        stage3Vectors: { "СБ": [], "ТФ": [], "УБ": [], "ЧВ": [] },
-                        stage4Dilts: { "ENVIRONMENT": 0, "BEHAVIOR": 0, "CAPABILITIES": 0, "VALUES": 0, "IDENTITY": 0 },
-                        dominantDilts: null,
-                        stage5Patterns: [],
-                        deepPatterns: {}
-                    };
-                    this.profile = {
-                        perceptionType: null,
-                        thinkingLevel: null,
-                        vectors: {},
-                        dominantDilts: null,
-                        profileCode: null
-                    };
-                    this.hasProfile = false;
-                },
-                
-                showTestScreen: function() {
-                    const stage = this.testState.stage;
-                    let questions;
-                    
-                    if (stage === 1) questions = STAGE_1_QUESTIONS;
-                    else if (stage === 2) questions = STAGE_2_QUESTIONS;
-                    else if (stage === 3) questions = STAGE_3_QUESTIONS;
-                    else if (stage === 4) questions = STAGE_4_QUESTIONS;
-                    else if (stage === 5) questions = STAGE_5_QUESTIONS;
-                    else {
-                        this.showScreen('main');
-                        return;
-                    }
-                    
-                    const qIndex = this.testState.questionIndex;
-                    const question = questions[qIndex];
-                    const total = questions.length;
-                    const progress = Math.round((qIndex + 1) / total * 100);
-                    
-                    let html = `
-                        <div class="test-screen">
-                            <div class="stage-title">ЭТАП ${stage}: ${stage === 1 ? 'ВОСПРИЯТИЕ' : stage === 2 ? 'МЫШЛЕНИЕ' : stage === 3 ? 'ПОВЕДЕНИЕ' : stage === 4 ? 'ТОЧКА РОСТА' : 'ГЛУБИННЫЕ ПАТТЕРНЫ'}</div>
-                            
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                                <span>Вопрос ${qIndex + 1}/${total}</span>
-                                <span>${progress}%</span>
-                            </div>
-                            <div class="progress-bar">
-                                <div class="progress-fill" style="width: ${progress}%"></div>
-                            </div>
-                            
-                            <div class="question-card">
-                                ${question.text}
-                            </div>
-                            
-                            <div class="options-grid">
-                    `;
-                    
-                    question.options.forEach((option, idx) => {
-                        const letter = String.fromCharCode(65 + idx);
-                        html += `
-                            <button class="option-btn" onclick="window.app.answerQuestion('${option.id}')">
-                                <span class="option-letter">${letter}</span>
-                                <span class="option-text">${option.text}</span>
-                            </button>
-                        `;
-                    });
-                    
-                    html += `</div></div>`;
-                    document.getElementById('content').innerHTML = html;
-                    this.showScreen('test');
-                },
-                
-                answerQuestion: function(optionId) {
-                    const stage = this.testState.stage;
-                    let questions;
-                    
-                    if (stage === 1) questions = STAGE_1_QUESTIONS;
-                    else if (stage === 2) questions = STAGE_2_QUESTIONS;
-                    else if (stage === 3) questions = STAGE_3_QUESTIONS;
-                    else if (stage === 4) questions = STAGE_4_QUESTIONS;
-                    else if (stage === 5) questions = STAGE_5_QUESTIONS;
-                    else return;
-                    
-                    const qIndex = this.testState.questionIndex;
-                    const question = questions[qIndex];
-                    const option = question.options.find(opt => opt.id === optionId);
-                    
-                    if (!option) return;
-                    
-                    // Сохраняем ответ
-                    this.testState.answers.push({
-                        stage: stage,
-                        question: qIndex,
-                        option: optionId,
-                        text: option.text
-                    });
-                    
-                    // Обновляем очки в зависимости от этапа
-                    if (stage === 1 && option.scores) {
-                        for (let key in option.scores) {
-                            this.testState.stage1Scores[key] += option.scores[key];
-                        }
-                    } else if (stage === 2 && option.level) {
-                        const level = option.level;
-                        this.testState.stage2Levels[level] = (this.testState.stage2Levels[level] || 0) + 1;
-                    } else if (stage === 3 && option.vector && option.level) {
-                        if (this.testState.stage3Vectors[option.vector]) {
-                            this.testState.stage3Vectors[option.vector].push(option.level);
-                        }
-                    } else if (stage === 4 && option.dilts) {
-                        this.testState.stage4Dilts[option.dilts] = (this.testState.stage4Dilts[option.dilts] || 0) + 1;
-                    } else if (stage === 5 && option.pattern && option.target) {
-                        this.testState.stage5Patterns.push({
-                            target: option.target,
-                            pattern: option.pattern
-                        });
-                    }
-                    
-                    // Переходим к следующему вопросу
-                    if (qIndex + 1 < questions.length) {
-                        this.testState.questionIndex++;
-                        this.showTestScreen();
-                    } else {
-                        this.completeStage();
-                    }
-                },
-                
-                completeStage: function() {
-                    const stage = this.testState.stage;
-                    
-                    if (stage === 1) {
-                        this.calculateStage1();
-                    } else if (stage === 2) {
-                        this.calculateStage2();
-                    } else if (stage === 3) {
-                        this.calculateStage3();
-                    } else if (stage === 4) {
-                        this.calculateStage4();
-                    } else if (stage === 5) {
-                        this.calculateStage5();
-                    }
-                },
-                
-                calculateStage1: function() {
-                    const scores = this.testState.stage1Scores;
-                    const external = scores.EXTERNAL;
-                    const internal = scores.INTERNAL;
-                    const symbolic = scores.SYMBOLIC;
-                    const material = scores.MATERIAL;
-                    
-                    let perceptionType;
-                    if (external > internal && symbolic > material) {
-                        perceptionType = "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ";
-                    } else if (external > internal && material >= symbolic) {
-                        perceptionType = "СТАТУСНО-ОРИЕНТИРОВАННЫЙ";
-                    } else if (internal >= external && symbolic > material) {
-                        perceptionType = "СМЫСЛО-ОРИЕНТИРОВАННЫЙ";
-                    } else {
-                        perceptionType = "ПРАКТИКО-ОРИЕНТИРОВАННЫЙ";
-                    }
-                    
-                    this.testState.perceptionType = perceptionType;
-                    this.profile.perceptionType = perceptionType;
-                    
-                    const resultText = STAGE_1_FEEDBACK[perceptionType];
-                    this.showStageResult(1, resultText, 2);
-                },
-                
-                calculateStage2: function() {
-                    const totalScore = Object.values(this.testState.stage2Levels).reduce((a, b) => a + b, 0);
-                    let thinkingLevel;
-                    
-                    if (totalScore <= 10) thinkingLevel = 1;
-                    else if (totalScore <= 20) thinkingLevel = 2;
-                    else if (totalScore <= 30) thinkingLevel = 3;
-                    else if (totalScore <= 40) thinkingLevel = 4;
-                    else if (totalScore <= 50) thinkingLevel = 5;
-                    else if (totalScore <= 60) thinkingLevel = 6;
-                    else if (totalScore <= 70) thinkingLevel = 7;
-                    else if (totalScore <= 80) thinkingLevel = 8;
-                    else thinkingLevel = 9;
-                    
-                    this.testState.thinkingLevel = thinkingLevel;
-                    this.profile.thinkingLevel = thinkingLevel;
-                    
-                    const resultText = `Ваш уровень мышления: **${thinkingLevel}/9**`;
-                    this.showStageResult(2, resultText, 3);
-                },
-                
-                calculateStage3: function() {
-                    const vectors = this.testState.stage3Vectors;
-                    const avgVectors = {};
-                    
-                    for (let v of ["СБ", "ТФ", "УБ", "ЧВ"]) {
-                        if (vectors[v] && vectors[v].length > 0) {
-                            avgVectors[v] = Math.round(vectors[v].reduce((a, b) => a + b, 0) / vectors[v].length);
-                        } else {
-                            avgVectors[v] = 3;
-                        }
-                    }
-                    
-                    this.profile.vectors = avgVectors;
-                    
-                    // Рассчитываем финальный уровень
-                    const avgBehavior = Object.values(avgVectors).reduce((a, b) => a + b, 0) / 4;
-                    const finalLevel = (this.testState.thinkingLevel || 5) + avgBehavior / 2;
-                    const behaviorLevel = Math.min(5, Math.max(1, Math.ceil(finalLevel / 2)));
-                    
-                    const resultText = STAGE_3_FEEDBACK[behaviorLevel] || STAGE_3_FEEDBACK[3];
-                    this.showStageResult(3, resultText, 4);
-                },
-                
-                calculateStage4: function() {
-                    const dilts = this.testState.stage4Dilts;
-                    let dominant = "BEHAVIOR";
-                    let maxCount = 0;
-                    
-                    for (let key in dilts) {
-                        if (dilts[key] > maxCount) {
-                            maxCount = dilts[key];
-                            dominant = key;
-                        }
-                    }
-                    
-                    this.testState.dominantDilts = dominant;
-                    this.profile.dominantDilts = dominant;
-                    
-                    const resultText = DILTS_LEVELS[dominant] || DILTS_LEVELS.BEHAVIOR;
-                    this.showStageResult(4, resultText, 5);
-                },
-                
-                calculateStage5: function() {
-                    // Анализ паттернов
-                    const patterns = {};
-                    this.testState.stage5Patterns.forEach(p => {
-                        if (!patterns[p.target]) patterns[p.target] = [];
-                        patterns[p.target].push(p.pattern);
-                    });
-                    
-                    this.testState.deepPatterns = patterns;
-                    
-                    // Формируем код профиля
-                    if (this.profile.vectors) {
-                        this.profile.profileCode = `СБ-${this.profile.vectors.СБ}_ТФ-${this.profile.vectors.ТФ}_УБ-${this.profile.vectors.УБ}_ЧВ-${this.profile.vectors.ЧВ}`;
-                    }
-                    
-                    this.hasProfile = true;
-                    
-                    this.showStageResult(5, "✅ Тест завершен! Спасибо за участие.", null);
-                },
-                
-                showStageResult: function(stage, resultText, nextStage) {
-                    let html = `
-                        <div class="stage-result">
-                            <div class="result-emoji">${stage === 5 ? '🎉' : '✨'}</div>
-                            <h2>Этап ${stage} завершен!</h2>
-                            <div class="result-text">${resultText}</div>
-                    `;
-                    
-                    if (nextStage) {
-                        html += `
-                            <button class="continue-btn" onclick="window.app.goToStage(${nextStage})">
-                                Перейти к этапу ${nextStage} →
-                            </button>
-                        `;
-                    } else {
-                        html += `
-                            <button class="continue-btn" onclick="window.app.showScreen('profile')">
-                                Посмотреть профиль →
-                            </button>
-                        `;
-                    }
-                    
-                    html += `</div>`;
-                    document.getElementById('content').innerHTML = html;
-                },
-                
-                goToStage: function(stage) {
-                    this.testState.stage = stage;
-                    this.testState.questionIndex = 0;
-                    this.showTestScreen();
-                },
-                
-                // ============================================
-                // ПРОФИЛЬ
-                // ============================================
-                
-                loadProfileScreen: function() {
-                    if (!this.hasProfile) {
-                        document.getElementById('content').innerHTML = `
-                            <div class="profile-screen">
-                                <div class="profile-section">
-                                    <p>У вас пока нет профиля. Пройдите тест, чтобы узнать себя лучше.</p>
-                                    <button class="action-btn primary" onclick="window.app.startTest()">🚀 Начать тест</button>
-                                </div>
-                            </div>
-                        `;
-                        return;
-                    }
-                    
-                    let vectorsHtml = '';
-                    if (this.profile.vectors) {
-                        for (let v of ["СБ", "ТФ", "УБ", "ЧВ"]) {
-                            const level = this.profile.vectors[v] || 3;
-                            let desc = '';
-                            if (v === 'СБ') desc = 'Реакция на давление';
-                            else if (v === 'ТФ') desc = 'Отношение к деньгам';
-                            else if (v === 'УБ') desc = 'Понимание мира';
-                            else if (v === 'ЧВ') desc = 'Отношения с людьми';
-                            
-                            vectorsHtml += `
-                                <div class="profile-vector">
-                                    <span><strong>${v}</strong> — ${desc}</span>
-                                    <span class="option-letter" style="background: var(--fredi-blue-light); color: var(--fredi-blue);">${level}</span>
-                                </div>
-                            `;
-                        }
-                    }
-                    
-                    let html = `
-                        <div class="profile-screen">
-                            <div class="profile-section">
-                                <h2>🧠 ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ</h2>
-                                
-                                <p><strong>Тип восприятия:</strong> ${this.profile.perceptionType || 'Не определен'}</p>
-                                <p><strong>Уровень мышления:</strong> ${this.profile.thinkingLevel || 5}/9</p>
-                                
-                                <h3>📊 ВЕКТОРЫ</h3>
-                                ${vectorsHtml}
-                                
-                                <h3>🎯 ТОЧКА РОСТА</h3>
-                                <p>${this.profile.dominantDilts ? DILTS_LEVELS[this.profile.dominantDilts] : 'Анализируйте свои действия'}</p>
-                                
-                                ${this.profile.profileCode ? `<p style="margin-top: 16px; font-family: monospace;">Код: ${this.profile.profileCode}</p>` : ''}
-                            </div>
-                            
-                            <div class="action-buttons">
-                                <button class="action-btn primary" onclick="window.app.showScreen('main')">🏠 На главную</button>
-                            </div>
-                        </div>
-                    `;
-                    
-                    document.getElementById('content').innerHTML = html;
-                },
-                
-                // ============================================
-                // ЗАГЛУШКИ ДЛЯ ДРУГИХ ЭКРАНОВ
-                // ============================================
-                
-                loadGoalsScreen: function() {
-                    document.getElementById('content').innerHTML = `
-                        <div class="text-center mt-4">
-                            <p>🎯 Цели — в разработке</p>
-                            <button class="action-btn secondary" onclick="window.app.showScreen('main')">На главную</button>
-                        </div>
-                    `;
-                },
-                
-                loadAskScreen: function() {
-                    document.getElementById('content').innerHTML = `
-                        <div class="text-center mt-4">
-                            <p>❓ Чат — в разработке</p>
-                            <button class="action-btn secondary" onclick="window.app.showScreen('main')">На главную</button>
-                        </div>
-                    `;
-                }
-            };
-            
-            // Запускаем приложение
-            window.app.init();
-        })();
-    </script>
+    <!-- Шаблон сообщения бота -->
+    <template id="botMessageTemplate">
+        <div class="message bot-message">
+            <div class="message-avatar">
+                <img src="https://ui-avatars.com/api/?name=Ф&background=248bf2&color=fff&size=128" alt="Ф">
+            </div>
+            <div class="message-bubble">
+                <div class="message-sender">Фреди</div>
+                <div class="message-text"></div>
+                <div class="message-time"></div>
+            </div>
+        </div>
+    </template>
+
+    <!-- Шаблон сообщения пользователя -->
+    <template id="userMessageTemplate">
+        <div class="message user-message">
+            <div class="message-bubble">
+                <div class="message-text"></div>
+                <div class="message-time"></div>
+            </div>
+        </div>
+    </template>
+
+    <!-- Шаблон сообщения с мыслями психолога -->
+    <template id="thoughtMessageTemplate">
+        <div class="message bot-message thought-message">
+            <div class="message-avatar">
+                <img src="https://ui-avatars.com/api/?name=🧠&background=5856d6&color=fff&size=128" alt="🧠">
+            </div>
+            <div class="message-bubble">
+                <div class="message-sender">Мысли психолога</div>
+                <div class="message-text thought-text"></div>
+                <div class="message-time"></div>
+            </div>
+        </div>
+    </template>
+
+    <!-- Шаблон разделителя даты -->
+    <template id="dateDividerTemplate">
+        <div class="message date-divider">
+            <span></span>
+        </div>
+    </template>
+
+    <!-- Шаблон вопроса теста -->
+    <template id="testQuestionTemplate">
+        <div class="test-question-card">
+            <div class="test-question-header">
+                <span class="test-stage-badge" id="testStageBadge">Этап 1/5</span>
+                <span class="test-question-counter" id="testQuestionCounter">Вопрос 1/4</span>
+            </div>
+            <div class="test-question-text" id="testQuestionText"></div>
+            <div class="test-options-list" id="testOptionsList"></div>
+            <div class="test-navigation-buttons">
+                <button class="test-nav-btn" id="testPrevBtn" disabled>← Назад</button>
+                <button class="test-nav-btn test-next-btn" id="testNextBtn" disabled>Далее →</button>
+            </div>
+        </div>
+    </template>
+
+    <!-- Подключение скриптов -->
+    <script src="api.js"></script>
+    <script src="screens/chat.js"></script>
+    <script src="screens/test-stage1.js"></script>
+    <script src="screens/test-stage2.js"></script>
+    <script src="screens/test-stage3.js"></script>
+    <script src="screens/test-stage4.js"></script>
+    <script src="screens/test-stage5.js"></script>
+    <script src="screens/profile.js"></script>
+    <script src="screens/thoughts.js"></script>
+    <script src="screens/weekend.js"></script>
+    <script src="components/message.js"></script>
+    <script src="components/buttons.js"></script>
+    <script src="components/progress.js"></script>
+    <script src="utils/formatters.js"></script>
+    <script src="utils/storage.js"></script>
+    <script src="script.js"></script>
 </body>
 </html>
