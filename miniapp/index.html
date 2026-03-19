@@ -4,11 +4,86 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Фреди · виртуальный психолог</title>
-    <!-- ИСПРАВЛЕНО: путь к CSS через папку miniapp -->
-    <link rel="stylesheet" href="miniapp/styles.css">
-    <meta name="theme-color" content="#248bf2">
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        /* Базовые стили на время загрузки (до применения темы) */
+        body {
+            background-color: #0e1621;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+    </style>
 </head>
 <body>
+    <script>
+        // ===== ПОЛУЧЕНИЕ ТЕМЫ ОТ MAX =====
+        (function() {
+            // Функция применения темы
+            function applyMaxTheme(theme) {
+                console.log('🎨 Применяем тему MAX:', theme);
+                
+                // Устанавливаем CSS переменные из темы MAX
+                const root = document.documentElement;
+                
+                // Основные цвета
+                root.style.setProperty('--max-bg', theme.bg_color || '#0e1621');
+                root.style.setProperty('--max-panel-bg', theme.secondary_bg_color || '#17212b');
+                root.style.setProperty('--max-header-bg', theme.header_bg_color || '#1f2c38');
+                root.style.setProperty('--max-input-bg', theme.input_bg_color || '#1f2c38');
+                root.style.setProperty('--max-text', theme.text_color || '#ffffff');
+                root.style.setProperty('--max-text-secondary', theme.hint_color || '#8e9aa6');
+                root.style.setProperty('--max-border', theme.separator_color || '#0f1b26');
+                root.style.setProperty('--max-hover', theme.section_bg_color || '#2b3b4a');
+                root.style.setProperty('--max-blue', theme.accent_text_color || '#248bf2');
+                
+                // Цвета сообщений
+                root.style.setProperty('--max-message-bot', theme.message_bg_color || '#1f2c38');
+                root.style.setProperty('--max-message-user', theme.message_user_bg_color || '#2b5278');
+                
+                // Кнопки
+                root.style.setProperty('--max-button-primary', theme.button_color || '#248bf2');
+                root.style.setProperty('--max-button-secondary', theme.section_bg_color || '#2b3b4a');
+                
+                // Применяем к body
+                document.body.style.backgroundColor = theme.bg_color || '#0e1621';
+                document.body.style.color = theme.text_color || '#ffffff';
+                
+                // Сохраняем тему
+                localStorage.setItem('max_theme', JSON.stringify(theme));
+            }
+            
+            // Пытаемся получить тему от MAX
+            if (window.MAX?.WebApp) {
+                try {
+                    const theme = window.MAX.WebApp.themeParams;
+                    if (theme) {
+                        applyMaxTheme(theme);
+                    }
+                    
+                    // Подписываемся на изменение темы
+                    window.MAX.WebApp.onEvent('themeChanged', function(newTheme) {
+                        applyMaxTheme(newTheme);
+                    });
+                } catch (e) {
+                    console.warn('❌ Ошибка получения темы MAX:', e);
+                }
+            } else {
+                console.log('⚠️ MAX API не доступен, используем тему по умолчанию');
+                // Загружаем сохраненную тему или используем дефолтную
+                try {
+                    const savedTheme = localStorage.getItem('max_theme');
+                    if (savedTheme) {
+                        applyMaxTheme(JSON.parse(savedTheme));
+                    }
+                } catch (e) {
+                    console.warn('❌ Ошибка загрузки темы:', e);
+                }
+            }
+        })();
+    </script>
+
     <div class="app" id="app">
         <!-- ===== ЛЕВАЯ ПАНЕЛЬ (список чатов) ===== -->
         <div class="chats-panel" id="chatsPanel">
@@ -46,8 +121,8 @@
 
         <!-- ===== ПРАВАЯ ПАНЕЛЬ (основной контент) ===== -->
         <div class="chat-panel" id="chatPanel">
-            <!-- Шапка -->
-            <div class="chat-header" id="chatHeader" style="display: none;">
+            <!-- Шапка чата -->
+            <div class="chat-header" id="chatHeader">
                 <div class="chat-header-left">
                     <button class="mobile-menu-btn" id="mobileMenuBtn">☰</button>
                     <div class="chat-header-avatar">
@@ -59,8 +134,6 @@
                     </div>
                 </div>
                 <div class="chat-header-right">
-                    <button class="header-btn" id="modeBtn" style="display: none;">🎭</button>
-                    <button class="header-btn" id="profileBtn" style="display: none;">📊</button>
                     <button class="header-btn" id="menuBtn">⋮</button>
                 </div>
             </div>
@@ -291,11 +364,11 @@
         </div>
     </template>
 
-    <!-- ИСПРАВЛЕНО: подключение скриптов через папку miniapp -->
-    <script src="miniapp/api.js"></script>
-    <script src="miniapp/onboarding.js"></script>
-    <script src="miniapp/context.js"></script>
-    <script src="miniapp/test.js"></script>
-    <script src="miniapp/script.js"></script>
+    <!-- Подключение скриптов -->
+    <script src="api.js"></script>
+    <script src="onboarding.js"></script>
+    <script src="context.js"></script>
+    <script src="test.js"></script>
+    <script src="script.js"></script>
 </body>
 </html>
