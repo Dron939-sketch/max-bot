@@ -8,8 +8,7 @@
 ИСПРАВЛЕНО: Дополнительный патч для anyio.to_thread
 ИСПРАВЛЕНО: Правильный порядок инициализации FastAPI и БД
 ИСПРАВЛЕНО: Добавлено закрытие глобальной сессии aiohttp
-ИСПРАВЛЕНО: FastAPI запускается в отдельном цикле событий (без nest_asyncio)
-ИСПРАВЛЕНО: Временно отключено мини-приложение для теста БД
+ИСПРАВЛЕНО: test_weather_async теперь использует httpx вместо aiohttp
 """
 
 # ========== КРИТИЧЕСКИЕ ПАТЧИ ДЛЯ PYTHON 3.14 ==========
@@ -443,11 +442,11 @@ async def periodic_cleanup_db():
             logger.error(f"❌ Ошибка при очистке данных: {e}")
 
 # ============================================
-# FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ - ВРЕМЕННО ОТКЛЮЧЕНО ДЛЯ ТЕСТА
+# FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ - ИСПРАВЛЕНО
 # ============================================
 
 # Создаем FastAPI приложение
-api_app = FastAPI(title="Фреди - Мини-приложение (тестовый режим)")
+api_app = FastAPI(title="Фреди - Мини-приложение")
 
 # Настройка CORS
 api_app.add_middleware(
@@ -458,54 +457,62 @@ api_app.add_middleware(
 )
 
 # ============================================
-# СТАТИЧЕСКИЕ ФАЙЛЫ - ВРЕМЕННО ОТКЛЮЧЕНЫ ДЛЯ ТЕСТА
+# ПОДКЛЮЧЕНИЕ СТАТИЧЕСКИХ ФАЙЛОВ МИНИ-ПРИЛОЖЕНИЯ
 # ============================================
 
-# Путь к папке с мини-приложением (оставляем для совместимости)
+# Путь к папке с мини-приложением
 MINIAPP_PATH = os.path.join(os.path.dirname(__file__), 'miniapp')
 
-# Создаем папку, если её нет (на всякий случай)
+# Создаем папку, если её нет
 os.makedirs(MINIAPP_PATH, exist_ok=True)
 
-# ВРЕМЕННО ОТКЛЮЧАЕМ СТАТИКУ ДЛЯ ТЕСТА БД
-logger.info("⚠️ Статические файлы временно отключены для теста подключения к БД")
-
-# if os.path.exists(MINIAPP_PATH) and os.path.isdir(MINIAPP_PATH):
-#     try:
-#         # Монтируем на /static, чтобы не конфликтовать с корневым маршрутом
-#         api_app.mount("/static", StaticFiles(directory=MINIAPP_PATH), name="static")
-#         logger.info(f"✅ Статические файлы подключены из {MINIAPP_PATH} (путь /static)")
-#     except Exception as e:
-#         logger.error(f"❌ Ошибка при монтировании статических файлов: {e}")
-# else:
-#     logger.warning(f"⚠️ Папка {MINIAPP_PATH} не найдена")
+# Обслуживаем статические файлы из папки miniapp
+if os.path.exists(MINIAPP_PATH) and os.path.isdir(MINIAPP_PATH):
+    try:
+        # Монтируем на /static, чтобы не конфликтовать с корневым маршрутом
+        api_app.mount("/static", StaticFiles(directory=MINIAPP_PATH), name="static")
+        logger.info(f"✅ Статические файлы подключены из {MINIAPP_PATH} (путь /static)")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при монтировании статических файлов: {e}")
+else:
+    logger.warning(f"⚠️ Папка {MINIAPP_PATH} не найдена")
 
 # ============================================
-# КОРНЕВОЙ МАРШРУТ - УПРОЩЕН ДЛЯ ТЕСТА
+# КОРНЕВОЙ МАРШРУТ - ИСПРАВЛЕНО (JSON вместо статики)
 # ============================================
 
 @api_app.get("/")
 async def root():
-    """Главная страница API - упрощенная версия для теста"""
+    """Главная страница API - возвращает JSON (обходит баг anyio)"""
+    try:
+        # Пробуем вернуть index.html если есть (без использования статики)
+        index_path = os.path.join(MINIAPP_PATH, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось вернуть index.html: {e}")
+    
+    # Возвращаем JSON в случае ошибки
     return {
         "name": "MAX Bot",
         "version": "9.6",
         "status": "online",
-        "message": "Тестовый режим (мини-приложение отключено для диагностики БД)",
+        "message": "API работает. Мини-приложение доступно по пути /static/",
         "endpoints": {
             "health": "/health",
             "docs": "/docs",
-            "api": "/api/*"
+            "api": "/api/*",
+            "miniapp": "/static/"
         }
     }
 
 # ============================================
-# API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ - ОСТАВЛЯЕМ ДЛЯ ТЕСТА API
+# API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
 # ============================================
 
 @api_app.post("/api/save-profile")
 async def save_profile(request: Request):
-    """Сохраняет профиль из мини-приложения (тестовый режим)"""
+    """Сохраняет профиль из мини-приложения"""
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -521,18 +528,15 @@ async def save_profile(request: Request):
         user_data[user_id]['ai_generated_profile'] = profile
         user_data[user_id]['profile_data'] = profile.get('profile_data', {})
         
-        # Сохраняем в БД с защитой от ошибок (если БД работает)
-        try:
-            asyncio.create_task(execute_with_retry(
-                save_user_to_db, user_id, user_data, user_contexts, user_routes,
-                max_retries=3
-            ))
-        except Exception as e:
-            logger.warning(f"⚠️ Не удалось сохранить в БД, но данные сохранены в памяти: {e}")
+        # Сохраняем в БД с защитой от ошибок
+        asyncio.create_task(execute_with_retry(
+            save_user_to_db, user_id, user_data, user_contexts, user_routes,
+            max_retries=3
+        ))
         
         return JSONResponse({
             "success": True,
-            "message": "Profile saved (memory only)"
+            "message": "Profile saved"
         })
     except Exception as e:
         logger.error(f"❌ Error in save_profile: {e}")
@@ -543,7 +547,7 @@ async def save_profile(request: Request):
 
 @api_app.post("/api/save-test-progress")
 async def save_test_progress(request: Request):
-    """Сохраняет прогресс теста из мини-приложения (тестовый режим)"""
+    """Сохраняет прогресс теста из мини-приложения"""
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -576,18 +580,15 @@ async def save_test_progress(request: Request):
             })
             user_data[user_id][stage_key].append(answer)
         
-        # Сохраняем в БД с защитой от ошибок (если БД работает)
-        try:
-            asyncio.create_task(execute_with_retry(
-                save_user_to_db, user_id, user_data, user_contexts, user_routes,
-                max_retries=3
-            ))
-        except Exception as e:
-            logger.warning(f"⚠️ Не удалось сохранить в БД, но данные сохранены в памяти: {e}")
+        # Сохраняем в БД с защитой от ошибок
+        asyncio.create_task(execute_with_retry(
+            save_user_to_db, user_id, user_data, user_contexts, user_routes,
+            max_retries=3
+        ))
         
         return JSONResponse({
             "success": True,
-            "message": f"Stage {stage} progress saved (memory only)"
+            "message": f"Stage {stage} progress saved"
         })
     except Exception as e:
         logger.error(f"❌ Error in save_test_progress: {e}")
@@ -598,7 +599,7 @@ async def save_test_progress(request: Request):
 
 @api_app.post("/api/save-mode")
 async def save_mode(request: Request):
-    """Сохраняет режим общения из мини-приложения (тестовый режим)"""
+    """Сохраняет режим общения из мини-приложения"""
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -616,18 +617,15 @@ async def save_mode(request: Request):
             user_data[user_id] = {}
         user_data[user_id]['communication_mode'] = mode
         
-        # Сохраняем в БД с защитой от ошибок (если БД работает)
-        try:
-            asyncio.create_task(execute_with_retry(
-                save_user_to_db, user_id, user_data, user_contexts, user_routes,
-                max_retries=3
-            ))
-        except Exception as e:
-            logger.warning(f"⚠️ Не удалось сохранить в БД, но данные сохранены в памяти: {e}")
+        # Сохраняем в БД с защитой от ошибок
+        asyncio.create_task(execute_with_retry(
+            save_user_to_db, user_id, user_data, user_contexts, user_routes,
+            max_retries=3
+        ))
         
         return JSONResponse({
             "success": True,
-            "message": f"Mode {mode} saved (memory only)"
+            "message": f"Mode {mode} saved"
         })
     except Exception as e:
         logger.error(f"❌ Error in save_mode: {e}")
@@ -638,7 +636,7 @@ async def save_mode(request: Request):
 
 @api_app.post("/api/sync")
 async def sync_data(request: Request):
-    """Синхронизирует данные с мини-приложения (тестовый режим)"""
+    """Синхронизирует данные с мини-приложения"""
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -665,18 +663,15 @@ async def sync_data(request: Request):
         if 'mode' in sync_data and user_id in user_contexts:
             user_contexts[user_id].communication_mode = sync_data['mode']
         
-        # Сохраняем в БД с защитой от ошибок (если БД работает)
-        try:
-            await execute_with_retry(
-                save_user_to_db, user_id, user_data, user_contexts, user_routes,
-                max_retries=3
-            )
-        except Exception as e:
-            logger.warning(f"⚠️ Не удалось сохранить в БД, но данные сохранены в памяти: {e}")
+        # Сохраняем в БД с защитой от ошибок
+        await execute_with_retry(
+            save_user_to_db, user_id, user_data, user_contexts, user_routes,
+            max_retries=3
+        )
         
         return JSONResponse({
             "success": True,
-            "message": "Data synchronized (memory only)"
+            "message": "Data synchronized"
         })
     except Exception as e:
         logger.error(f"❌ Error in sync: {e}")
@@ -1315,13 +1310,10 @@ async def submit_test_answer(request: Request):
         user_data[user_id][stage_key].append(answer_record)
         
         # Сохраняем в БД с защитой
-        try:
-            asyncio.create_task(execute_with_retry(
-                save_user_to_db, user_id, user_data, user_contexts, user_routes,
-                max_retries=3
-            ))
-        except Exception as e:
-            logger.warning(f"⚠️ Не удалось сохранить в БД, но ответ сохранён в памяти: {e}")
+        asyncio.create_task(execute_with_retry(
+            save_user_to_db, user_id, user_data, user_contexts, user_routes,
+            max_retries=3
+        ))
         
         # Определяем, завершен ли этап
         stage_questions_count = {
@@ -1721,7 +1713,7 @@ async def test_yandex_async(message: types.Message):
     )
 
 async def test_weather_async(message: types.Message):
-    """Асинхронное тестирование OpenWeather"""
+    """Асинхронное тестирование OpenWeather с использованием httpx"""
     if not OPENWEATHER_API_KEY:
         await safe_send_message(message, "❌ OPENWEATHER_API_KEY не настроен", delete_previous=True)
         return
@@ -1734,32 +1726,34 @@ async def test_weather_async(message: types.Message):
     )
     
     try:
-        import aiohttp
+        from services import get_http_client
         url = f"http://api.openweathermap.org/data/2.5/weather?q={test_city}&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
         
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    temp = data['main']['temp']
-                    feels_like = data['main']['feels_like']
-                    desc = data['weather'][0]['description']
-                    humidity = data['main']['humidity']
-                    wind = data['wind']['speed']
-                    
-                    text = f"✅ Погода работает!\n\n"
-                    text += f"📍 Город: {test_city}\n"
-                    text += f"🌡 Температура: {temp}°C (ощущается как {feels_like}°C)\n"
-                    text += f"☁️ Описание: {desc}\n"
-                    text += f"💧 Влажность: {humidity}%\n"
-                    text += f"💨 Ветер: {wind} м/с"
-                    
-                    await safe_delete_message(message.chat.id, status_msg.message_id)
-                    await safe_send_message(message, text, delete_previous=True)
-                else:
-                    error_text = await response.text()
-                    await safe_delete_message(message.chat.id, status_msg.message_id)
-                    await safe_send_message(message, f"❌ Ошибка {response.status}: {error_text[:200]}", delete_previous=True)
+        client = await get_http_client()
+        response = await client.get(url)
+        
+        if response.status_code == 200:
+            data = response.json()
+            temp = data['main']['temp']
+            feels_like = data['main']['feels_like']
+            desc = data['weather'][0]['description']
+            humidity = data['main']['humidity']
+            wind = data['wind']['speed']
+            
+            text = f"✅ Погода работает!\n\n"
+            text += f"📍 Город: {test_city}\n"
+            text += f"🌡 Температура: {temp}°C (ощущается как {feels_like}°C)\n"
+            text += f"☁️ Описание: {desc}\n"
+            text += f"💧 Влажность: {humidity}%\n"
+            text += f"💨 Ветер: {wind} м/с"
+            
+            await safe_delete_message(message.chat.id, status_msg.message_id)
+            await safe_send_message(message, text, delete_previous=True)
+        else:
+            error_text = response.text
+            await safe_delete_message(message.chat.id, status_msg.message_id)
+            await safe_send_message(message, f"❌ Ошибка {response.status_code}: {error_text[:200]}", delete_previous=True)
+            
     except Exception as e:
         await safe_delete_message(message.chat.id, status_msg.message_id)
         await safe_send_message(message, f"❌ Ошибка: {e}", delete_previous=True)
@@ -2090,47 +2084,41 @@ async def process_custom_goal_async(message: types.Message, user_id: int, text: 
 
 
 # ============================================
-# ФУНКЦИЯ ЗАПУСКА FASTAPI - ИСПРАВЛЕННАЯ (С отдельным циклом)
+# ФУНКЦИЯ ЗАПУСКА FASTAPI - ИСПРАВЛЕННАЯ (БЕЗ loop=loop)
 # ============================================
 
 def run_fastapi():
-    """Запускает FastAPI сервер в отдельном потоке со своим циклом событий"""
+    """Запускает FastAPI сервер в отдельном потоке"""
     # 🔥 ОТЛАДОЧНОЕ СООБЩЕНИЕ
     print("=" * 60)
-    print("🔥🔥🔥 НОВАЯ ВЕРСИЯ run_fastapi С ОТДЕЛЬНЫМ ЦИКЛОМ 🔥🔥🔥")
+    print("🔥🔥🔥 НОВАЯ ВЕРСИЯ run_fastapi БЕЗ loop=loop 🔥🔥🔥")
     print("=" * 60)
-    logger.info("🔥 НОВАЯ ВЕРСИЯ run_fastapi С ОТДЕЛЬНЫМ ЦИКЛОМ")
+    logger.info("🔥 НОВАЯ ВЕРСИЯ run_fastapi БЕЗ loop=loop")
     
     # Render сам назначает порт через переменную окружения PORT
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск FastAPI на порту {port}")
     
-    # Создаём новый цикл событий для этого потока
-    # ВАЖНО: НЕ используем nest_asyncio для этого цикла!
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    logger.info("✅ Создан отдельный цикл событий для FastAPI")
-    
+    # Применяем nest_asyncio (уже есть в начале, но для надежности)
     try:
-        # Настраиваем uvicorn без лишних параметров
-        config = uvicorn.Config(
+        import nest_asyncio
+        nest_asyncio.apply()
+        logger.info("✅ nest_asyncio применён")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при применении nest_asyncio: {e}")
+    
+    # ПРОСТО ЗАПУСКАЕМ UVICORN БЕЗ ЛИШНИХ ПАРАМЕТРОВ
+    try:
+        uvicorn.run(
             api_app, 
             host="0.0.0.0", 
-            port=port, 
-            log_level="info",
-            loop="asyncio",  # Явно указываем тип цикла
-            workers=1
+            port=port,
+            log_level="info"
         )
-        server = uvicorn.Server(config)
-        
-        # Запускаем сервер в этом цикле
-        loop.run_until_complete(server.serve())
     except Exception as e:
         logger.error(f"❌ Ошибка при запуске uvicorn: {e}")
-    finally:
-        # Закрываем цикл при завершении
-        loop.close()
-        logger.info("🔒 Цикл событий FastAPI закрыт")
+        # Последняя попытка
+        uvicorn.run(api_app, host="0.0.0.0", port=port)
 
 
 # ============================================
@@ -2142,6 +2130,9 @@ def run_async_tasks():
     # Создаём новый цикл для этого потока
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    
+    # Применяем nest_asyncio
+    nest_asyncio.apply(loop)
     
     # Запускаем проверку API
     try:
@@ -2187,13 +2178,14 @@ async def shutdown_handler():
     """Обработчик завершения работы - сохраняет все данные в БД"""
     logger.info("🛑 Завершение работы, сохраняем данные в БД...")
     
-    # ===== Закрываем глобальную сессию aiohttp =====
+    # ===== ДОБАВЛЕНО: Закрываем глобальную сессию aiohttp =====
     try:
         from services import close_global_session
         await close_global_session()
         logger.info("✅ Глобальная сессия aiohttp закрыта")
     except Exception as e:
         logger.error(f"❌ Ошибка при закрытии сессии aiohttp: {e}")
+    # =========================================================
     
     try:
         from state import save_all_users_to_db
@@ -2225,21 +2217,21 @@ def main():
     print("🗓 Планировщик задач: ✅")
     print("🎨 Идеи на выходные: ✅")
     print("🔬 Глубинный анализ вопросов: ✅")
-    print("📱 Мини-приложение: ⚠️ Временно отключено (тест БД)")
-    print("🗄️ Постоянное хранение: ⚠️ Тестируется подключение к PostgreSQL")
+    print("📱 Мини-приложение: ✅ (FastAPI + полная синхронизация)")
+    print("🗄️ Постоянное хранение: ✅ (PostgreSQL)")
     print("="*80 + "\n")
     
-    logger.info("🚀 Бот для MAX запущен! (режим диагностики БД)")
+    logger.info("🚀 Бот для MAX запущен!")
     
     # Создаем новый event loop для основного потока
     main_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(main_loop)
     
     # ===== ЗАПУСКАЕМ FASTAPI В ПЕРВУЮ ОЧЕРЕДЬ =====
-    # FastAPI создаст свой асинхронный контекст
+    # FastAPI создаст свой асинхронный контекст для статических файлов
     api_thread = threading.Thread(target=run_fastapi, daemon=True)
     api_thread.start()
-    logger.info("✅ FastAPI сервер запущен (без статики)")
+    logger.info("✅ FastAPI сервер запущен")
     
     # Даем FastAPI время на инициализацию
     import time
@@ -2257,8 +2249,6 @@ def main():
         except Exception as e:
             logger.error(f"❌ Ошибка инициализации БД: {e}")
             # Не выходим, продолжаем работу
-        finally:
-            db_loop.close()
     
     db_thread = threading.Thread(target=run_db_initialization, daemon=True)
     db_thread.start()
