@@ -7,20 +7,13 @@
 Версия 2.0 - ИСПРАВЛЕНО: Поддержка Python 3.14, добавлены патчи для asyncpg
 """
 
-import asyncpg
-import pickle
-import json
-import logging
+# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ PYTHON 3.14 ==========
 import sys
 import asyncio
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List, Union
-from contextlib import asynccontextmanager
+import asyncpg
+from asyncpg.pool import Pool
 
-logger = logging.getLogger(__name__)
-
-# ========== ГЛОБАЛЬНЫЙ ФИКС ДЛЯ PYTHON 3.14 ==========
-# Патчим create_pool для работы в Python 3.14
+# Сохраняем оригинальную функцию
 original_create_pool = asyncpg.create_pool
 
 async def patched_create_pool(*args, **kwargs):
@@ -46,13 +39,22 @@ async def patched_create_pool(*args, **kwargs):
         kwargs['command_timeout'] = 60
     
     # Добавляем небольшую задержку для инициализации контекста
-    await asyncio.sleep(0.01)
+    await asyncio.sleep(0.1)
     
     return await original_create_pool(*args, **kwargs)
 
 # Применяем патч
 asyncpg.create_pool = patched_create_pool
-# ====================================================
+# =====================================================
+
+import pickle
+import json
+import logging
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, List, Union
+from contextlib import asynccontextmanager
+
+logger = logging.getLogger(__name__)
 
 
 class BotDatabase:
