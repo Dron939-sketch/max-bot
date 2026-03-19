@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ИСПРАВЛЕНИЕ: Устранение циклического импорта с main.py
-ВЕРСИЯ 2.4 - ИСПРАВЛЕНО: Поддержка Python 3.14, добавлены повторные попытки
+ИСПРАВЛЕНИЕ: Поддержка Python 3.14, патчи для asyncpg
+ВЕРСИЯ 2.5 - ИСПРАВЛЕНО: Ошибка "Timeout should be used inside a task"
 """
 
 import os
@@ -13,6 +13,45 @@ import logging
 import asyncio
 import sys
 from typing import Dict, Any, Optional
+
+# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ ASYNCPG В PYTHON 3.14 ==========
+import asyncpg
+from asyncpg.pool import Pool
+
+# Сохраняем оригинальную функцию
+original_create_pool = asyncpg.create_pool
+
+async def patched_create_pool(*args, **kwargs):
+    """
+    Исправленная версия create_pool для Python 3.14
+    Добавляет явный loop и таймауты
+    """
+    # Получаем или создаем цикл событий
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    # Для Python 3.14 добавляем loop в kwargs
+    if sys.version_info >= (3, 14):
+        kwargs['loop'] = loop
+    
+    # Убеждаемся, что есть таймауты
+    if 'timeout' not in kwargs:
+        kwargs['timeout'] = 60
+    if 'command_timeout' not in kwargs:
+        kwargs['command_timeout'] = 60
+    
+    # Добавляем небольшую задержку для инициализации контекста
+    await asyncio.sleep(0.1)
+    
+    return await original_create_pool(*args, **kwargs)
+
+# Применяем патч
+asyncpg.create_pool = patched_create_pool
+# ===============================================================
+
 from database import BotDatabase
 
 logger = logging.getLogger(__name__)
@@ -29,9 +68,9 @@ db = BotDatabase(DATABASE_URL)
 async def init_db():
     """Инициализация подключения к БД"""
     try:
-        # Для Python 3.14 добавляем небольшую задержку для инициализации контекста
+        # Для Python 3.14 добавляем небольшую задержку
         if sys.version_info >= (3, 14):
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.2)
         
         await db.connect()
         logger.info("✅ Подключение к PostgreSQL установлено")
