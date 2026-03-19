@@ -369,9 +369,15 @@ api_app = FastAPI(title="Фреди - Мини-приложение")
 # Настройка CORS
 api_app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://max-bot-miniapp.onrender.com",
+        "https://max-bot-1-ywpz.onrender.com",
+        "http://localhost:3000",
+        "*"  # Временно разрешаем все для отладки
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 # ============================================
@@ -427,6 +433,47 @@ async def root():
 # ============================================
 # API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
 # ============================================
+
+@api_app.post("/api/save-context")
+async def save_context(request: Request):
+    """Сохраняет контекст пользователя (город, пол, возраст)"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        context_data = data.get('context', {})
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id required")
+        
+        # Получаем или создаем контекст
+        if user_id not in user_contexts:
+            user_contexts[user_id] = UserContext(user_id)
+        
+        context = user_contexts[user_id]
+        
+        # Обновляем поля
+        if 'city' in context_data:
+            context.city = context_data['city']
+        if 'gender' in context_data:
+            context.gender = context_data['gender']
+        if 'age' in context_data:
+            context.age = context_data['age']
+        
+        logger.info(f"📝 Контекст сохранен для пользователя {user_id}: {context_data}")
+        
+        # Сохраняем в БД
+        asyncio.create_task(execute_with_retry(
+            save_user_to_db, user_id, user_data, user_contexts, user_routes,
+            max_retries=3
+        ))
+        
+        return JSONResponse({"success": True})
+    except Exception as e:
+        logger.error(f"❌ Error in save_context: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
 
 @api_app.post("/api/save-profile")
 async def save_profile(request: Request):
@@ -2025,7 +2072,10 @@ def run_async_tasks():
     """Запускает асинхронные задачи в отдельном потоке"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(check_api_on_startup())
+    try:
+        loop.run_until_complete(check_api_on_startup())
+    finally:
+        loop.close()
 
 # ============================================
 # ЗАПУСК БОТА
