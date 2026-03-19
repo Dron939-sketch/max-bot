@@ -1,176 +1,227 @@
-# Добавь в main.py после существующих эндпоинтов
+// ========== api.js ==========
+// Слой для работы с API
 
-@api_app.get("/api/chat/history")
-async def get_chat_history(user_id: int, limit: int = 50):
-    """Возвращает историю чата пользователя"""
-    try:
-        # Здесь можно получать из БД, если сохраняете историю
-        # Или генерировать на основе последних действий
-        
-        # Для начала вернем пустую историю
-        return JSONResponse({
-            "success": True,
-            "history": []
-        })
-    except Exception as e:
-        logger.error(f"❌ Error in get_chat_history: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
+const api = {
+    baseUrl: '/api',
+    timeout: 15000,
 
-@api_app.post("/api/chat/message")
-async def chat_message(request: Request):
-    """Отправляет сообщение боту и получает ответ"""
-    try:
-        data = await request.json()
-        user_id = data.get('user_id')
-        message = data.get('message')
-        mode = data.get('mode')
-        
-        if not user_id or not message:
-            raise HTTPException(status_code=400, detail="user_id and message required")
-        
-        # Получаем контекст пользователя
-        context = user_contexts.get(user_id)
-        if not context:
-            context = UserContext(user_id)
-            user_contexts[user_id] = context
-        
-        # Устанавливаем режим, если передан
-        if mode and mode in COMMUNICATION_MODES:
-            context.communication_mode = mode
-        
-        # Генерируем ответ через DeepSeek
-        from services import call_deepseek_with_context
-        response = await call_deepseek_with_context(
-            user_id=user_id,
-            user_message=message,
-            context=context,
-            mode=context.communication_mode,
-            profile_data=user_data.get(user_id, {})
-        )
-        
-        return JSONResponse({
-            "success": True,
-            "response": response,
-            "mode": context.communication_mode
-        })
-        
-    except Exception as e:
-        logger.error(f"❌ Error in chat_message: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "success": False, 
-                "error": str(e),
-                "response": "Произошла ошибка. Попробуйте еще раз."
+    async get(endpoint, params = {}) {
+        try {
+            if (App?.userId && !params.user_id) {
+                params.user_id = App.userId;
             }
-        )
+            
+            const url = new URL(endpoint, window.location.origin);
+            Object.keys(params).forEach(key => 
+                url.searchParams.append(key, params[key])
+            );
+            
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+            
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' },
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error(`❌ GET ${endpoint} error:`, error);
+            throw error;
+        }
+    },
 
-@api_app.post("/api/chat/action")
-async def chat_action(request: Request):
-    """Обрабатывает нажатия на кнопки"""
-    try:
-        data = await request.json()
-        user_id = data.get('user_id')
-        action = data.get('action')
-        action_data = data.get('data', {})
-        
-        if not user_id or not action:
-            raise HTTPException(status_code=400, detail="user_id and action required")
-        
-        # Обрабатываем действия
-        if action == "start_test":
-            return JSONResponse({
-                "success": True,
-                "action": action,
-                "data": {"stage": 1, "question_index": 0}
-            })
-        elif action == "show_profile":
-            profile_data = await get_profile(user_id)
-            return JSONResponse({
-                "success": True,
-                "action": action,
-                "data": profile_data
-            })
-        
-        return JSONResponse({"success": True, "action": action})
-        
-    except Exception as e:
-        logger.error(f"❌ Error in chat_action: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
+    async post(endpoint, data = {}) {
+        try {
+            if (App?.userId && !data.user_id) {
+                data.user_id = App.userId;
+            }
+            
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+            
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify(data),
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error(`❌ POST ${endpoint} error:`, error);
+            throw error;
+        }
+    },
 
-@api_app.get("/api/test/question")
-async def get_test_question(user_id: int, stage: int, index: int):
-    """Возвращает вопрос теста"""
-    try:
-        # Здесь логика получения вопроса из БД
-        # Можно использовать существующие функции из handlers/questions.py
-        
-        return JSONResponse({
-            "success": True,
-            "stage": stage,
-            "index": index,
-            "total": 4,  # Замени на реальное количество
-            "text": "Вопрос теста",
-            "options": [
-                {"id": "A", "text": "Вариант А", "value": "A"},
-                {"id": "B", "text": "Вариант Б", "value": "B"},
-                {"id": "C", "text": "Вариант В", "value": "C"},
-                {"id": "D", "text": "Вариант Г", "value": "D"}
-            ],
-            "hasAnswer": False
-        })
-    except Exception as e:
-        logger.error(f"❌ Error in get_test_question: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
+    // ===== ПОЛЬЗОВАТЕЛЬ =====
+    async getUserStatus(userId) {
+        try {
+            return await this.get('/api/user/status', { user_id: userId });
+        } catch (error) {
+            console.error('❌ getUserStatus error:', error);
+            return {
+                user_id: userId,
+                user_name: 'друг',
+                context_complete: false,
+                test_completed: false,
+                first_visit: true
+            };
+        }
+    },
 
-@api_app.post("/api/test/answer")
-async def submit_test_answer(request: Request):
-    """Сохраняет ответ на вопрос теста"""
-    try:
-        data = await request.json()
-        user_id = data.get('user_id')
-        stage = data.get('stage')
-        question_index = data.get('question_index')
-        answer = data.get('answer')
-        option = data.get('option')
-        
-        # Сохраняем ответ в user_data
-        if user_id not in user_data:
-            user_data[user_id] = {}
-        
-        if 'all_answers' not in user_data[user_id]:
-            user_data[user_id]['all_answers'] = []
-        
-        user_data[user_id]['all_answers'].append({
-            'stage': stage,
-            'question_index': question_index,
-            'answer': answer,
-            'option': option,
-            'timestamp': datetime.now().isoformat()
-        })
-        
-        # Сохраняем в БД
-        asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
-        
-        # Проверяем, завершен ли этап
-        stage_complete = False  # Здесь логика проверки
-        
-        return JSONResponse({
-            "success": True,
-            "stageComplete": stage_complete
-        })
-    except Exception as e:
-        logger.error(f"❌ Error in submit_test_answer: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
+    async getUserData(userId) {
+        try {
+            return await this.get('/api/user-data', { user_id: userId });
+        } catch (error) {
+            console.error('❌ getUserData error:', error);
+            return {
+                user_id: userId,
+                user_name: 'друг',
+                has_profile: false,
+                first_visit: true
+            };
+        }
+    },
+
+    // ===== КОНТЕКСТ =====
+    async saveContext(userId, contextData) {
+        return this.post('/api/save-context', {
+            user_id: userId,
+            context: contextData
+        });
+    },
+
+    async getWeather(city) {
+        return this.get('/api/weather', { city });
+    },
+
+    // ===== ТЕСТ =====
+    async getTestProgress(userId) {
+        try {
+            return await this.get('/api/get-test-progress', { user_id: userId });
+        } catch (error) {
+            return {
+                stage1_complete: false,
+                stage2_complete: false,
+                stage3_complete: false,
+                stage4_complete: false,
+                stage5_complete: false,
+                current_stage: 1
+            };
+        }
+    },
+
+    async getTestQuestion(userId, stage, index) {
+        try {
+            return await this.get('/api/test/question', {
+                user_id: userId,
+                stage: stage,
+                index: index
+            });
+        } catch (error) {
+            console.error('❌ getTestQuestion error:', error);
+            return null;
+        }
+    },
+
+    async submitTestAnswer(userId, stage, questionIndex, answer, option) {
+        return this.post('/api/test/answer', {
+            user_id: userId,
+            stage: stage,
+            question_index: questionIndex,
+            answer: answer,
+            option: option
+        });
+    },
+
+    async getTestStageResults(userId, stage) {
+        return this.get('/api/test/results', {
+            user_id: userId,
+            stage: stage
+        });
+    },
+
+    // ===== ПРОФИЛЬ =====
+    async getProfile(userId) {
+        try {
+            return await this.get('/api/get-profile', { user_id: userId });
+        } catch (error) {
+            return { profile: null };
+        }
+    },
+
+    async getThoughts(userId) {
+        try {
+            return await this.get('/api/thought', { user_id: userId });
+        } catch (error) {
+            return { thought: null };
+        }
+    },
+
+    async saveProfile(userId, profile) {
+        return this.post('/api/save-profile', {
+            user_id: userId,
+            profile: profile
+        });
+    },
+
+    // ===== ЧАТ =====
+    async sendChatMessage(userId, message, mode = null) {
+        try {
+            return await this.post('/api/chat/message', {
+                user_id: userId,
+                message: message,
+                mode: mode
+            });
+        } catch (error) {
+            console.error('❌ sendChatMessage error:', error);
+            return {
+                response: '😔 Произошла ошибка. Попробуйте еще раз.',
+                buttons: null
+            };
+        }
+    },
+
+    async getChatHistory(userId, limit = 50) {
+        try {
+            const data = await this.get('/api/chat/history', { user_id: userId, limit });
+            return data.history || [];
+        } catch (error) {
+            return [];
+        }
+    },
+
+    async performAction(userId, action, data = {}) {
+        return this.post('/api/chat/action', {
+            user_id: userId,
+            action: action,
+            data: data
+        });
+    },
+
+    async setMode(userId, mode) {
+        return this.post('/api/save-mode', {
+            user_id: userId,
+            mode: mode
+        });
+    }
+};
+
+window.api = api;
