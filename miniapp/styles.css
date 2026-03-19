@@ -1,37 +1,32 @@
 /* ========== STYLES.CSS ========== */
-/* СВЕТЛАЯ ТЕМА:
-   - Зеленоватый фон #d7e9d7
-   - Белые сообщения бота
-   - Светло-зеленые сообщения пользователя
-   - Скругления как в Telegram
-*/
+/* ОРИГИНАЛЬНЫЕ ЦВЕТА MAX с шириной сообщений как в Telegram */
 
 :root {
-    /* Основные цвета */
-    --tg-bg: #d7e9d7;              /* Светлый зеленоватый фон */
-    --tg-panel-bg: #ffffff;         /* Белый для панелей */
-    --tg-header-bg: #ffffff;        /* Белая шапка */
-    --tg-input-bg: #f0f2f5;         /* Светло-серое поле ввода */
-    --tg-message-bot: #ffffff;      /* Белые сообщения бота */
-    --tg-message-user: #e4ffdb;     /* Светло-зелёные сообщения пользователя */
-    --tg-text: #000000;              /* Чёрный текст */
-    --tg-text-secondary: #5e6f88;    /* Серый второстепенный текст */
-    --tg-border: #e9e9ef;            /* Светлая граница */
-    --tg-hover: #f0f2f5;             /* Ховер эффект */
-    --tg-button-primary: #3390ec;    /* Синяя кнопка */
-    --tg-button-primary-hover: #1f7ad9;
-    --tg-button-secondary: #e4e6eb;  /* Серая кнопка */
-    --tg-button-text: #3390ec;       /* Синий текст на кнопках */
+    /* Оригинальные цвета MAX (из вашего бота) */
+    --max-bg: #0e1621;              /* Тёмный фон как в MAX */
+    --max-panel-bg: #17212b;         /* Панели как в MAX */
+    --max-header-bg: #1f2c38;        /* Шапка как в MAX */
+    --max-input-bg: #1f2c38;         /* Поле ввода как в MAX */
+    --max-message-bot: #1f2c38;      /* Сообщения бота как в MAX */
+    --max-message-user: #2b5278;     /* Сообщения пользователя как в MAX */
+    --max-text: #ffffff;              /* Белый текст */
+    --max-text-secondary: #8e9aa6;    /* Серый второстепенный */
+    --max-border: #0f1b26;            /* Границы как в MAX */
+    --max-hover: #2b3b4a;             /* Ховер эффект */
+    --max-blue: #248bf2;              /* Синий акцент MAX */
+    --max-blue-hover: #1a7ad9;        /* Синий при наведении */
     
-    /* Параметры сообщений */
-    --message-max-width: 75%;        /* Ширина сообщений 75% */
-    --message-min-width: 80px;       /* Минимальная ширина */
-    --message-bubble-radius: 18px;    /* Радиус скругления */
-    --message-padding-vertical: 8px;  /* Вертикальный отступ внутри */
-    --message-padding-horizontal: 12px; /* Горизонтальный отступ внутри */
-    --message-gap: 4px;               /* Расстояние между сообщениями */
-    --message-time-font: 11px;         /* Размер времени */
-    --message-text-font: 16px;         /* Размер текста */
+    /* ЕДИНСТВЕННОЕ ИЗМЕНЕНИЕ - ширина сообщений как в Telegram */
+    --message-max-width: 85%;         /* В MAX было 60%, теперь 85% */
+    
+    /* Остальные параметры (можно оставить как есть) */
+    --message-min-width: 80px;
+    --message-bubble-radius: 18px;
+    --message-padding-vertical: 8px;
+    --message-padding-horizontal: 12px;
+    --message-gap: 4px;
+    --message-time-font: 11px;
+    --message-text-font: 16px;
     
     /* Отступы */
     --spacing-xs: 4px;
@@ -54,6 +49,7 @@
     margin: 0;
     padding: 0;
     box-sizing: border-box;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
 html, body {
@@ -63,38 +59,28 @@ html, body {
 }
 
 body {
-    background-color: var(--tg-bg);
-    color: var(--tg-text);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background-color: var(--max-bg);
+    color: var(--max-text);
     font-size: var(--text-md);
     line-height: 1.4;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
 }
 
 .app {
     display: flex;
     height: 100vh;
-    height: 100dvh;
     width: 100vw;
-    width: 100dvw;
     overflow: hidden;
-    position: relative;
 }
 
-/* ===== ЛЕВАЯ ПАНЕЛЬ ===== */
+/* Левая панель */
 .chats-panel {
     width: 320px;
-    height: 100%;
-    background-color: var(--tg-panel-bg);
-    border-right: 1px solid var(--tg-border);
+    background-color: var(--max-panel-bg);
+    border-right: 1px solid var(--max-border);
     display: flex;
     flex-direction: column;
+    height: 100vh;
     flex-shrink: 0;
-    overflow: hidden;
-    position: relative;
-    z-index: 2;
-    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.05);
 }
 
 @media (max-width: 768px) {
@@ -102,19 +88,10 @@ body {
         position: absolute;
         left: -320px;
         z-index: 100;
-        transition: left 0.2s ease;
-        box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
-        height: 100%;
+        transition: left 0.15s ease;
     }
     .chats-panel.visible {
         left: 0;
-    }
-}
-
-@media (max-width: 480px) {
-    .chats-panel {
-        width: 280px;
-        left: -280px;
     }
 }
 
@@ -123,61 +100,62 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    background-color: var(--tg-header-bg);
-    border-bottom: 1px solid var(--tg-border);
-    flex-shrink: 0;
+    background-color: var(--max-header-bg);
+    border-bottom: 1px solid var(--max-border);
 }
 
 .chats-title {
-    font-size: var(--text-xl);
+    font-size: 20px;
     font-weight: 600;
-    color: var(--tg-text);
+    color: var(--max-text);
 }
 
 .new-chat-btn {
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
     border-radius: 50%;
-    background-color: transparent;
-    color: var(--tg-button-primary);
+    background-color: var(--max-blue);
+    color: white;
     border: none;
-    font-size: var(--text-lg);
+    font-size: 20px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background-color 0.2s;
-    flex-shrink: 0;
 }
 
 .new-chat-btn:hover {
-    background-color: var(--tg-hover);
+    background-color: var(--max-blue-hover);
 }
 
 .chats-search {
-    padding: var(--spacing-xs) var(--spacing-lg);
-    flex-shrink: 0;
+    padding: var(--spacing-sm) var(--spacing-lg);
+    border-bottom: 1px solid var(--max-border);
 }
 
 .chats-search input {
     width: 100%;
     padding: var(--spacing-sm) var(--spacing-md);
-    background-color: var(--tg-input-bg);
-    border: none;
-    border-radius: 10px;
-    color: var(--tg-text);
+    background-color: var(--max-input-bg);
+    border: 1px solid var(--max-border);
+    border-radius: 20px;
+    color: var(--max-text);
     font-size: var(--text-sm);
     outline: none;
 }
 
+.chats-search input:focus {
+    border-color: var(--max-blue);
+}
+
 .chats-search input::placeholder {
-    color: var(--tg-text-secondary);
+    color: var(--max-text-secondary);
 }
 
 .chats-list {
-    flex: 1 1 auto;
+    flex: 1;
     overflow-y: auto;
-    min-height: 0;
+    padding: var(--spacing-sm) 0;
 }
 
 .chat-item {
@@ -190,11 +168,11 @@ body {
 }
 
 .chat-item:hover {
-    background-color: var(--tg-hover);
+    background-color: var(--max-hover);
 }
 
 .chat-item.active {
-    background-color: var(--tg-hover);
+    background-color: var(--max-blue);
 }
 
 .chat-avatar {
@@ -203,13 +181,6 @@ body {
     border-radius: 50%;
     overflow: hidden;
     flex-shrink: 0;
-    background: linear-gradient(135deg, #4f9e4f, #2d6a2d);
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: var(--text-lg);
-    font-weight: 600;
 }
 
 .chat-avatar img {
@@ -230,29 +201,35 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     font-size: var(--text-md);
-    color: var(--tg-text);
+    color: var(--max-text);
 }
 
 .chat-preview {
     font-size: var(--text-sm);
-    color: var(--tg-text-secondary);
+    color: var(--max-text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
+.chat-item.active .chat-preview {
+    color: rgba(255, 255, 255, 0.9);
+}
+
 .chat-time {
     font-size: var(--text-xs);
-    color: var(--tg-text-secondary);
+    color: var(--max-text-secondary);
     white-space: nowrap;
-    margin-left: var(--spacing-sm);
+}
+
+.chat-item.active .chat-time {
+    color: rgba(255, 255, 255, 0.9);
 }
 
 .chats-footer {
     padding: var(--spacing-md) var(--spacing-lg);
-    background-color: var(--tg-header-bg);
-    border-top: 1px solid var(--tg-border);
-    flex-shrink: 0;
+    background-color: var(--max-header-bg);
+    border-top: 1px solid var(--max-border);
 }
 
 .user-mini-profile {
@@ -266,7 +243,7 @@ body {
 }
 
 .user-mini-profile:hover {
-    background-color: var(--tg-hover);
+    background-color: var(--max-hover);
 }
 
 .user-mini-avatar {
@@ -274,14 +251,6 @@ body {
     height: 40px;
     border-radius: 50%;
     overflow: hidden;
-    flex-shrink: 0;
-    background: linear-gradient(135deg, #4f9e4f, #2d6a2d);
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: var(--text-md);
-    font-weight: 600;
 }
 
 .user-mini-avatar img {
@@ -301,65 +270,55 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     font-size: var(--text-md);
-    color: var(--tg-text);
+    color: var(--max-text);
 }
 
 .user-mini-status {
     font-size: var(--text-xs);
-    color: var(--tg-text-secondary);
+    color: var(--max-text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-/* ===== ПРАВАЯ ПАНЕЛЬ (ЧАТ) ===== */
+/* Правая панель */
 .chat-panel {
     flex: 1;
     display: flex;
     flex-direction: column;
-    height: 100%;
+    height: 100vh;
     background-color: transparent;
     overflow: hidden;
-    position: relative;
 }
 
 .chat-header {
     padding: var(--spacing-sm) var(--spacing-lg);
-    background-color: var(--tg-header-bg);
-    border-bottom: 1px solid var(--tg-border);
-    flex-shrink: 0;
-    height: 60px;
+    background-color: var(--max-header-bg);
+    border-bottom: 1px solid var(--max-border);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    z-index: 2;
+    height: 60px;
+    flex-shrink: 0;
 }
 
 .chat-header-left {
     display: flex;
     align-items: center;
     gap: var(--spacing-md);
-    height: 100%;
 }
 
 .mobile-menu-btn {
     display: none;
     background: none;
     border: none;
-    color: var(--tg-button-primary);
-    font-size: var(--text-xl);
+    color: var(--max-text);
+    font-size: 24px;
     cursor: pointer;
     width: 40px;
     height: 40px;
     align-items: center;
     justify-content: center;
-    border-radius: 50%;
-    transition: background-color 0.2s;
-    flex-shrink: 0;
-}
-
-.mobile-menu-btn:hover {
-    background-color: var(--tg-hover);
 }
 
 @media (max-width: 768px) {
@@ -373,13 +332,6 @@ body {
     height: 40px;
     border-radius: 50%;
     overflow: hidden;
-    flex-shrink: 0;
-    background: linear-gradient(135deg, #4f9e4f, #2d6a2d);
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 600;
 }
 
 .chat-header-avatar img {
@@ -390,39 +342,30 @@ body {
 
 .chat-header-info {
     line-height: 1.3;
-    flex: 1;
-    min-width: 0;
 }
 
 .chat-header-name {
     font-weight: 600;
     font-size: var(--text-md);
-    color: var(--tg-text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    color: var(--max-text);
 }
 
 .chat-header-status {
     font-size: var(--text-xs);
-    color: var(--tg-text-secondary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    color: var(--max-text-secondary);
 }
 
 .chat-header-right {
     display: flex;
     align-items: center;
     gap: var(--spacing-xs);
-    flex-shrink: 0;
 }
 
 .header-btn {
     background: none;
     border: none;
-    color: var(--tg-button-primary);
-    font-size: var(--text-lg);
+    color: var(--max-text);
+    font-size: 20px;
     cursor: pointer;
     width: 40px;
     height: 40px;
@@ -430,22 +373,18 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.2s;
-    flex-shrink: 0;
 }
 
 .header-btn:hover {
-    background-color: var(--tg-hover);
+    background-color: var(--max-hover);
 }
 
-/* ===== ОБЛАСТЬ СООБЩЕНИЙ ===== */
+/* Область сообщений */
 .messages-container {
-    flex: 1 1 auto;
+    flex: 1;
     overflow-y: auto;
     padding: var(--spacing-lg);
-    min-height: 0;
     background-color: transparent;
-    scroll-behavior: smooth;
 }
 
 .messages-list {
@@ -454,133 +393,58 @@ body {
     gap: var(--message-gap);
 }
 
-/* Разделитель даты */
-.date-divider {
-    display: flex;
-    justify-content: center;
-    margin: var(--spacing-md) 0;
-}
-
-.date-divider span {
-    background-color: rgba(255, 255, 255, 0.8);
-    padding: 4px 12px;
-    border-radius: 20px;
-    font-size: var(--text-xs);
-    color: var(--tg-text-secondary);
-    backdrop-filter: blur(5px);
-    border: 1px solid var(--tg-border);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-/* ===== СООБЩЕНИЯ ===== */
+/* Сообщения */
 .message {
     display: flex;
     flex-direction: column;
     max-width: var(--message-max-width);
-    margin-bottom: var(--message-gap);
     animation: fadeIn 0.2s ease;
 }
 
-/* Сообщение бота (слева) */
 .message.bot-message {
     align-items: flex-start;
     margin-right: auto;
 }
 
-/* Сообщение пользователя (справа) */
 .message.user-message {
     align-items: flex-end;
     margin-left: auto;
 }
 
-/* Имя отправителя (только для бота) */
-.message-sender {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--tg-button-primary);
-    margin-bottom: 2px;
-    margin-left: 12px;
-    letter-spacing: -0.2px;
-}
-
-/* "ПУЗЫРЕК" СООБЩЕНИЯ */
 .message-bubble {
-    background-color: var(--tg-message-bot);
-    border-radius: var(--message-bubble-radius) var(--message-bubble-radius) var(--message-bubble-radius) 4px;
-    padding: var(--message-padding-vertical) var(--message-padding-horizontal);
-    position: relative;
+    background-color: var(--max-message-bot);
+    border-radius: 18px;
+    padding: 8px 12px;
     word-wrap: break-word;
-    min-width: var(--message-min-width);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-    border: 1px solid var(--tg-border);
+    min-width: 80px;
 }
 
-/* Сообщение пользователя - скругление зеркальное */
 .user-message .message-bubble {
-    background-color: var(--tg-message-user);
-    border-radius: var(--message-bubble-radius) var(--message-bubble-radius) 4px var(--message-bubble-radius);
-    border-color: #d1e6cf;
+    background-color: var(--max-message-user);
 }
 
-/* Текст сообщения */
 .message-text {
-    font-size: var(--message-text-font);
+    font-size: 15px;
     line-height: 1.5;
-    color: var(--tg-text);
+    color: var(--max-text);
     white-space: pre-wrap;
-    word-break: break-word;
 }
 
-/* Время внутри пузырька */
 .message-time {
-    font-size: var(--message-time-font);
-    color: var(--tg-text-secondary);
+    font-size: 11px;
+    color: var(--max-text-secondary);
     text-align: right;
     margin-top: 4px;
-    margin-left: 8px;
-    display: inline-block;
-    float: right;
-    line-height: 1.2;
-}
-
-/* Очистка float после времени */
-.message-text::after {
-    content: '';
-    display: table;
-    clear: both;
-}
-
-/* Стили для текста */
-.message-text strong {
-    font-weight: 600;
-    color: var(--tg-text);
-}
-
-.message-text em {
-    font-style: italic;
-}
-
-.message-text ul, .message-text ol {
-    margin: 4px 0;
-    padding-left: 20px;
-}
-
-.message-text li {
-    margin-bottom: 2px;
 }
 
 /* Индикатор печати */
 .typing-indicator {
-    display: flex;
+    display: none;
     gap: 4px;
     padding: 10px 14px;
-    background-color: var(--tg-message-bot);
-    border-radius: var(--message-bubble-radius) var(--message-bubble-radius) var(--message-bubble-radius) 4px;
+    background-color: var(--max-message-bot);
+    border-radius: 18px;
     width: fit-content;
-    border: 1px solid var(--tg-border);
-    margin-top: var(--spacing-xs);
-    display: none;
 }
 
 .typing-indicator.visible {
@@ -590,34 +454,25 @@ body {
 .typing-indicator span {
     width: 6px;
     height: 6px;
-    background-color: var(--tg-text-secondary);
+    background-color: var(--max-text-secondary);
     border-radius: 50%;
     animation: typingPulse 1.5s infinite;
 }
 
-.typing-indicator span:nth-child(2) {
-    animation-delay: 0.2s;
-}
-
-.typing-indicator span:nth-child(3) {
-    animation-delay: 0.4s;
-}
-
 @keyframes typingPulse {
-    0%, 100% { opacity: 0.3; transform: scale(1); }
-    50% { opacity: 1; transform: scale(1.2); }
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
 }
 
-/* ===== ПАНЕЛЬ ВВОДА ===== */
+/* Панель ввода */
 .input-panel {
     padding: var(--spacing-sm) var(--spacing-lg);
-    background-color: var(--tg-panel-bg);
-    border-top: 1px solid var(--tg-border);
-    flex-shrink: 0;
+    background-color: var(--max-panel-bg);
+    border-top: 1px solid var(--max-border);
     display: flex;
     align-items: center;
     gap: var(--spacing-sm);
-    z-index: 2;
+    flex-shrink: 0;
 }
 
 .attach-btn, .voice-btn {
@@ -626,33 +481,21 @@ body {
     border-radius: 50%;
     background: none;
     border: none;
-    color: var(--tg-button-primary);
-    font-size: var(--text-lg);
+    color: var(--max-text-secondary);
+    font-size: 20px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.2s;
-    flex-shrink: 0;
-}
-
-.attach-btn:hover, .voice-btn:hover {
-    background-color: var(--tg-hover);
 }
 
 .message-input-wrapper {
     flex: 1;
     display: flex;
     align-items: center;
-    background-color: var(--tg-input-bg);
+    background-color: var(--max-input-bg);
     border-radius: 20px;
     padding: 2px;
-    border: 1px solid transparent;
-    transition: all 0.2s;
-}
-
-.message-input-wrapper:focus-within {
-    border-color: var(--tg-button-primary);
 }
 
 .message-input {
@@ -660,38 +503,30 @@ body {
     background: none;
     border: none;
     padding: 8px 12px;
-    color: var(--tg-text);
-    font-size: var(--text-md);
+    color: var(--max-text);
+    font-size: 15px;
     outline: none;
-    min-width: 0;
 }
 
 .message-input::placeholder {
-    color: var(--tg-text-secondary);
+    color: var(--max-text-secondary);
 }
 
 .send-btn {
     width: 36px;
     height: 36px;
     border-radius: 50%;
-    background: none;
+    background-color: var(--max-blue);
     border: none;
-    color: var(--tg-button-primary);
-    font-size: var(--text-md);
+    color: white;
+    font-size: 16px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-right: 2px;
-    transition: all 0.2s;
-    flex-shrink: 0;
 }
 
-.send-btn:hover {
-    background-color: var(--tg-hover);
-}
-
-/* ===== КОНТЕЙНЕР ЭКРАНОВ ===== */
+/* Контейнер экранов */
 .screen-container {
     flex: 1;
     display: flex;
@@ -699,9 +534,6 @@ body {
     height: 100%;
     overflow-y: auto;
     background-color: transparent;
-    min-height: 0;
-    position: relative;
-    z-index: 1;
 }
 
 /* Анимации */
@@ -710,46 +542,29 @@ body {
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* ===== АДАПТАЦИЯ ===== */
+/* Адаптация */
 @media (max-width: 768px) {
-    :root {
-        --message-text-font: 15px;
-        --message-max-width: 85%;
-        --spacing-lg: 14px;
-        --spacing-md: 10px;
+    .chats-panel {
+        position: absolute;
+        left: -320px;
+        z-index: 100;
     }
-    
-    .chat-header {
-        height: 56px;
+    .chats-panel.visible {
+        left: 0;
     }
 }
 
 @media (max-width: 480px) {
-    :root {
-        --message-text-font: 15px;
-        --message-max-width: 90%;
-        --spacing-lg: 12px;
-        --spacing-md: 8px;
-        --spacing-sm: 6px;
+    .chats-panel {
+        width: 280px;
+        left: -280px;
     }
     
-    .chat-avatar {
-        width: 44px;
-        height: 44px;
-    }
-    
-    .message-bubble {
-        padding: 6px 10px;
+    .message {
+        max-width: 90%;
     }
 }
 
-@media (max-width: 360px) {
-    :root {
-        --message-text-font: 14px;
-    }
-}
-
-/* Вспомогательные классы */
 .hidden {
     display: none !important;
 }
