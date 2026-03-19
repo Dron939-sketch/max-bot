@@ -3,12 +3,38 @@
 """
 ВИРТУАЛЬНЫЙ ПСИХОЛОГ - МАТРИЦА ПОВЕДЕНИЙ 4×6
 ВЕРСИЯ ДЛЯ MAX
-ИСПРАВЛЕНО: обработка вопросов без await для синхронных функций
-ДОБАВЛЕНО: FastAPI для мини-приложения с полной синхронизацией
-ДОБАВЛЕНО: PostgreSQL для постоянного хранения данных
-ИСПРАВЛЕНО: правильное обслуживание статических файлов из папки miniapp
-ИСПРАВЛЕНО: окончательное решение проблемы sniffio для Python 3.14
+ИСПРАВЛЕНО: Все патчи для Python 3.14, anyio, sniffio, PostgreSQL
 """
+
+# ========== КРИТИЧЕСКИЕ ПАТЧИ ДЛЯ PYTHON 3.14 ==========
+import sys
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+# Патч для anyio (исправление ошибки weakref)
+if sys.version_info >= (3, 14):
+    try:
+        import anyio
+        from anyio._backends._asyncio import _task_states
+        
+        # Сохраняем оригинальную функцию
+        original_getitem = _task_states.__getitem__
+        
+        def patched_getitem(self, key):
+            """Безопасная версия __getitem__ для слабых ссылок"""
+            if key is None:
+                return {}
+            try:
+                return original_getitem(self, key)
+            except TypeError:
+                return {}
+        
+        # Применяем патч
+        _task_states.__getitem__ = patched_getitem
+        print("✅ Применён критический патч для anyio в Python 3.14")
+    except Exception as e:
+        print(f"⚠️ Не удалось применить патч anyio: {e}")
+# =========================================================
 
 import os
 import sys
@@ -21,15 +47,11 @@ import threading
 import fcntl
 import socket
 import asyncio
-import warnings
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, List, Any, Tuple, Union
 from datetime import datetime, timedelta
 
 # ========== ИСПРАВЛЕНИЕ ПРОБЛЕМ ASYNCIO ==========
-# Игнорируем предупреждения
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-
 # Импортируем nest_asyncio для решения проблем с циклами событий
 import nest_asyncio
 nest_asyncio.apply()  # Применяем глобально
@@ -412,32 +434,66 @@ MINIAPP_PATH = os.path.join(os.path.dirname(__file__), 'miniapp')
 # Создаем папку, если её нет
 os.makedirs(MINIAPP_PATH, exist_ok=True)
 
-# Обслуживаем статические файлы из папки miniapp
-if os.path.exists(MINIAPP_PATH):
-    # Монтируем статические файлы по пути /miniapp
-    api_app.mount("/miniapp", StaticFiles(directory=MINIAPP_PATH, html=True), name="miniapp")
-    logger.info(f"✅ Статические файлы подключены из {MINIAPP_PATH}")
-
-    # Перенаправление с корня на index.html из miniapp
-    @api_app.get("/")
-    async def serve_miniapp():
-        index_path = os.path.join(MINIAPP_PATH, "index.html")
-        if os.path.exists(index_path):
-            return FileResponse(index_path)
-        else:
-            return JSONResponse(
-                status_code=404,
-                content={"error": "index.html не найден в папке miniapp"}
-            )
+# Проверяем наличие папки и подключаем статические файлы
+if os.path.exists(MINIAPP_PATH) and os.path.isdir(MINIAPP_PATH):
+    try:
+        # Для Python 3.14 используем специальный обработчик статических файлов
+        @api_app.get("/{full_path:path}")
+        async def serve_static(full_path: str):
+            """Обслуживает статические файлы вручную (обход бага anyio)"""
+            import os.path
+            
+            # Безопасные пути
+            if '..' in full_path or full_path.startswith('/'):
+                return JSONResponse(status_code=404, content={"error": "Not found"})
+            
+            # Определяем путь к файлу
+            file_path = os.path.join(MINIAPP_PATH, full_path)
+            
+            # Если путь заканчивается на / или не указан файл, ищем index.html
+            if full_path == "" or full_path.endswith('/') or not os.path.exists(file_path):
+                index_path = os.path.join(file_path if os.path.isdir(file_path) else MINIAPP_PATH, 'index.html')
+                if os.path.exists(index_path):
+                    return FileResponse(index_path)
+                return JSONResponse(status_code=404, content={"error": "Not found"})
+            
+            # Проверяем существование файла
+            if os.path.exists(file_path) and os.path.isfile(file_path):
+                return FileResponse(file_path)
+            
+            return JSONResponse(status_code=404, content={"error": "Not found"})
+        
+        # Корневой маршрут
+        @api_app.get("/")
+        async def serve_root():
+            index_path = os.path.join(MINIAPP_PATH, "index.html")
+            if os.path.exists(index_path):
+                return FileResponse(index_path)
+            return JSONResponse({
+                "status": "ok",
+                "message": "API работает, мини-приложение в разработке"
+            })
+        
+        logger.info(f"✅ Статические файлы подключены из {MINIAPP_PATH} (ручной режим)")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при подключении статических файлов: {e}")
+        
+        @api_app.get("/")
+        async def error_handler():
+            return JSONResponse({
+                "status": "error",
+                "message": f"Ошибка статических файлов: {e}"
+            })
 else:
-    logger.error(f"❌ Папка {MINIAPP_PATH} не найдена")
+    logger.warning(f"⚠️ Папка {MINIAPP_PATH} не найдена")
     
     @api_app.get("/")
-    async def error_no_miniapp():
-        return JSONResponse(
-            status_code=404,
-            content={"error": "Папка miniapp не найдена"}
-        )
+    async def no_miniapp():
+        return JSONResponse({
+            "status": "ok",
+            "message": "API работает, папка miniapp не найдена"
+        })
 
 # ============================================
 # API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
