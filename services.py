@@ -2,17 +2,17 @@
 # -*- coding: utf-8 -*-
 """
 Сервисные функции для работы с API и генерации ответов
-Версия 9.7.0 - ИСПРАВЛЕНО: Глобальная сессия aiohttp для всех API
+Версия 9.8.0 - ИСПРАВЛЕНО: Замена aiohttp на httpx для Python 3.14
 """
 
 import os
 import json
 import logging
-import aiohttp
 import asyncio
 import re
 import sys
 import traceback
+import httpx  # <--- ЗАМЕНЯЕМ aiohttp на httpx
 from typing import Optional, Dict, List, Any, Tuple
 from datetime import datetime
 
@@ -29,71 +29,55 @@ from config import (
 logger = logging.getLogger(__name__)
 
 
-# ========== ГЛОБАЛЬНАЯ СЕССИЯ ДЛЯ ВСЕХ API ==========
-_global_session = None
-_session_lock = asyncio.Lock()
-_session_loop = None
+# ========== ГЛОБАЛЬНЫЙ КЛИЕНТ ДЛЯ HTTPX ==========
+_http_client = None
+_client_lock = asyncio.Lock()
 
-async def get_global_session():
-    """
-    Возвращает глобальную сессию aiohttp для всех API-вызовов
-    Сессия создаётся один раз и используется во всём приложении
-    """
-    global _global_session, _session_loop
-    
-    # Сохраняем цикл, в котором создана сессия
-    current_loop = asyncio.get_running_loop()
-    
-    if _global_session is None or _global_session.closed or _session_loop != current_loop:
-        async with _session_lock:
-            if _global_session is None or _global_session.closed or _session_loop != current_loop:
-                logger.info("🔄 Создаём новую глобальную сессию aiohttp")
+async def get_http_client():
+    """Возвращает глобальный HTTPX клиент для всех API-вызовов"""
+    global _http_client
+    if _http_client is None:
+        async with _client_lock:
+            if _http_client is None:
+                logger.info("🔄 Создаём новый глобальный HTTPX клиент")
                 
-                # Закрываем старую сессию если есть
-                if _global_session and not _global_session.closed:
-                    await _global_session.close()
-                
-                # Создаём коннектор с оптимальными настройками
-                connector = aiohttp.TCPConnector(
-                    force_close=False,  # Не закрываем соединения после каждого запроса
-                    limit=100,          # Максимум 100 одновременных соединений
-                    limit_per_host=20,  # Максимум 20 соединений на один хост
-                    ttl_dns_cache=300,  # Кэш DNS на 5 минут
-                    use_dns_cache=True,
-                    ssl=False
+                # Настройки лимитов соединений
+                limits = httpx.Limits(
+                    max_keepalive_connections=20,
+                    max_connections=100,
+                    keepalive_expiry=30
                 )
                 
-                # Создаём таймаут
-                timeout = aiohttp.ClientTimeout(
-                    total=60,           # Общий таймаут 60 секунд
-                    connect=10,         # Таймаут подключения 10 секунд
-                    sock_read=30        # Таймаут чтения сокета 30 секунд
+                # Настройки таймаутов
+                timeouts = httpx.Timeout(
+                    connect=30.0,    # 30 секунд на подключение
+                    read=60.0,       # 60 секунд на чтение
+                    write=30.0,      # 30 секунд на запись
+                    pool=None
                 )
                 
-                # Создаём сессию
-                _global_session = aiohttp.ClientSession(
-                    connector=connector,
-                    timeout=timeout
+                # Создаём клиент
+                _http_client = httpx.AsyncClient(
+                    limits=limits,
+                    timeout=timeouts,
+                    follow_redirects=True
                 )
-                _session_loop = current_loop
-                logger.info("✅ Глобальная сессия создана")
-    
-    return _global_session
+                logger.info("✅ Глобальный HTTPX клиент создан")
+    return _http_client
 
 
-async def close_global_session():
-    """Закрывает глобальную сессию при завершении работы"""
-    global _global_session
-    if _global_session and not _global_session.closed:
-        logger.info("🔒 Закрываем глобальную сессию aiohttp")
-        await _global_session.close()
-        _global_session = None
-        _session_loop = None
-# =====================================================
+async def close_http_client():
+    """Закрывает глобальный HTTPX клиент при завершении работы"""
+    global _http_client
+    if _http_client:
+        logger.info("🔒 Закрываем глобальный HTTPX клиент")
+        await _http_client.aclose()
+        _http_client = None
+# =================================================
 
 
 # ============================================
-# ФУНКЦИИ ДЛЯ ФОРМАТИРОВАНИЯ (дублируем для независимости)
+# ФУНКЦИИ ДЛЯ ФОРМАТИРОВАНИЯ
 # ============================================
 
 def bold(text: str) -> str:
@@ -129,19 +113,25 @@ def make_json_serializable(obj):
         return make_json_serializable(obj.to_dict())
     if hasattr(obj, '__dict__'):
         return make_json_serializable(obj.__dict__)
-    # Если ничего не подходит, преобразуем в строку
     return str(obj)
 
 
 # ============================================
-# DEEPSEEK API (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+# DEEPSEEK API (С ИСПОЛЬЗОВАНИЕМ HTTPX)
 # ============================================
 
-async def call_deepseek(prompt: str, system_prompt: str = None, max_tokens: int = 1000, temperature: float = 0.7, retry_count: int = 2) -> Optional[str]:
+async def call_deepseek(
+    prompt: str,
+    system_prompt: str = None,
+    max_tokens: int = 1000,
+    temperature: float = 0.7,
+    retries: int = 3
+) -> Optional[str]:
     """
-    Универсальная функция вызова DeepSeek API с повторными попытками
+    Вызов DeepSeek API с использованием httpx
+    httpx не имеет проблем с таймаутами в Python 3.14
     """
-    logger.info(f"📞 Вызов DeepSeek API")
+    logger.info(f"📞 Вызов DeepSeek API (httpx)")
     logger.info(f"📏 Длина промпта: {len(prompt)} символов")
     logger.info(f"🎯 max_tokens: {max_tokens}, temperature: {temperature}")
     
@@ -172,92 +162,201 @@ async def call_deepseek(prompt: str, system_prompt: str = None, max_tokens: int 
     
     logger.info(f"📦 Payload размер: {len(str(payload))} символов")
     
-    for attempt in range(retry_count + 1):
+    for attempt in range(retries):
         try:
-            logger.info(f"🔄 Попытка {attempt + 1}/{retry_count + 1}")
+            logger.info(f"🔄 Попытка {attempt + 1}/{retries}")
             start_time = datetime.now()
             
-            # Используем глобальную сессию
-            session = await get_global_session()
+            # Используем глобальный HTTPX клиент
+            client = await get_http_client()
             
-            async with session.post(
-                DEEPSEEK_API_URL, 
-                headers=headers, 
+            response = await client.post(
+                DEEPSEEK_API_URL,
+                headers=headers,
                 json=payload
-            ) as response:
-                elapsed = (datetime.now() - start_time).total_seconds()
-                logger.info(f"⏱️ Время ответа: {elapsed:.2f} сек, статус: {response.status}")
-                
-                # Получаем текст ответа
-                response_text = await response.text()
-                logger.info(f"📄 Получен ответ, длина: {len(response_text)} символов")
-                
-                if response.status == 200:
-                    try:
-                        data = json.loads(response_text)
-                        logger.info(f"✅ JSON распарсен, структура: {list(data.keys())}")
-                        
-                        # Проверяем структуру ответа
-                        if 'choices' in data and len(data['choices']) > 0:
-                            logger.info(f"✅ Найдены choices, количество: {len(data['choices'])}")
-                            
-                            if 'message' in data['choices'][0]:
-                                logger.info(f"✅ Найден message в первом choice")
-                                
-                                if 'content' in data['choices'][0]['message']:
-                                    content = data['choices'][0]['message']['content'].strip()
-                                    logger.info(f"✅ Найден content, длина: {len(content)} символов")
-                                    
-                                    if content:
-                                        logger.info(f"✅ Возвращаем ответ пользователю")
-                                        return content
-                                    else:
-                                        logger.error("❌ Content пустой")
-                                else:
-                                    logger.error(f"❌ Нет content в message: {data['choices'][0]['message'].keys()}")
-                            else:
-                                logger.error(f"❌ Нет message в choices[0]: {data['choices'][0].keys()}")
-                        else:
-                            logger.error(f"❌ Нет choices в ответе: {data.keys()}")
-                    except json.JSONDecodeError as e:
-                        logger.error(f"❌ Ошибка парсинга JSON: {e}")
-                        logger.error(f"❌ Текст ответа: {response_text[:500]}")
-                else:
-                    logger.error(f"❌ DeepSeek API error {response.status}: {response_text[:500]}")
-                
-                # Если дошли сюда, что-то пошло не так
-                if attempt < retry_count:
-                    wait_time = 2 ** attempt
-                    logger.info(f"🔄 Повторная попытка {attempt + 1}/{retry_count} через {wait_time}с...")
-                    await asyncio.sleep(wait_time)
-                    continue
-                return None
-                        
-        except asyncio.TimeoutError:
-            logger.error(f"❌ DeepSeek API timeout (попытка {attempt + 1}/{retry_count + 1})")
-            if attempt < retry_count:
-                wait_time = 2 ** attempt
-                logger.info(f"🔄 Повтор через {wait_time}с...")
-                await asyncio.sleep(wait_time)
-                continue
-            return None
+            )
             
+            elapsed = (datetime.now() - start_time).total_seconds()
+            logger.info(f"⏱️ Время ответа: {elapsed:.2f} сек, статус: {response.status_code}")
+            
+            response_text = response.text
+            logger.info(f"📄 Получен ответ, длина: {len(response_text)} символов")
+            
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    logger.info(f"✅ JSON распарсен, структура: {list(data.keys())}")
+                    
+                    if 'choices' in data and len(data['choices']) > 0:
+                        logger.info(f"✅ Найдены choices, количество: {len(data['choices'])}")
+                        
+                        if 'message' in data['choices'][0]:
+                            logger.info(f"✅ Найден message в первом choice")
+                            
+                            if 'content' in data['choices'][0]['message']:
+                                content = data['choices'][0]['message']['content'].strip()
+                                logger.info(f"✅ Найден content, длина: {len(content)} символов")
+                                
+                                if content:
+                                    logger.info(f"✅ Возвращаем ответ пользователю")
+                                    return content
+                                else:
+                                    logger.error("❌ Content пустой")
+                            else:
+                                logger.error(f"❌ Нет content в message: {data['choices'][0]['message'].keys()}")
+                        else:
+                            logger.error(f"❌ Нет message в choices[0]: {data['choices'][0].keys()}")
+                    else:
+                        logger.error(f"❌ Нет choices в ответе: {data.keys()}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ Ошибка парсинга JSON: {e}")
+                    logger.error(f"❌ Текст ответа: {response_text[:500]}")
+            else:
+                logger.error(f"❌ DeepSeek API error {response.status_code}: {response_text[:500]}")
+            
+        except httpx.TimeoutException as e:
+            logger.error(f"❌ DeepSeek API timeout (попытка {attempt + 1}): {e}")
+        except httpx.HTTPStatusError as e:
+            logger.error(f"❌ DeepSeek API HTTP error (попытка {attempt + 1}): {e}")
         except Exception as e:
             logger.error(f"❌ DeepSeek API exception (попытка {attempt + 1}): {e}")
             logger.error(traceback.format_exc())
-            if attempt < retry_count:
-                wait_time = 2 ** attempt
-                logger.info(f"🔄 Повтор через {wait_time}с...")
-                await asyncio.sleep(wait_time)
-                continue
-            return None
+        
+        if attempt < retries - 1:
+            wait_time = 2 ** attempt
+            logger.info(f"🔄 Повтор через {wait_time}с...")
+            await asyncio.sleep(wait_time)
     
     logger.error("❌ Все попытки вызова DeepSeek API исчерпаны")
     return None
 
 
 # ============================================
-# ГЕНЕРАЦИЯ ПСИХОЛОГИЧЕСКОГО ПОРТРЕТА (ПОЛНЫЙ ПРОМТ)
+# DEEPGRAM API (РАСПОЗНАВАНИЕ РЕЧИ)
+# ============================================
+
+async def speech_to_text(audio_file_path: str) -> Optional[str]:
+    """
+    Распознает речь из аудиофайла через Deepgram API
+    """
+    if not DEEPGRAM_API_KEY:
+        logger.error("❌ DEEPGRAM_API_KEY не настроен")
+        return None
+    
+    logger.info(f"🎤 Распознавание речи из файла: {audio_file_path}")
+    
+    headers = {
+        "Authorization": f"Token {DEEPGRAM_API_KEY}",
+        "Content-Type": "audio/ogg"
+    }
+    
+    params = {
+        "model": "nova-2",
+        "language": "ru",
+        "punctuate": True,
+        "diarize": False,
+        "smart_format": True
+    }
+    
+    try:
+        with open(audio_file_path, 'rb') as audio_file:
+            audio_data = audio_file.read()
+        
+        logger.info(f"📊 Размер аудиофайла: {len(audio_data)} байт")
+        
+        # Используем глобальный HTTPX клиент
+        client = await get_http_client()
+        
+        response = await client.post(
+            DEEPGRAM_API_URL,
+            headers=headers,
+            params=params,
+            content=audio_data
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            transcript = data['results']['channels'][0]['alternatives'][0]['transcript']
+            logger.info(f"✅ Речь распознана: {len(transcript)} символов")
+            return transcript
+        else:
+            logger.error(f"❌ Deepgram API error {response.status_code}: {response.text[:200]}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка распознавания речи: {e}")
+        logger.error(traceback.format_exc())
+        return None
+
+
+# ============================================
+# YANDEX TTS (СИНТЕЗ РЕЧИ)
+# ============================================
+
+async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
+    """
+    Преобразует текст в речь через Yandex TTS
+    """
+    if not YANDEX_API_KEY:
+        logger.error("❌ YANDEX_API_KEY не настроен")
+        return None
+    
+    logger.info(f"🎤 Синтез речи для текста: {len(text)} символов, режим: {mode}")
+    
+    voices = {
+        "coach": "filipp",
+        "psychologist": "ermil",
+        "trainer": "filipp"
+    }
+    voice = voices.get(mode, "filipp")
+    logger.info(f"🗣️ Выбран голос: {voice}")
+    
+    headers = {
+        "Authorization": f"Api-Key {YANDEX_API_KEY}",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    
+    # Ограничиваем длину текста (Yandex ограничение)
+    original_length = len(text)
+    if len(text) > 5000:
+        text = text[:5000] + "..."
+        logger.warning(f"⚠️ Текст обрезан с {original_length} до 5000 символов")
+    
+    data = {
+        "text": text,
+        "lang": "ru-RU",
+        "voice": voice,
+        "emotion": "neutral",
+        "speed": 1.0,
+        "format": "oggopus"
+    }
+    
+    try:
+        # Используем глобальный HTTPX клиент
+        client = await get_http_client()
+        
+        response = await client.post(
+            YANDEX_TTS_API_URL,
+            headers=headers,
+            data=data
+        )
+        
+        if response.status_code == 200:
+            audio_data = response.content
+            logger.info(f"✅ Речь синтезирована: {len(audio_data)} байт")
+            return audio_data
+        else:
+            logger.error(f"❌ Yandex TTS API error {response.status_code}: {response.text[:200]}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка синтеза речи: {e}")
+        logger.error(traceback.format_exc())
+        return None
+
+
+# ============================================
+# ГЕНЕРАЦИЯ ПСИХОЛОГИЧЕСКОГО ПОРТРЕТА
 # ============================================
 
 async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
@@ -454,7 +553,7 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
 
 
 # ============================================
-# ГЕНЕРАЦИЯ МЫСЛЕЙ ПСИХОЛОГА (ПОЛНЫЙ ПРОМТ)
+# ГЕНЕРАЦИЯ МЫСЛЕЙ ПСИХОЛОГА
 # ============================================
 
 async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[str]:
@@ -568,7 +667,7 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
 
 
 # ============================================
-# ГЕНЕРАЦИЯ МАРШРУТА (ПОЛНЫЙ ПРОМТ)
+# ГЕНЕРАЦИЯ МАРШРУТА
 # ============================================
 
 async def generate_route_ai(user_id: int, data: dict, goal: dict) -> Optional[Dict]:
@@ -697,7 +796,7 @@ async def generate_route_ai(user_id: int, data: dict, goal: dict) -> Optional[Di
         logger.info(f"✅ Маршрут сгенерирован ({len(response)} символов)")
         return {
             "full_text": response,
-            "steps": response.split("\n\n")  # Простое разбиение, можно улучшить
+            "steps": response.split("\n\n")
         }
     else:
         logger.error("❌ Не удалось сгенерировать маршрут")
@@ -705,7 +804,7 @@ async def generate_route_ai(user_id: int, data: dict, goal: dict) -> Optional[Di
 
 
 # ============================================
-# ГЕНЕРАЦИЯ ОТВЕТА НА ВОПРОС (ПОЛНЫЙ ПРОМТ)
+# ГЕНЕРАЦИЯ ОТВЕТА НА ВОПРОС
 # ============================================
 
 async def generate_response_with_full_context(
@@ -791,7 +890,7 @@ async def generate_response_with_full_context(
     
     history_text = ""
     if history and len(history) > 0:
-        last_messages = history[-6:]  # последние 3 диалога (вопрос-ответ)
+        last_messages = history[-6:]
         history_text = "\n".join([
             f"{'🤖' if i%2==0 else '👤'}: {msg[:100]}..." 
             for i, msg in enumerate(last_messages)
@@ -897,153 +996,21 @@ async def generate_suggestions(question: str, answer: str, profile_code: str, mo
 
 
 # ============================================
-# РАСПОЗНАВАНИЕ РЕЧИ (DEEPGRAM)
-# ============================================
-
-async def speech_to_text(audio_file_path: str) -> Optional[str]:
-    """
-    Распознает речь из аудиофайла через Deepgram API
-    """
-    if not DEEPGRAM_API_KEY:
-        logger.error("❌ DEEPGRAM_API_KEY не настроен")
-        return None
-    
-    logger.info(f"🎤 Распознавание речи из файла: {audio_file_path}")
-    
-    headers = {
-        "Authorization": f"Token {DEEPGRAM_API_KEY}",
-        "Content-Type": "audio/ogg"
-    }
-    
-    try:
-        with open(audio_file_path, 'rb') as audio_file:
-            audio_data = audio_file.read()
-        
-        logger.info(f"📊 Размер аудиофайла: {len(audio_data)} байт")
-        
-        params = {
-            "model": "nova-2",
-            "language": "ru",
-            "punctuate": True,
-            "diarize": False,
-            "smart_format": True
-        }
-        
-        # Используем глобальную сессию
-        session = await get_global_session()
-        
-        async with session.post(
-            DEEPGRAM_API_URL,
-            headers=headers,
-            params=params,
-            data=audio_data
-        ) as response:
-            if response.status == 200:
-                data = await response.json()
-                transcript = data['results']['channels'][0]['alternatives'][0]['transcript']
-                logger.info(f"✅ Речь распознана: {len(transcript)} символов")
-                return transcript
-            else:
-                error_text = await response.text()
-                logger.error(f"❌ Deepgram API error {response.status}: {error_text[:200]}")
-                return None
-    except Exception as e:
-        logger.error(f"❌ Ошибка распознавания речи: {e}")
-        logger.error(traceback.format_exc())
-        return None
-
-
-# ============================================
-# СИНТЕЗ РЕЧИ (YANDEX)
-# ============================================
-
-async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
-    """
-    Преобразует текст в речь через Yandex TTS
-    """
-    if not YANDEX_API_KEY:
-        logger.error("❌ YANDEX_API_KEY не настроен")
-        return None
-    
-    logger.info(f"🎤 Синтез речи для текста: {len(text)} символов, режим: {mode}")
-    
-    # Выбираем голос в зависимости от режима
-    voices = {
-        "coach": "filipp",      # Филипп — коуч
-        "psychologist": "ermil", # Эрмил — психолог
-        "trainer": "filipp"      # Филипп — тренер (можно другой голос)
-    }
-    voice = voices.get(mode, "filipp")
-    logger.info(f"🗣️ Выбран голос: {voice}")
-    
-    headers = {
-        "Authorization": f"Api-Key {YANDEX_API_KEY}",
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
-    
-    # Ограничиваем длину текста (Yandex ограничение)
-    original_length = len(text)
-    if len(text) > 5000:
-        text = text[:5000] + "..."
-        logger.warning(f"⚠️ Текст обрезан с {original_length} до 5000 символов")
-    
-    data = {
-        "text": text,
-        "lang": "ru-RU",
-        "voice": voice,
-        "emotion": "neutral",
-        "speed": 1.0,
-        "format": "oggopus"
-    }
-    
-    try:
-        # Используем глобальную сессию
-        session = await get_global_session()
-        
-        async with session.post(
-            YANDEX_TTS_API_URL,
-            headers=headers,
-            data=data
-        ) as response:
-            if response.status == 200:
-                audio_data = await response.read()
-                logger.info(f"✅ Речь синтезирована: {len(audio_data)} байт")
-                return audio_data
-            else:
-                error_text = await response.text()
-                logger.error(f"❌ Yandex TTS API error {response.status}: {error_text[:200]}")
-                return None
-    except Exception as e:
-        logger.error(f"❌ Ошибка синтеза речи: {e}")
-        logger.error(traceback.format_exc())
-        return None
-
-
-# ============================================
-# ЭКСПОРТ ВСЕХ ФУНКЦИЙ
+# ЭКСПОРТ
 # ============================================
 
 __all__ = [
-    # Основные функции
     'generate_ai_profile',
     'generate_psychologist_thought',
     'generate_route_ai',
     'generate_response_with_full_context',
     'generate_suggestions',
-    
-    # Функции API
     'call_deepseek',
-    
-    # Функции для речи
     'speech_to_text',
     'text_to_speech',
-    
-    # Форматтеры
     'bold',
     'italic',
     'emoji_text',
-    
-    # Вспомогательные
     'make_json_serializable',
-    'close_global_session'
+    'close_http_client'  # <--- Добавлено для закрытия в shutdown_handler
 ]
