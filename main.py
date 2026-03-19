@@ -6,7 +6,7 @@
 ИСПРАВЛЕНО: Все патчи для Python 3.14, anyio, sniffio, PostgreSQL
 ИСПРАВЛЕНО: Корневой маршрут теперь возвращает JSON (обходит баг anyio)
 ИСПРАВЛЕНО: Дополнительный патч для anyio.to_thread
-ИСПРАВЛЕНО: Бот продолжает работу даже при ошибке БД (не вызывает sys.exit)
+ИСПРАВЛЕНО: Правильный порядок инициализации FastAPI и БД
 """
 
 # ========== КРИТИЧЕСКИЕ ПАТЧИ ДЛЯ PYTHON 3.14 ==========
@@ -290,6 +290,7 @@ async def init_database():
         
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации БД: {e}")
+        raise  # Пробрасываем исключение дальше
 
 async def load_all_users_from_db():
     """Загружает всех пользователей из БД в словари памяти"""
@@ -2209,18 +2210,38 @@ def main():
     
     logger.info("🚀 Бот для MAX запущен!")
     
-    # Создаем новый event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    # Создаем новый event loop для основного потока
+    main_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(main_loop)
     
-    # ===== ИСПРАВЛЕНО: Бот продолжает работу даже при ошибке БД =====
-    try:
-        loop.run_until_complete(init_database())
-    except Exception as e:
-        logger.error(f"❌ Ошибка при инициализации БД: {e}")
-        logger.warning("⚠️ Продолжаем работу БЕЗ PostgreSQL (только память)")
-        # НЕ ВЫХОДИМ!
-    # =================================================================
+    # ===== ЗАПУСКАЕМ FASTAPI В ПЕРВУЮ ОЧЕРЕДЬ =====
+    # FastAPI создаст свой асинхронный контекст для статических файлов
+    api_thread = threading.Thread(target=run_fastapi, daemon=True)
+    api_thread.start()
+    logger.info("✅ FastAPI сервер запущен")
+    
+    # Даем FastAPI время на инициализацию
+    import time
+    time.sleep(2)
+    logger.info("✅ FastAPI инициализирован, продолжаем загрузку...")
+    
+    # ===== ТЕПЕРЬ ИНИЦИАЛИЗИРУЕМ БАЗУ ДАННЫХ В ОТДЕЛЬНОМ ПОТОКЕ =====
+    def run_db_initialization():
+        """Инициализация БД в отдельном потоке со своим циклом событий"""
+        db_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(db_loop)
+        try:
+            db_loop.run_until_complete(init_database())
+            logger.info("✅ База данных инициализирована")
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации БД: {e}")
+            # Не выходим, продолжаем работу
+    
+    db_thread = threading.Thread(target=run_db_initialization, daemon=True)
+    db_thread.start()
+    
+    # Даем БД время на инициализацию
+    time.sleep(1)
     
     # Запускаем планировщик
     scheduler.start()
@@ -2228,11 +2249,6 @@ def main():
     # Запускаем асинхронные задачи в отдельном потоке
     async_thread = threading.Thread(target=run_async_tasks, daemon=True)
     async_thread.start()
-    
-    # Запускаем FastAPI в отдельном потоке
-    api_thread = threading.Thread(target=run_fastapi, daemon=True)
-    api_thread.start()
-    logger.info("✅ FastAPI сервер запущен")
     
     # Добавляем обработчик сигналов для корректного завершения
     try:
@@ -2242,7 +2258,7 @@ def main():
             asyncio.create_task(shutdown_handler())
         
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, signal_handler)
+            main_loop.add_signal_handler(sig, signal_handler)
     except (ImportError, NotImplementedError, AttributeError) as e:
         logger.warning(f"⚠️ Не удалось установить обработчик сигналов: {e}")
     
@@ -2257,7 +2273,7 @@ def main():
             except KeyboardInterrupt:
                 logger.info("👋 Бот остановлен пользователем")
                 # Сохраняем данные перед выходом
-                loop.run_until_complete(shutdown_handler())
+                main_loop.run_until_complete(shutdown_handler())
                 break
             except Exception as e:
                 retry_count += 1
@@ -2270,7 +2286,7 @@ def main():
                 else:
                     logger.error("❌ Превышено количество попыток")
                     # Сохраняем данные перед выходом
-                    loop.run_until_complete(shutdown_handler())
+                    main_loop.run_until_complete(shutdown_handler())
     finally:
         cleanup_resources()
 
