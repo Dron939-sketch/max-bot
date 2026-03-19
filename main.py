@@ -400,8 +400,16 @@ async def serve_js():
         return FileResponse(js_path)
     return JSONResponse(status_code=404, content={"error": "script.js not found"})
 
+@api_app.get("/api.js")
+async def serve_api_js():
+    """JavaScript API слой мини-приложения"""
+    js_path = os.path.join(MINIAPP_PATH, 'api.js')
+    if os.path.exists(js_path):
+        return FileResponse(js_path)
+    return JSONResponse(status_code=404, content={"error": "api.js not found"})
+
 # ============================================
-# НОВЫЕ ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
+# СУЩЕСТВУЮЩИЕ ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
 # ============================================
 
 @api_app.post("/api/save-profile")
@@ -789,6 +797,501 @@ async def get_ideas(user_id: int):
 async def health_check():
     """Health check для Render (FastAPI)"""
     return {"status": "ok"}
+
+# ============================================
+# НОВЫЕ ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ (ЧАТ И ТЕСТЫ)
+# ============================================
+
+@api_app.get("/api/chat/history")
+async def get_chat_history(user_id: int, limit: int = 50):
+    """Возвращает историю чата пользователя"""
+    try:
+        user_id = int(user_id)
+        
+        # Здесь можно получать из БД, если сохраняете историю
+        # Пока возвращаем пустую историю - приветствие покажет script.js
+        return JSONResponse({
+            "success": True,
+            "history": []
+        })
+    except Exception as e:
+        logger.error(f"❌ Error in get_chat_history: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e), "history": []}
+        )
+
+@api_app.post("/api/chat/message")
+async def chat_message(request: Request):
+    """Отправляет сообщение боту и получает ответ"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        message_text = data.get('message')
+        mode = data.get('mode')
+        
+        if not user_id or not message_text:
+            raise HTTPException(status_code=400, detail="user_id and message required")
+        
+        user_id = int(user_id)
+        
+        # Получаем контекст пользователя
+        if user_id not in user_contexts:
+            user_contexts[user_id] = UserContext(user_id)
+        
+        context = user_contexts[user_id]
+        
+        # Устанавливаем режим, если передан
+        if mode and mode in COMMUNICATION_MODES:
+            context.communication_mode = mode
+        
+        # Получаем данные пользователя
+        user_info = user_data.get(user_id, {})
+        
+        # Анализируем вопрос (если это вопрос)
+        from question_analyzer import QuestionAnalyzer
+        analyzer = QuestionAnalyzer(user_id, user_info)
+        analysis = await analyzer.analyze_question_async(message_text)
+        
+        # Генерируем ответ через DeepSeek
+        from services import call_deepseek_with_context
+        
+        # Формируем промпт с учетом контекста и профиля
+        system_prompt = f"Ты психолог Фреди. Режим: {context.communication_mode}. "
+        
+        if context.name:
+            system_prompt += f"Имя пользователя: {context.name}. "
+        
+        if user_info.get('perception_type'):
+            system_prompt += f"Тип восприятия: {user_info['perception_type']}. "
+        
+        if user_info.get('thinking_level'):
+            system_prompt += f"Уровень мышления: {user_info['thinking_level']}/9. "
+        
+        if analysis:
+            system_prompt += f"Анализ вопроса: {analysis.get('analysis', '')}. "
+        
+        # Вызываем DeepSeek
+        response = await call_deepseek_with_context(
+            user_id=user_id,
+            user_message=message_text,
+            context=context,
+            mode=context.communication_mode,
+            profile_data=user_info
+        )
+        
+        if not response:
+            response = "Я понял ваш запрос. Дайте подумать..."
+        
+        # Определяем, нужно ли показать кнопки
+        buttons = None
+        text_lower = response.lower()
+        
+        if any(word in text_lower for word in ['тест', 'пройди', 'этап']):
+            buttons = [
+                {"text": "🧠 Пройти тест", "action": "start_test"},
+                {"text": "📊 Мой портрет", "action": "show_profile"}
+            ]
+        elif any(word in text_lower for word in ['профиль', 'портрет', 'результат']):
+            buttons = [
+                {"text": "📊 Посмотреть", "action": "show_profile"},
+                {"text": "🧠 Мысли", "action": "show_thoughts"}
+            ]
+        elif any(word in text_lower for word in ['выходные', 'идеи', 'план']):
+            buttons = [
+                {"text": "🎯 Идеи", "action": "show_weekend"},
+                {"text": "📊 В профиль", "action": "show_profile"}
+            ]
+        
+        return JSONResponse({
+            "success": True,
+            "response": response,
+            "mode": context.communication_mode,
+            "analysis": analysis,
+            "buttons": buttons
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in chat_message: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False, 
+                "error": str(e),
+                "response": "Произошла ошибка. Попробуйте еще раз."
+            }
+        )
+
+@api_app.post("/api/chat/action")
+async def chat_action(request: Request):
+    """Обрабатывает нажатия на кнопки"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        action = data.get('action')
+        action_data = data.get('data', {})
+        
+        if not user_id or not action:
+            raise HTTPException(status_code=400, detail="user_id and action required")
+        
+        user_id = int(user_id)
+        
+        # Обрабатываем различные действия
+        if action == "start_test":
+            return JSONResponse({
+                "success": True,
+                "action": action,
+                "data": {
+                    "stage": 1,
+                    "question_index": 0,
+                    "message": "Начинаем тест. Этап 1: Тип восприятия"
+                }
+            })
+            
+        elif action == "show_profile":
+            profile_data = await get_profile(user_id)
+            return JSONResponse({
+                "success": True,
+                "action": action,
+                "data": profile_data
+            })
+            
+        elif action == "show_thoughts":
+            thoughts = await get_thought(user_id)
+            return JSONResponse({
+                "success": True,
+                "action": action,
+                "data": thoughts
+            })
+            
+        elif action == "show_weekend":
+            ideas = await get_ideas(user_id)
+            return JSONResponse({
+                "success": True,
+                "action": action,
+                "data": ideas
+            })
+            
+        elif action == "ask_question":
+            return JSONResponse({
+                "success": True,
+                "action": action,
+                "data": {"message": "Задайте ваш вопрос"}
+            })
+        
+        return JSONResponse({"success": True, "action": action})
+        
+    except Exception as e:
+        logger.error(f"❌ Error in chat_action: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+@api_app.get("/api/test/question")
+async def get_test_question(user_id: int, stage: int, index: int):
+    """Возвращает вопрос теста"""
+    try:
+        user_id = int(user_id)
+        stage = int(stage)
+        index = int(index)
+        
+        # Определяем общее количество вопросов для этапа
+        stage_questions_count = {
+            1: 4,  # Тип восприятия
+            2: 6,  # Уровень мышления
+            3: 24, # Поведенческие уровни (4 вектора × 6)
+            4: 12, # Уровни Дилтса
+            5: 8   # Глубинные паттерны
+        }
+        
+        total = stage_questions_count.get(stage, 4)
+        
+        # Вопросы для этапа 1 (Тип восприятия)
+        stage1_questions = [
+            {
+                "text": "Как вы обычно воспринимаете новую информацию?",
+                "options": [
+                    {"id": "A", "text": "Через визуальные образы и картинки", "value": "visual"},
+                    {"id": "B", "text": "Через ощущения и телесный опыт", "value": "kinesthetic"},
+                    {"id": "C", "text": "Через логические схемы и структуры", "value": "auditory"},
+                    {"id": "D", "text": "Через интуицию и общее впечатление", "value": "digital"}
+                ]
+            },
+            {
+                "text": "Что для вас важнее при принятии решения?",
+                "options": [
+                    {"id": "A", "text": "Как это будет выглядеть", "value": "visual"},
+                    {"id": "B", "text": "Что я чувствую по этому поводу", "value": "kinesthetic"},
+                    {"id": "C", "text": "Логика и факты", "value": "auditory"},
+                    {"id": "D", "text": "Общая картина и смысл", "value": "digital"}
+                ]
+            },
+            {
+                "text": "Как вы лучше запоминаете?",
+                "options": [
+                    {"id": "A", "text": "Когда вижу схему или изображение", "value": "visual"},
+                    {"id": "B", "text": "Когда записываю или проживаю", "value": "kinesthetic"},
+                    {"id": "C", "text": "Когда проговариваю вслух", "value": "auditory"},
+                    {"id": "D", "text": "Когда понимаю суть", "value": "digital"}
+                ]
+            },
+            {
+                "text": "Что вас вдохновляет?",
+                "options": [
+                    {"id": "A", "text": "Красота и гармония", "value": "visual"},
+                    {"id": "B", "text": "Глубокие переживания", "value": "kinesthetic"},
+                    {"id": "C", "text": "Идеи и концепции", "value": "auditory"},
+                    {"id": "D", "text": "Смысл и предназначение", "value": "digital"}
+                ]
+            }
+        ]
+        
+        # Вопросы для этапа 2 (Уровень мышления)
+        stage2_questions = [
+            {
+                "text": "Я часто анализирую свои мысли и чувства",
+                "options": [
+                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                    {"id": "B", "text": "Скорее не согласен", "value": 2},
+                    {"id": "C", "text": "Нейтрально", "value": 3},
+                    {"id": "D", "text": "Скорее согласен", "value": 4},
+                    {"id": "E", "text": "Полностью согласен", "value": 5}
+                ]
+            },
+            {
+                "text": "Мне важно понимать причины своих поступков",
+                "options": [
+                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                    {"id": "B", "text": "Скорее не согласен", "value": 2},
+                    {"id": "C", "text": "Нейтрально", "value": 3},
+                    {"id": "D", "text": "Скорее согласен", "value": 4},
+                    {"id": "E", "text": "Полностью согласен", "value": 5}
+                ]
+            },
+            {
+                "text": "Я вижу взаимосвязи между разными событиями",
+                "options": [
+                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                    {"id": "B", "text": "Скорее не согласен", "value": 2},
+                    {"id": "C", "text": "Нейтрально", "value": 3},
+                    {"id": "D", "text": "Скорее согласен", "value": 4},
+                    {"id": "E", "text": "Полностью согласен", "value": 5}
+                ]
+            },
+            {
+                "text": "Я задумываюсь о смысле жизни",
+                "options": [
+                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                    {"id": "B", "text": "Скорее не согласен", "value": 2},
+                    {"id": "C", "text": "Нейтрально", "value": 3},
+                    {"id": "D", "text": "Скорее согласен", "value": 4},
+                    {"id": "E", "text": "Полностью согласен", "value": 5}
+                ]
+            },
+            {
+                "text": "Мне интересно изучать новые концепции",
+                "options": [
+                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                    {"id": "B", "text": "Скорее не согласен", "value": 2},
+                    {"id": "C", "text": "Нейтрально", "value": 3},
+                    {"id": "D", "text": "Скорее согласен", "value": 4},
+                    {"id": "E", "text": "Полностью согласен", "value": 5}
+                ]
+            },
+            {
+                "text": "Я замечаю, как меняются мои взгляды со временем",
+                "options": [
+                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                    {"id": "B", "text": "Скорее не согласен", "value": 2},
+                    {"id": "C", "text": "Нейтрально", "value": 3},
+                    {"id": "D", "text": "Скорее согласен", "value": 4},
+                    {"id": "E", "text": "Полностью согласен", "value": 5}
+                ]
+            }
+        ]
+        
+        # Выбираем нужный вопрос
+        if stage == 1 and index < len(stage1_questions):
+            question = stage1_questions[index]
+        elif stage == 2 and index < len(stage2_questions):
+            question = stage2_questions[index]
+        else:
+            # Заглушка для остальных этапов
+            question = {
+                "text": f"Вопрос {index + 1} этапа {stage}",
+                "options": [
+                    {"id": "A", "text": "Вариант А", "value": "A"},
+                    {"id": "B", "text": "Вариант Б", "value": "B"},
+                    {"id": "C", "text": "Вариант В", "value": "C"},
+                    {"id": "D", "text": "Вариант Г", "value": "D"}
+                ]
+            }
+        
+        # Проверяем, отвечал ли пользователь уже на этот вопрос
+        has_answer = False
+        if user_id in user_data:
+            answers = user_data[user_id].get('all_answers', [])
+            for ans in answers:
+                if ans.get('stage') == stage and ans.get('question_index') == index:
+                    has_answer = True
+                    break
+        
+        return JSONResponse({
+            "success": True,
+            "stage": stage,
+            "index": index,
+            "total": total,
+            "text": question["text"],
+            "options": question["options"],
+            "hasAnswer": has_answer
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_test_question: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+@api_app.post("/api/test/answer")
+async def submit_test_answer(request: Request):
+    """Сохраняет ответ на вопрос теста"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        stage = data.get('stage')
+        question_index = data.get('question_index')
+        answer = data.get('answer')
+        option = data.get('option')
+        
+        if not user_id or stage is None or question_index is None or answer is None:
+            raise HTTPException(status_code=400, detail="Missing required fields")
+        
+        user_id = int(user_id)
+        
+        # Сохраняем ответ в user_data
+        if user_id not in user_data:
+            user_data[user_id] = {}
+        
+        if 'all_answers' not in user_data[user_id]:
+            user_data[user_id]['all_answers'] = []
+        
+        # Добавляем ответ
+        answer_record = {
+            'stage': stage,
+            'question_index': question_index,
+            'answer': answer,
+            'option': option,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        user_data[user_id]['all_answers'].append(answer_record)
+        
+        # Сохраняем в специфичное для этапа хранилище
+        stage_key = f'stage{stage}_answers'
+        if stage_key not in user_data[user_id]:
+            user_data[user_id][stage_key] = []
+        user_data[user_id][stage_key].append(answer_record)
+        
+        # Сохраняем в БД
+        asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
+        
+        # Определяем, завершен ли этап
+        stage_questions_count = {
+            1: 4, 2: 6, 3: 24, 4: 12, 5: 8
+        }
+        total = stage_questions_count.get(stage, 4)
+        
+        # Считаем количество ответов на этом этапе
+        stage_answers = [a for a in user_data[user_id].get('all_answers', []) 
+                        if a.get('stage') == stage]
+        stage_complete = len(stage_answers) >= total
+        
+        # Если этап завершен, обновляем прогресс
+        if stage_complete:
+            if stage == 1 and 'perception_type' not in user_data[user_id]:
+                # Определяем тип восприятия (заглушка)
+                user_data[user_id]['perception_type'] = 'visual'
+            elif stage == 2 and 'thinking_level' not in user_data[user_id]:
+                # Определяем уровень мышления (заглушка)
+                user_data[user_id]['thinking_level'] = 5
+            elif stage == 3 and 'behavioral_levels' not in user_data[user_id]:
+                user_data[user_id]['behavioral_levels'] = {
+                    'extraversion': [3,4,3,4,3,4],
+                    'neuroticism': [3,3,3,3,3,3],
+                    'agreeableness': [4,4,4,4,4,4],
+                    'conscientiousness': [4,4,4,4,4,4]
+                }
+            
+            # Обновляем current_stage
+            if stage < 5:
+                user_data[user_id]['current_stage'] = stage + 1
+            else:
+                user_data[user_id]['current_stage'] = 5
+        
+        return JSONResponse({
+            "success": True,
+            "stageComplete": stage_complete
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in submit_test_answer: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+@api_app.get("/api/test/results")
+async def get_test_stage_results(user_id: int, stage: int):
+    """Возвращает результаты этапа теста"""
+    try:
+        user_id = int(user_id)
+        stage = int(stage)
+        data = user_data.get(user_id, {})
+        
+        results = {}
+        
+        if stage == 1:
+            results = {
+                "perception_type": data.get('perception_type', 'не определен'),
+                "answers": data.get('stage1_answers', [])
+            }
+        elif stage == 2:
+            results = {
+                "thinking_level": data.get('thinking_level', 5),
+                "answers": data.get('stage2_answers', [])
+            }
+        elif stage == 3:
+            results = {
+                "behavioral_levels": data.get('behavioral_levels', {}),
+                "answers": data.get('stage3_answers', [])
+            }
+        elif stage == 4:
+            results = {
+                "dilts_counts": data.get('dilts_counts', {}),
+                "answers": data.get('stage4_answers', [])
+            }
+        elif stage == 5:
+            results = {
+                "deep_patterns": data.get('deep_patterns', {}),
+                "answers": data.get('stage5_answers', [])
+            }
+        
+        return JSONResponse({
+            "success": True,
+            "stage": stage,
+            "results": results
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_test_stage_results: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
 
 # ============================================
 # HEALTH CHECK ДЛЯ RENDER (HTTP сервер)
