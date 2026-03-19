@@ -4,10 +4,10 @@
 Модуль для работы с PostgreSQL базой данных бота "Фреди"
 Все таблицы имеют префикс fredi_ для избежания конфликтов
 
-Версия 2.1 - ИСПРАВЛЕНО: Поддержка Python 3.14, добавлены критические патчи для asyncpg
+Версия 2.2 - ИСПРАВЛЕНО: Критический патч для asyncpg в Python 3.14
 """
 
-# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ ASYNCPG В PYTHON 3.14 ==========
+# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ ASYNCPG ==========
 import sys
 import asyncio
 import asyncpg
@@ -27,6 +27,7 @@ async def patched_create_pool(*args, **kwargs):
     # Получаем или создаем цикл событий
     try:
         loop = asyncio.get_running_loop()
+        logger.debug(f"✅ Используем текущий цикл событий: {loop}")
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -40,16 +41,20 @@ async def patched_create_pool(*args, **kwargs):
     # Убеждаемся, что есть таймауты
     if 'timeout' not in kwargs:
         kwargs['timeout'] = 60
+        logger.debug("✅ Добавлен timeout=60")
     if 'command_timeout' not in kwargs:
         kwargs['command_timeout'] = 60
+        logger.debug("✅ Добавлен command_timeout=60")
     
     # Добавляем небольшую задержку для инициализации контекста
     await asyncio.sleep(0.1)
     
     try:
-        return await original_create_pool(*args, **kwargs)
+        result = await original_create_pool(*args, **kwargs)
+        logger.info("✅ Пул соединений успешно создан через патч")
+        return result
     except Exception as e:
-        logger.error(f"❌ Ошибка при создании пула: {e}")
+        logger.error(f"❌ Ошибка при создании пула через патч: {e}")
         raise
 
 # Применяем патч
@@ -91,10 +96,13 @@ class BotDatabase:
                 logger.info("✅ Пул соединений уже существует")
                 return
             
+            logger.info("🔄 Создаём пул соединений к PostgreSQL...")
+            
             # Для Python 3.14 используем явный loop
             if sys.version_info >= (3, 14):
                 try:
                     loop = asyncio.get_running_loop()
+                    logger.debug(f"✅ Используем текущий цикл событий: {loop}")
                 except RuntimeError:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
