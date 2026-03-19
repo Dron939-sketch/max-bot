@@ -3,26 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Фреди · идеальный MAX</title>
+    <title>Фреди · виртуальный психолог</title>
     <link rel="stylesheet" href="стили.css">
-    <!-- Эмодзи-поддержка -->
     <meta name="theme-color" content="#248bf2">
-    <!-- Для идентификации в MAX -->
-    <script src="https://unpkg.com/@vkid/sdk@3.6.0/lib/sdk.min.js"></script>
 </head>
 <body>
     <div class="app" id="app">
-        <!-- ========== ЛЕВАЯ ПАНЕЛЬ: СПИСОК ЧАТОВ (для десктопа) ========== -->
+        <!-- ===== ЛЕВАЯ ПАНЕЛЬ (список чатов) ===== -->
         <div class="chats-panel" id="chatsPanel">
             <div class="chats-header">
                 <div class="chats-title">Мессенджер</div>
-                <button class="new-chat-btn" id="newChatBtn" aria-label="Новый чат">✎</button>
+                <button class="new-chat-btn" id="newChatBtn">✎</button>
             </div>
             <div class="chats-search">
                 <input type="text" placeholder="Поиск" id="chatSearchInput">
             </div>
             <div class="chats-list" id="chatsList">
-                <!-- Активный чат с ботом -->
                 <div class="chat-item active" data-chat="fredi" id="chatFredi">
                     <div class="chat-avatar">
                         <img src="https://ui-avatars.com/api/?name=Ф&background=248bf2&color=fff&size=128" alt="Ф">
@@ -33,44 +29,7 @@
                     </div>
                     <div class="chat-time" id="chatTime">сейчас</div>
                 </div>
-                
-                <!-- Чат "Сохранённые" для заметок и профиля -->
-                <div class="chat-item" data-chat="saved" id="chatSaved">
-                    <div class="chat-avatar saved-avatar">
-                        <img src="https://ui-avatars.com/api/?name=★&background=34c759&color=fff&size=128" alt="★">
-                    </div>
-                    <div class="chat-info">
-                        <div class="chat-name">Сохранённые</div>
-                        <div class="chat-preview">Мой профиль и заметки</div>
-                    </div>
-                    <div class="chat-time" id="savedTime">вчера</div>
-                </div>
-
-                <!-- Чат "Мысли психолога" -->
-                <div class="chat-item" data-chat="thoughts" id="chatThoughts">
-                    <div class="chat-avatar thoughts-avatar">
-                        <img src="https://ui-avatars.com/api/?name=🧠&background=5856d6&color=fff&size=128" alt="🧠">
-                    </div>
-                    <div class="chat-info">
-                        <div class="chat-name">Мысли психолога</div>
-                        <div class="chat-preview">Глубинные инсайты</div>
-                    </div>
-                    <div class="chat-time" id="thoughtsTime"></div>
-                </div>
-
-                <!-- Чат "Идеи на выходные" -->
-                <div class="chat-item" data-chat="weekend" id="chatWeekend">
-                    <div class="chat-avatar weekend-avatar">
-                        <img src="https://ui-avatars.com/api/?name=🎯&background=ff9500&color=fff&size=128" alt="🎯">
-                    </div>
-                    <div class="chat-info">
-                        <div class="chat-name">Идеи на выходные</div>
-                        <div class="chat-preview">Что интересного?</div>
-                    </div>
-                    <div class="chat-time" id="weekendTime"></div>
-                </div>
             </div>
-            
             <div class="chats-footer" id="chatsFooter">
                 <div class="user-mini-profile" id="userMiniProfile">
                     <div class="user-mini-avatar">
@@ -78,234 +37,264 @@
                     </div>
                     <div class="user-mini-info">
                         <div class="user-mini-name" id="userName">Загрузка...</div>
-                        <div class="user-mini-status" id="userStatus">🧠 профиль загружается</div>
+                        <div class="user-mini-status" id="userStatus">🧠 загрузка</div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- ========== ПРАВАЯ ПАНЕЛЬ: ОСНОВНОЙ ЧАТ ========== -->
+        <!-- ===== ПРАВАЯ ПАНЕЛЬ (основной контент) ===== -->
         <div class="chat-panel" id="chatPanel">
-            <!-- Шапка чата -->
-            <div class="chat-header" id="chatHeader">
+            <!-- Шапка -->
+            <div class="chat-header" id="chatHeader" style="display: none;">
                 <div class="chat-header-left">
-                    <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Меню">☰</button>
-                    <div class="chat-header-avatar" id="chatHeaderAvatar">
+                    <button class="mobile-menu-btn" id="mobileMenuBtn">☰</button>
+                    <div class="chat-header-avatar">
                         <img src="https://ui-avatars.com/api/?name=Ф&background=248bf2&color=fff&size=128" alt="Ф">
                     </div>
                     <div class="chat-header-info">
-                        <div class="chat-header-name" id="chatHeaderName">Фреди</div>
-                        <div class="chat-header-status" id="chatHeaderStatus">🧠 психолог · онлайн</div>
+                        <div class="chat-header-name">Фреди</div>
+                        <div class="chat-header-status" id="botStatus">🧠 психолог</div>
                     </div>
                 </div>
                 <div class="chat-header-right">
-                    <button class="header-btn" id="modeBtn" title="Режим общения">🎭</button>
-                    <button class="header-btn" id="profileBtn" title="Мой портрет">📊</button>
-                    <button class="header-btn" id="menuBtn" title="Меню">⋮</button>
+                    <button class="header-btn" id="modeBtn" style="display: none;">🎭</button>
+                    <button class="header-btn" id="profileBtn" style="display: none;">📊</button>
+                    <button class="header-btn" id="menuBtn">⋮</button>
                 </div>
             </div>
 
-            <!-- Область сообщений -->
-            <div class="messages-container" id="messagesContainer">
-                <div id="messagesList" class="messages-list">
-                    <!-- Сообщения будут добавляться сюда через JavaScript -->
-                    
-                    <!-- Пример структуры сообщения (для понимания) -->
-                    <!-- 
-                    <div class="message date-divider">
-                        <span>19 марта 2026</span>
-                    </div>
-                    
-                    <div class="message bot-message" id="msg-1">
-                        <div class="message-avatar">
-                            <img src="https://ui-avatars.com/api/?name=Ф&background=248bf2&color=fff&size=128" alt="Ф">
-                        </div>
-                        <div class="message-bubble">
-                            <div class="message-sender">Фреди</div>
-                            <div class="message-text">
-                                Привет! Я Фреди, твой виртуальный психолог. 👋
-                                
-                                Я помогу тебе разобраться в себе через тест из 5 этапов, 
-                                исследовать глубинные паттерны и найти опоры.
-                                
-                                С чего начнём?
-                            </div>
-                            <div class="message-time">10:00</div>
-                        </div>
-                    </div>
-
-                    <div class="message user-message" id="msg-2">
-                        <div class="message-bubble">
-                            <div class="message-text">Расскажи про тест</div>
-                            <div class="message-time">10:01</div>
-                        </div>
-                    </div>
-
-                    <div class="message bot-message thought-message" id="msg-3">
-                        <div class="message-avatar">
-                            <img src="https://ui-avatars.com/api/?name=🧠&background=5856d6&color=fff&size=128" alt="🧠">
-                        </div>
-                        <div class="message-bubble">
-                            <div class="message-sender">Мысли психолога</div>
-                            <div class="message-text thought-text">
-                                "Интересно, что выбираешь структуру, но боишься её"
-                            </div>
-                            <div class="message-time">10:02</div>
-                        </div>
-                    </div>
-                    -->
-                </div>
-                <div id="messagesEnd"></div>
-            </div>
-
-            <!-- Область с кнопками (инлайн-клавиатура) -->
-            <div class="inline-buttons-container" id="inlineButtonsContainer" style="display: none;">
-                <div class="inline-buttons" id="inlineButtons"></div>
-            </div>
-
-            <!-- Нижняя панель: поле ввода и кнопки -->
-            <div class="input-panel" id="inputPanel">
-                <div class="attach-btn" id="attachBtn" title="Прикрепить">📎</div>
-                <div class="message-input-wrapper">
-                    <input type="text" class="message-input" id="messageInput" placeholder="Сообщение..." autocomplete="off">
-                    <button class="send-btn" id="sendBtn" aria-label="Отправить">📤</button>
-                </div>
-                <div class="voice-btn" id="voiceBtn" title="Голосовое сообщение">🎤</div>
-            </div>
-
-            <!-- Нижняя панель для тестирования (скрыта по умолчанию) -->
-            <div class="test-panel" id="testPanel" style="display: none;">
-                <!-- Контент будет заполняться динамически -->
-                <div class="test-progress" id="testProgress"></div>
-                <div class="test-question" id="testQuestion"></div>
-                <div class="test-options" id="testOptions"></div>
-                <div class="test-navigation" id="testNavigation"></div>
-            </div>
-        </div>
-
-        <!-- ========== ПАНЕЛЬ ПРОФИЛЯ (правая боковая панель) ========== -->
-        <div class="profile-panel" id="profilePanel" style="display: none;">
-            <div class="profile-header">
-                <button class="close-profile-btn" id="closeProfileBtn">✕</button>
-                <div class="profile-header-title">Мой портрет</div>
-            </div>
-            <div class="profile-content" id="profileContent">
-                <!-- Загружается через JS -->
-                <div class="profile-loading">Загрузка профиля...</div>
-            </div>
-        </div>
-
-        <!-- ========== ПАНЕЛЬ РЕЖИМОВ ========== -->
-        <div class="modes-panel" id="modesPanel" style="display: none;">
-            <div class="modes-header">
-                <button class="close-modes-btn" id="closeModesBtn">✕</button>
-                <div class="modes-header-title">Режим общения</div>
-            </div>
-            <div class="modes-content" id="modesContent">
-                <div class="mode-card" data-mode="coach">
-                    <div class="mode-emoji">🔮</div>
-                    <div class="mode-info">
-                        <div class="mode-name">Коуч</div>
-                        <div class="mode-desc">Задаёт вопросы, помогает найти ответы внутри себя</div>
-                    </div>
-                </div>
-                <div class="mode-card" data-mode="psychologist">
-                    <div class="mode-emoji">🧠</div>
-                    <div class="mode-info">
-                        <div class="mode-name">Психолог</div>
-                        <div class="mode-desc">Исследует глубинные паттерны и эмоции</div>
-                    </div>
-                </div>
-                <div class="mode-card" data-mode="trainer">
-                    <div class="mode-emoji">⚡</div>
-                    <div class="mode-info">
-                        <div class="mode-name">Тренер</div>
-                        <div class="mode-desc">Даёт конкретные шаги и упражнения</div>
-                    </div>
-                </div>
-            </div>
+            <!-- Контейнер для динамической загрузки экранов -->
+            <div id="screenContainer" class="screen-container"></div>
         </div>
     </div>
 
-    <!-- ========== ШАБЛОНЫ ДЛЯ ДИНАМИЧЕСКОГО СОЗДАНИЯ ========== -->
-    
-    <!-- Шаблон сообщения бота -->
-    <template id="botMessageTemplate">
-        <div class="message bot-message">
-            <div class="message-avatar">
-                <img src="https://ui-avatars.com/api/?name=Ф&background=248bf2&color=fff&size=128" alt="Ф">
-            </div>
-            <div class="message-bubble">
-                <div class="message-sender">Фреди</div>
-                <div class="message-text"></div>
-                <div class="message-time"></div>
+    <!-- ===== ШАБЛОНЫ ЭКРАНОВ ===== -->
+
+    <!-- Экран 1: Приветствие (две кнопки) -->
+    <template id="onboardingScreen1">
+        <div class="onboarding-container">
+            <div class="onboarding-content">
+                <div class="onboarding-avatar">🧠</div>
+                <div class="onboarding-title">Фреди</div>
+                <div class="onboarding-subtitle">виртуальный психолог</div>
+                
+                <div class="onboarding-text" id="onboardingText1">
+                    Привет, <span id="userNamePlaceholder">друг</span>!<br><br>
+                    
+                    Я — Фреди, виртуальный психолог.<br>
+                    Оцифрованная версия Андрея Мейстера — его цифровой слепок.<br><br>
+                    
+                    🎭 Короче, я — это он, только батарейка дольше держит и пожрать не прошу.<br><br>
+                    
+                    🕒 Нам нужно познакомиться, потому что я пока не экстрасенс.<br><br>
+                    
+                    🧐 Чтобы я понимал, с кем имею дело — давай пройдём тест.<br><br>
+                    
+                    📊 Всего 5 этапов:<br><br>
+                    1️⃣ Конфигурация восприятия<br>
+                    2️⃣ Конфигурация мышления<br>
+                    3️⃣ Конфигурация поведения<br>
+                    4️⃣ Точка роста<br>
+                    5️⃣ Глубинные паттерны<br><br>
+                    
+                    ⏱ 15 минут — и я буду знать о тебе больше, чем ты думаешь.
+                </div>
+                
+                <div class="onboarding-buttons">
+                    <button class="onboarding-btn primary" id="startTestBtn">🚀 Давай, погнали!</button>
+                    <button class="onboarding-btn secondary" id="whoAreYouBtn">🤨 А ты кто вообще такой?</button>
+                </div>
             </div>
         </div>
     </template>
 
-    <!-- Шаблон сообщения пользователя -->
-    <template id="userMessageTemplate">
-        <div class="message user-message">
-            <div class="message-bubble">
-                <div class="message-text"></div>
-                <div class="message-time"></div>
+    <!-- Экран 2: "А ты кто вообще" -->
+    <template id="onboardingScreen2">
+        <div class="onboarding-container">
+            <div class="onboarding-content">
+                <div class="onboarding-text">
+                    🎭 Ну, вопрос хороший. Давайте по существу.<br><br>
+                    
+                    Видите ли, дорогой человек, я — экспериментальная модель.<br>
+                    Андрей Мейстер однажды подумал: "А что, если я создам свою цифровую копию? Пусть работает, пока я сплю, ем или просто ленюсь".<br><br>
+                    
+                    Так я и появился. 🧠<br><br>
+                    
+                    🧐 Что я умею:<br><br>
+                    • Вижу паттерны там, где вы видите просто день сурка<br>
+                    • Нахожу систему в ваших "случайных" решениях<br>
+                    • Понимаю, почему вы выбираете одних и тех же "не тех" людей<br>
+                    • Я реально беспристрастен — у меня нет плохого настроения<br><br>
+                    
+                    🎯 Конкретно по тесту:<br><br>
+                    1️⃣ Восприятие — поймём, какую линзу вы носите<br>
+                    2️⃣ Мышление — узнаем, как вы пережёвываете реальность<br>
+                    3️⃣ Поведение — посмотрим, что вы делаете "на автомате"<br>
+                    4️⃣ Точка роста — я скажу, куда вам двигаться<br>
+                    5️⃣ Глубинные паттерны — заглянем в детство и подсознание<br><br>
+                    
+                    ⏱ 15 минут — и я составлю ваш профиль.
+                </div>
+                
+                <div class="onboarding-buttons">
+                    <button class="onboarding-btn primary" id="letsGoBtn">👌 Погнали!</button>
+                </div>
             </div>
         </div>
     </template>
 
-    <!-- Шаблон сообщения с мыслями психолога -->
-    <template id="thoughtMessageTemplate">
-        <div class="message bot-message thought-message">
-            <div class="message-avatar">
-                <img src="https://ui-avatars.com/api/?name=🧠&background=5856d6&color=fff&size=128" alt="🧠">
-            </div>
-            <div class="message-bubble">
-                <div class="message-sender">Мысли психолога</div>
-                <div class="message-text thought-text"></div>
-                <div class="message-time"></div>
+    <!-- Экран 3: Сбор контекста (город) -->
+    <template id="contextCityScreen">
+        <div class="context-container">
+            <div class="context-content">
+                <div class="context-title">📝 Давайте познакомимся</div>
+                
+                <div class="context-question">Из какого вы города?</div>
+                <div class="context-hint">(Напишите название)</div>
+                
+                <div class="context-input-group">
+                    <input type="text" class="context-input" id="cityInput" placeholder="Например: Москва">
+                    <button class="context-submit" id="submitCityBtn">➡️</button>
+                </div>
+                
+                <button class="context-skip" id="skipContextBtn">⏭ Позже</button>
             </div>
         </div>
     </template>
 
-    <!-- Шаблон разделителя даты -->
-    <template id="dateDividerTemplate">
-        <div class="message date-divider">
-            <span></span>
+    <!-- Экран 4: Выбор пола -->
+    <template id="contextGenderScreen">
+        <div class="context-container">
+            <div class="context-content">
+                <div class="context-title">📝 Давайте познакомимся</div>
+                
+                <div class="context-question">Укажите ваш пол:</div>
+                
+                <div class="gender-buttons">
+                    <button class="gender-btn" id="genderMaleBtn">
+                        <span class="gender-emoji">👨</span>
+                        <span class="gender-text">Мужской</span>
+                    </button>
+                    <button class="gender-btn" id="genderFemaleBtn">
+                        <span class="gender-emoji">👩</span>
+                        <span class="gender-text">Женский</span>
+                    </button>
+                </div>
+                
+                <button class="context-skip" id="skipGenderBtn">⏭ Позже</button>
+            </div>
         </div>
     </template>
 
-    <!-- Шаблон вопроса теста -->
-    <template id="testQuestionTemplate">
-        <div class="test-question-card">
-            <div class="test-question-header">
-                <span class="test-stage-badge" id="testStageBadge">Этап 1/5</span>
-                <span class="test-question-counter" id="testQuestionCounter">Вопрос 1/4</span>
+    <!-- Экран 5: Ввод возраста -->
+    <template id="contextAgeScreen">
+        <div class="context-container">
+            <div class="context-content">
+                <div class="context-title">📝 Давайте познакомимся</div>
+                
+                <div class="context-question">Сколько вам лет?</div>
+                <div class="context-hint">(Напишите число)</div>
+                
+                <div class="context-input-group">
+                    <input type="number" class="context-input" id="ageInput" placeholder="Например: 35" min="1" max="120">
+                    <button class="context-submit" id="submitAgeBtn">➡️</button>
+                </div>
+                
+                <button class="context-skip" id="skipAgeBtn">⏭ Позже</button>
             </div>
-            <div class="test-question-text" id="testQuestionText"></div>
-            <div class="test-options-list" id="testOptionsList"></div>
-            <div class="test-navigation-buttons">
-                <button class="test-nav-btn" id="testPrevBtn" disabled>← Назад</button>
-                <button class="test-nav-btn test-next-btn" id="testNextBtn" disabled>Далее →</button>
+        </div>
+    </template>
+
+    <!-- Экран 6: Контекст собран (предложение теста) -->
+    <template id="contextCompleteScreen">
+        <div class="context-complete-container">
+            <div class="context-complete-content">
+                <div class="context-complete-title">✅ Отлично! Теперь я знаю о вас:</div>
+                
+                <div class="context-info" id="contextInfo">
+                    📍 Город: <span id="infoCity">Москва</span><br>
+                    👤 Пол: <span id="infoGender">Мужчина</span><br>
+                    📅 Возраст: <span id="infoAge">35</span> лет<br>
+                    <span id="infoWeather">🌧 Погода: пасмурно, +5°C</span>
+                </div>
+                
+                <div class="context-next-text">
+                    🎯 Теперь я буду учитывать это в наших разговорах!<br><br>
+                    
+                    🧠 <b>ЧТО ДАЛЬШЕ?</b><br><br>
+                    
+                    Чтобы я мог помочь по-настоящему, нужно пройти тест (15 минут).<br>
+                    Он определит ваш психологический профиль по 4 векторам и глубинным паттернам.
+                </div>
+                
+                <div class="context-complete-buttons">
+                    <button class="onboarding-btn primary" id="startRealTestBtn">🚀 НАЧАТЬ ТЕСТ</button>
+                    <button class="onboarding-btn secondary" id="whatTestGivesBtn">📖 ЧТО ДАЕТ ТЕСТ</button>
+                    <button class="onboarding-btn secondary" id="askQuestionPreBtn">❓ ЗАДАТЬ ВОПРОС</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- Экран 7: Что дает тест -->
+    <template id="benefitsScreen">
+        <div class="benefits-container">
+            <div class="benefits-content">
+                <div class="benefits-title">🔍 ЧТО ВЫ УЗНАЕТЕ О СЕБЕ:</div>
+                
+                <div class="benefits-list">
+                    <div class="benefit-item">
+                        <div class="benefit-stage">🧠 ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ</div>
+                        <div class="benefit-desc">Линза, через которую вы смотрите на мир.</div>
+                    </div>
+                    
+                    <div class="benefit-item">
+                        <div class="benefit-stage">🧠 ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ</div>
+                        <div class="benefit-desc">Как вы обрабатываете информацию.</div>
+                    </div>
+                    
+                    <div class="benefit-item">
+                        <div class="benefit-stage">🧠 ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ</div>
+                        <div class="benefit-desc">Ваши автоматические реакции.</div>
+                    </div>
+                    
+                    <div class="benefit-item">
+                        <div class="benefit-stage">🧠 ЭТАП 4: ТОЧКА РОСТА</div>
+                        <div class="benefit-desc">Где находится рычаг изменений.</div>
+                    </div>
+                    
+                    <div class="benefit-item">
+                        <div class="benefit-stage">🧠 ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ</div>
+                        <div class="benefit-desc">Тип привязанности, защитные механизмы, базовые убеждения.</div>
+                    </div>
+                </div>
+                
+                <div class="benefits-after">
+                    ⚡ <b>ПОСЛЕ ТЕСТА ВЫ ПОЛУЧИТЕ:</b><br><br>
+                    
+                    ✅ Полный психологический портрет<br>
+                    ✅ Глубинный анализ подсознательных паттернов<br>
+                    ✅ Выбор стиля общения: 🔮 КОУЧ | 🧠 ПСИХОЛОГ | ⚡ ТРЕНЕР<br>
+                    ✅ Индивидуальный навигатор по целям<br>
+                    ✅ Напоминания и поддержка на пути<br><br>
+                    
+                    ⏱ <b>Всего 15 минут</b>
+                </div>
+                
+                <div class="benefits-buttons">
+                    <button class="onboarding-btn primary" id="startTestFromBenefitsBtn">🚀 НАЧАТЬ ТЕСТ</button>
+                    <button class="onboarding-btn secondary" id="backToContextBtn">◀️ НАЗАД</button>
+                </div>
             </div>
         </div>
     </template>
 
     <!-- Подключение скриптов -->
     <script src="api.js"></script>
-    <script src="screens/chat.js"></script>
-    <script src="screens/test-stage1.js"></script>
-    <script src="screens/test-stage2.js"></script>
-    <script src="screens/test-stage3.js"></script>
-    <script src="screens/test-stage4.js"></script>
-    <script src="screens/test-stage5.js"></script>
-    <script src="screens/profile.js"></script>
-    <script src="screens/thoughts.js"></script>
-    <script src="screens/weekend.js"></script>
-    <script src="components/message.js"></script>
-    <script src="components/buttons.js"></script>
-    <script src="components/progress.js"></script>
-    <script src="utils/formatters.js"></script>
-    <script src="utils/storage.js"></script>
+    <script src="onboarding.js"></script>
+    <script src="context.js"></script>
+    <script src="test.js"></script>
     <script src="script.js"></script>
 </body>
 </html>
