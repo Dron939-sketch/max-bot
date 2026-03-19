@@ -2024,33 +2024,25 @@ def run_fastapi():
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск FastAPI на порту {port}")
     
-    # СОЗДАЁМ НОВЫЙ ЦИКЛ СОБЫТИЙ ДЛЯ ЭТОГО ПОТОКА
+    # Применяем nest_asyncio глобально
     try:
-        # Создаём новый цикл
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        logger.info("✅ Создан новый цикл событий для потока FastAPI")
-        
-        # Применяем nest_asyncio к этому циклу
-        nest_asyncio.apply(loop)
-        logger.info("✅ nest_asyncio применён к циклу FastAPI")
-        
+        import nest_asyncio
+        nest_asyncio.apply()
+        logger.info("✅ nest_asyncio применён")
     except Exception as e:
-        logger.error(f"❌ Ошибка при настройке цикла событий: {e}")
-        loop = None
+        logger.error(f"❌ Ошибка при применении nest_asyncio: {e}")
     
-    # ЗАПУСКАЕМ UVICORN
+    # ПРОСТО ЗАПУСКАЕМ UVICORN БЕЗ ЛИШНИХ НАСТРОЕК
     try:
-        # Важно: используем loop из этого потока
         uvicorn.run(
             api_app, 
             host="0.0.0.0", 
             port=port,
-            loop=loop  # Передаём наш цикл напрямую
+            log_level="info"
         )
     except Exception as e:
         logger.error(f"❌ Ошибка при запуске uvicorn: {e}")
-        # Последняя попытка без передачи цикла
+        # Последняя попытка
         uvicorn.run(api_app, host="0.0.0.0", port=port)
 
 
