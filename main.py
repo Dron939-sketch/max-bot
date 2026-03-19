@@ -7,6 +7,7 @@
 ДОБАВЛЕНО: FastAPI для мини-приложения с полной синхронизацией
 ДОБАВЛЕНО: PostgreSQL для постоянного хранения данных
 ИСПРАВЛЕНО: правильное обслуживание статических файлов из папки miniapp
+ИСПРАВЛЕНО: проблемы с asyncio и циклом событий
 """
 
 import os
@@ -20,10 +21,18 @@ import threading
 import fcntl
 import socket
 import asyncio
-import nest_asyncio
+import warnings
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, List, Any, Tuple, Union
 from datetime import datetime, timedelta
+
+# Игнорируем предупреждения
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+# ========== ИМПОРТЫ ДЛЯ ASYNCIO ==========
+import nest_asyncio
+nest_asyncio.apply()  # Применяем глобально
+# =========================================
 
 # ========== ИМПОРТЫ ДЛЯ FASTAPI ==========
 from fastapi import FastAPI, Request, HTTPException
@@ -1963,7 +1972,7 @@ async def process_custom_goal_async(message: types.Message, user_id: int, text: 
 
 
 # ============================================
-# ФУНКЦИЯ ЗАПУСКА FASTAPI
+# ФУНКЦИЯ ЗАПУСКА FASTAPI - ИСПРАВЛЕНА
 # ============================================
 
 def run_fastapi():
@@ -1972,21 +1981,10 @@ def run_fastapi():
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск FastAPI на порту {port}")
     
-    # Создаём новый event loop для этого потока
+    # Применяем nest_asyncio для решения проблемы с циклами событий
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        logger.info("✅ Создан новый event loop для FastAPI")
-    except Exception as e:
-        logger.error(f"❌ Ошибка при создании event loop: {e}")
-    
-    # Применяем nest_asyncio для возможности вложенных циклов
-    try:
-        import nest_asyncio
         nest_asyncio.apply()
         logger.info("✅ nest_asyncio применён")
-    except ImportError:
-        logger.warning("⚠️ nest_asyncio не установлен, игнорируем")
     except Exception as e:
         logger.error(f"❌ Ошибка при применении nest_asyncio: {e}")
     
@@ -1995,8 +1993,37 @@ def run_fastapi():
         uvicorn.run(api_app, host="0.0.0.0", port=port)
     except Exception as e:
         logger.error(f"❌ Ошибка при запуске uvicorn: {e}")
-        # Пробуем ещё раз без дополнительной настройки
+        # Пробуем ещё раз
         uvicorn.run(api_app, host="0.0.0.0", port=port)
+
+
+# ============================================
+# ФУНКЦИЯ ЗАПУСКА АСИНХРОННЫХ ЗАДАЧ - ИСПРАВЛЕНА
+# ============================================
+
+def run_async_tasks():
+    """Запускает асинхронные задачи в отдельном потоке"""
+    # Создаём новый цикл для этого потока
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Применяем nest_asyncio
+    nest_asyncio.apply(loop)
+    
+    # Запускаем проверку API
+    try:
+        # Используем run_until_complete с обработкой ошибок
+        loop.run_until_complete(check_api_on_startup())
+    except RuntimeError as e:
+        if 'already running' in str(e):
+            logger.warning("⚠️ Цикл событий уже запущен, пропускаем")
+        else:
+            logger.error(f"❌ Ошибка при проверке API: {e}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при проверке API: {e}")
+    
+    # Не закрываем цикл, оставляем для других задач
+    # loop.close() - закомментировано
 
 
 # ============================================
@@ -2040,11 +2067,18 @@ async def shutdown_handler():
     """Обработчик завершения работы - сохраняет все данные в БД"""
     logger.info("🛑 Завершение работы, сохраняем данные в БД...")
     
-    from state import save_all_users_to_db
-    saved_count = await save_all_users_to_db(db)
+    try:
+        from state import save_all_users_to_db
+        saved_count = await save_all_users_to_db(db)
+        logger.info(f"✅ Сохранено {saved_count} пользователей")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при сохранении: {e}")
     
-    await close_db()
-    logger.info(f"✅ Сохранено {saved_count} пользователей. Бот завершает работу.")
+    try:
+        await close_db()
+        logger.info("✅ База данных закрыта")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при закрытии БД: {e}")
 
 def main():
     print("\n" + "="*80)
@@ -2094,11 +2128,14 @@ def main():
     # Добавляем обработчик сигналов для корректного завершения
     try:
         import signal
+        
+        def signal_handler():
+            asyncio.create_task(shutdown_handler())
+        
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown_handler()))
-    except (ImportError, NotImplementedError):
-        # Windows или другая платформа без сигналов
-        pass
+            loop.add_signal_handler(sig, signal_handler)
+    except (ImportError, NotImplementedError, AttributeError) as e:
+        logger.warning(f"⚠️ Не удалось установить обработчик сигналов: {e}")
     
     is_render = os.environ.get('RENDER') is not None
     retry_count = 0
