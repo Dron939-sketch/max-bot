@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики команды /start и начальных экранов для MAX
-ВЕРСИЯ 2.2 - ИСПРАВЛЕНЫ ПРОБЛЕМЫ С СОЕДИНЕНИЕМ БД
+ВЕРСИЯ 2.3 - ИСПРАВЛЕНО: Все parse_mode заменены на Markdown
 ДОБАВЛЕНО: Загрузка пользователей из БД, автосохранение
 ИСПРАВЛЕНО: Все асинхронные вызовы обернуты в отдельные потоки с новым циклом событий
 ДОБАВЛЕНО: Проверка соединения с БД перед загрузкой
@@ -257,7 +257,7 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
                 message.chat.id,
                 text,
                 reply_markup=keyboard,
-                parse_mode='HTML'
+                parse_mode='Markdown'  # ✅ ИСПРАВЛЕНО: HTML -> Markdown
             )
         except Exception as e:
             logger.error(f"❌ Ошибка отправки сообщения: {e}")
@@ -303,7 +303,7 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
                 message.chat.id,
                 welcome_text,
                 reply_markup=keyboard,
-                parse_mode='HTML'
+                parse_mode='Markdown'  # ✅ ИСПРАВЛЕНО: HTML -> Markdown
             )
         except Exception as e:
             logger.error(f"❌ Ошибка отправки сообщения: {e}")
@@ -358,7 +358,7 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
             message.chat.id,
             text,
             reply_markup=keyboard,
-            parse_mode='HTML'
+            parse_mode='Markdown'  # ✅ ИСПРАВЛЕНО: HTML -> Markdown
         )
     except Exception as e:
         logger.error(f"❌ Ошибка при показе меню: {e}")
@@ -472,7 +472,7 @@ def callback_restart_test(call: CallbackQuery):
     
     # Показываем приветствие
     text = f"""
-🔄 <b>ТЕСТ ПЕРЕЗАПУЩЕН</b>
+🔄 **ТЕСТ ПЕРЕЗАПУЩЕН**
 
 Хорошо, начнём с чистого листа.
 Давайте познакомимся заново.
@@ -485,7 +485,13 @@ def callback_restart_test(call: CallbackQuery):
         InlineKeyboardButton("🚀 Давай, погнали!", callback_data="start_context")
     )
     
-    safe_send_message(call.message, text, reply_markup=keyboard, delete_previous=True)
+    safe_send_message(
+        call.message, 
+        text, 
+        reply_markup=keyboard, 
+        parse_mode='Markdown',  # ✅ ИСПРАВЛЕНО: HTML -> Markdown
+        delete_previous=True
+    )
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'show_profile')
@@ -564,7 +570,13 @@ def show_why_details(call: CallbackQuery):
         InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_start")
     )
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(
+        call.message, 
+        text, 
+        reply_markup=keyboard, 
+        parse_mode='Markdown',  # ✅ ИСПРАВЛЕНО: HTML -> Markdown
+        delete_previous=True
+    )
 
 
 # ============================================
@@ -594,7 +606,13 @@ def show_intro(message: Message):
         InlineKeyboardButton(text="📖 ЧТО ДАЕТ ТЕСТ", callback_data="show_benefits")
     )
     
-    safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(
+        message, 
+        text, 
+        reply_markup=keyboard, 
+        parse_mode='Markdown',  # ✅ ИСПРАВЛЕНО: HTML -> Markdown
+        delete_previous=True
+    )
 
 
 def show_main_menu(message: Message, context: UserContext):
