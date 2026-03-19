@@ -7,7 +7,7 @@
 ДОБАВЛЕНО: FastAPI для мини-приложения с полной синхронизацией
 ДОБАВЛЕНО: PostgreSQL для постоянного хранения данных
 ИСПРАВЛЕНО: правильное обслуживание статических файлов из папки miniapp
-ИСПРАВЛЕНО: проблемы с asyncio и циклом событий
+ИСПРАВЛЕНО: проблемы с asyncio и привязка к порту Render
 """
 
 import os
@@ -26,13 +26,18 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, List, Any, Tuple, Union
 from datetime import datetime, timedelta
 
+# ========== ИСПРАВЛЕНИЕ ПРОБЛЕМ ASYNCIO ==========
 # Игнорируем предупреждения
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# ========== ИМПОРТЫ ДЛЯ ASYNCIO ==========
+# Импортируем nest_asyncio для решения проблем с циклами событий
 import nest_asyncio
 nest_asyncio.apply()  # Применяем глобально
-# =========================================
+
+# Принудительно устанавливаем политику цикла событий для разных платформ
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+# =================================================
 
 # ========== ИМПОРТЫ ДЛЯ FASTAPI ==========
 from fastapi import FastAPI, Request, HTTPException
@@ -44,6 +49,7 @@ import uvicorn
 
 # ========== ИМПОРТЫ ДЛЯ БАЗЫ ДАННЫХ ==========
 from db_instance import db, init_db, close_db, save_user_to_db, save_test_result_to_db
+from db_instance import ensure_db_connection, execute_with_retry  # Добавлено для защиты от ошибок БД
 import asyncpg
 # =============================================
 
@@ -206,6 +212,9 @@ async def init_database():
         await init_db()
         logger.info("✅ Подключение к PostgreSQL установлено")
         
+        # Проверяем соединение с защитой от ошибок
+        await ensure_db_connection()
+        
         # Загружаем всех пользователей из БД в память
         await load_all_users_from_db()
         
@@ -344,8 +353,14 @@ async def periodic_save_to_db():
         saved_count = 0
         for user_id in list(user_data.keys()):
             try:
-                await save_user_to_db(user_id, user_data, user_contexts, user_routes)
-                saved_count += 1
+                # Используем execute_with_retry для защиты от ошибок
+                result = await execute_with_retry(
+                    save_user_to_db, 
+                    user_id, user_data, user_contexts, user_routes,
+                    max_retries=3
+                )
+                if result:
+                    saved_count += 1
             except Exception as e:
                 logger.error(f"❌ Ошибка сохранения {user_id}: {e}")
         
@@ -436,8 +451,11 @@ async def save_profile(request: Request):
         user_data[user_id]['ai_generated_profile'] = profile
         user_data[user_id]['profile_data'] = profile.get('profile_data', {})
         
-        # Сохраняем в БД
-        asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
+        # Сохраняем в БД с защитой от ошибок
+        asyncio.create_task(execute_with_retry(
+            save_user_to_db, user_id, user_data, user_contexts, user_routes,
+            max_retries=3
+        ))
         
         return JSONResponse({
             "success": True,
@@ -485,8 +503,11 @@ async def save_test_progress(request: Request):
             })
             user_data[user_id][stage_key].append(answer)
         
-        # Сохраняем в БД
-        asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
+        # Сохраняем в БД с защитой от ошибок
+        asyncio.create_task(execute_with_retry(
+            save_user_to_db, user_id, user_data, user_contexts, user_routes,
+            max_retries=3
+        ))
         
         return JSONResponse({
             "success": True,
@@ -519,8 +540,11 @@ async def save_mode(request: Request):
             user_data[user_id] = {}
         user_data[user_id]['communication_mode'] = mode
         
-        # Сохраняем в БД
-        asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
+        # Сохраняем в БД с защитой от ошибок
+        asyncio.create_task(execute_with_retry(
+            save_user_to_db, user_id, user_data, user_contexts, user_routes,
+            max_retries=3
+        ))
         
         return JSONResponse({
             "success": True,
@@ -562,8 +586,11 @@ async def sync_data(request: Request):
         if 'mode' in sync_data and user_id in user_contexts:
             user_contexts[user_id].communication_mode = sync_data['mode']
         
-        # Сохраняем в БД
-        await save_user_to_db(user_id, user_data, user_contexts, user_routes)
+        # Сохраняем в БД с защитой от ошибок
+        await execute_with_retry(
+            save_user_to_db, user_id, user_data, user_contexts, user_routes,
+            max_retries=3
+        )
         
         return JSONResponse({
             "success": True,
@@ -733,8 +760,11 @@ async def get_thought(user_id: int):
                 if user_id not in user_data:
                     user_data[user_id] = {}
                 user_data[user_id]["psychologist_thought"] = thought
-                # Сразу сохраняем в БД
-                asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
+                # Сразу сохраняем в БД с защитой
+                asyncio.create_task(execute_with_retry(
+                    save_user_to_db, user_id, user_data, user_contexts, user_routes,
+                    max_retries=3
+                ))
             else:
                 thought = "Мысли психолога еще не сгенерированы."
         
@@ -1202,8 +1232,11 @@ async def submit_test_answer(request: Request):
             user_data[user_id][stage_key] = []
         user_data[user_id][stage_key].append(answer_record)
         
-        # Сохраняем в БД
-        asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
+        # Сохраняем в БД с защитой
+        asyncio.create_task(execute_with_retry(
+            save_user_to_db, user_id, user_data, user_contexts, user_routes,
+            max_retries=3
+        ))
         
         # Определяем, завершен ли этап
         stage_questions_count = {
@@ -1972,28 +2005,43 @@ async def process_custom_goal_async(message: types.Message, user_id: int, text: 
 
 
 # ============================================
-# ФУНКЦИЯ ЗАПУСКА FASTAPI - ИСПРАВЛЕНА
+# ФУНКЦИЯ ЗАПУСКА FASTAPI - ИСПРАВЛЕНА С УЧЕТОМ ПОРТА RENDER
 # ============================================
 
 def run_fastapi():
     """Запускает FastAPI сервер в отдельном потоке"""
     # Render сам назначает порт через переменную окружения PORT
+    # Документация: https://render.com/docs/web-services#port-binding
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск FastAPI на порту {port}")
     
-    # Применяем nest_asyncio для решения проблемы с циклами событий
+    # Создаём новый event loop для этого потока
     try:
-        nest_asyncio.apply()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        logger.info("✅ Создан новый event loop для FastAPI")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при создании event loop: {e}")
+    
+    # Применяем nest_asyncio для возможности вложенных циклов
+    try:
+        nest_asyncio.apply(loop)
         logger.info("✅ nest_asyncio применён")
     except Exception as e:
         logger.error(f"❌ Ошибка при применении nest_asyncio: {e}")
     
-    # Запускаем uvicorn
+    # Запускаем uvicorn с правильными параметрами
     try:
-        uvicorn.run(api_app, host="0.0.0.0", port=port)
+        uvicorn.run(
+            api_app, 
+            host="0.0.0.0", 
+            port=port,
+            loop="asyncio",  # Явно указываем цикл событий
+            log_level="info"
+        )
     except Exception as e:
         logger.error(f"❌ Ошибка при запуске uvicorn: {e}")
-        # Пробуем ещё раз
+        # Пробуем ещё раз с минимальными параметрами
         uvicorn.run(api_app, host="0.0.0.0", port=port)
 
 
@@ -2050,26 +2098,14 @@ def cleanup_resources():
     except Exception as e:
         logger.error(f"❌ Ошибка при очистке ресурсов: {e}")
 
-def run_async_tasks():
-    """Запускает асинхронные задачи в отдельном потоке"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    # Запускаем проверку API
-    try:
-        loop.run_until_complete(check_api_on_startup())
-    except Exception as e:
-        logger.error(f"❌ Ошибка при проверке API: {e}")
-    
-    loop.close()
-
 async def shutdown_handler():
     """Обработчик завершения работы - сохраняет все данные в БД"""
     logger.info("🛑 Завершение работы, сохраняем данные в БД...")
     
     try:
         from state import save_all_users_to_db
-        saved_count = await save_all_users_to_db(db)
+        # Используем execute_with_retry для защиты от ошибок
+        saved_count = await execute_with_retry(save_all_users_to_db, db, max_retries=3)
         logger.info(f"✅ Сохранено {saved_count} пользователей")
     except Exception as e:
         logger.error(f"❌ Ошибка при сохранении: {e}")
