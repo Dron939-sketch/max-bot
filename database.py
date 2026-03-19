@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Модуль для работы с PostgreSQL базой данных бота "Фреди"
-Все таблицы имеют префикс fredi_ для избежания конфликтов
-
-Версия 2.2 - ИСПРАВЛЕНО: Критический патч для asyncpg в Python 3.14
+Централизованный доступ к экземпляру базы данных
+ВЕРСИЯ 2.8 - ИСПРАВЛЕНО: Патч применяется ДО ВСЕХ импортов
 """
 
-# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ ASYNCPG ==========
-import sys
+import os
+import json
+import pickle
+import logging
 import asyncio
+import sys
+from typing import Dict, Any, Optional
+
+# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ ASYNCPG (ДОЛЖЕН БЫТЬ В САМОМ НАЧАЛЕ) ==========
 import asyncpg
 from asyncpg.pool import Pool
-import logging
 
 logger = logging.getLogger(__name__)
 
-# Сохраняем оригинальную функцию
+# Сохраняем оригинальную функцию ДО любых изменений
 original_create_pool = asyncpg.create_pool
 
 async def patched_create_pool(*args, **kwargs):
@@ -57,1293 +60,339 @@ async def patched_create_pool(*args, **kwargs):
         logger.error(f"❌ Ошибка при создании пула через патч: {e}")
         raise
 
-# Применяем патч
+# Принудительно применяем патч (перезаписываем функцию)
 asyncpg.create_pool = patched_create_pool
-logger.info("✅ Применён критический патч для asyncpg в Python 3.14")
-# ================================================================
+logger.info("🔥🔥🔥 ПАТЧ ПРИМЕНЁН В db_instance.py 🔥🔥🔥")
 
-import pickle
-import json
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List, Union
-from contextlib import asynccontextmanager
+# Проверяем, что патч действительно применился
+if asyncpg.create_pool is patched_create_pool:
+    logger.info("✅ ПАТЧ РАБОТАЕТ: create_pool заменён на patched_create_pool")
+else:
+    logger.error("❌ ПАТЧ НЕ ПРИМЕНИЛСЯ! create_pool остался оригинальным")
+# =================================================================================
 
+# Теперь импортируем database (после применения патча)
+from database import BotDatabase
 
-class BotDatabase:
-    """Класс для работы с базой данных PostgreSQL"""
-    
-    def __init__(self, dsn: str):
-        """
-        Инициализация подключения к БД
+# URL базы данных из переменных окружения Render
+# Сначала пробуем внешний URL, затем внутренний, затем захардкоженный
+DATABASE_URL = os.environ.get(
+    "EXTERNAL_DATABASE_URL",  # Сначала внешний URL (для кросс-регионального подключения)
+    os.environ.get(
+        "DATABASE_URL",        # Потом внутренний URL (для подключения в одном регионе)
+        "postgresql://variatica:Ben9BvM0OnppX1EVSabWQQSwTCrqkahh@dpg-d639vucr85hc73b2ge00-a.oregon-postgres.render.com/variatica"
+    )
+)
+
+# Логируем используемый URL (без пароля для безопасности)
+url_parts = DATABASE_URL.split('@')
+if len(url_parts) > 1:
+    safe_url = f"postgresql://{url_parts[1]}"
+else:
+    safe_url = DATABASE_URL[:50] + "..." if len(DATABASE_URL) > 50 else DATABASE_URL
+logger.info(f"🔗 Используем URL базы данных: {safe_url}")
+
+# Создаем единый экземпляр БД
+db = BotDatabase(DATABASE_URL)
+
+async def init_db():
+    """Инициализация подключения к БД"""
+    try:
+        # Для Python 3.14 добавляем небольшую задержку
+        if sys.version_info >= (3, 14):
+            await asyncio.sleep(0.2)
+            logger.debug("✅ Задержка 0.2с для инициализации контекста")
         
-        Args:
-            dsn: Строка подключения к PostgreSQL
-        """
-        self.dsn = dsn
-        self.pool: Optional[asyncpg.Pool] = None
+        await db.connect()
+        logger.info("✅ Подключение к PostgreSQL установлено")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка подключения к PostgreSQL: {e}")
+        return False
+
+async def close_db():
+    """Закрытие подключения к БД"""
+    try:
+        await db.disconnect()
+        logger.info("🔒 Подключение к PostgreSQL закрыто")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при закрытии подключения: {e}")
+
+# ============================================
+# ✅ ФУНКЦИЯ ПРОВЕРКИ СОЕДИНЕНИЯ С БД (С ПАУЗАМИ)
+# ============================================
+
+async def ensure_db_connection():
+    """Проверяет, установлено ли соединение с БД, и подключается если нет"""
+    max_retries = 3
+    retry_delay = 0.5
     
-    async def connect(self, min_size: int = 1, max_size: int = 10):
-        """
-        Создание пула соединений с БД
-        
-        Args:
-            min_size: Минимальное количество соединений в пуле
-            max_size: Максимальное количество соединений в пуле
-        """
+    for attempt in range(max_retries):
         try:
-            # Проверяем, не подключены ли уже
-            if self.pool:
-                logger.info("✅ Пул соединений уже существует")
-                return
+            # Проверяем, существует ли пул
+            if db.pool is None:
+                logger.info("🔄 Пул соединений не инициализирован, подключаемся...")
+                await db.connect()
+                return True
             
-            logger.info("🔄 Создаём пул соединений к PostgreSQL...")
-            
-            # Для Python 3.14 используем явный loop
-            if sys.version_info >= (3, 14):
-                try:
-                    loop = asyncio.get_running_loop()
-                    logger.debug(f"✅ Используем текущий цикл событий: {loop}")
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    logger.warning("⚠️ Создан новый цикл событий для connect")
-                
-                self.pool = await asyncpg.create_pool(
-                    self.dsn,
-                    min_size=min_size,
-                    max_size=max_size,
-                    command_timeout=60,
-                    max_inactive_connection_lifetime=300,
-                    timeout=60,
-                    loop=loop  # Явно передаем loop
-                )
-                logger.info("✅ Пул соединений создан с явным loop (Python 3.14)")
-            else:
-                # Для старых версий Python
-                self.pool = await asyncpg.create_pool(
-                    self.dsn,
-                    min_size=min_size,
-                    max_size=max_size,
-                    command_timeout=60,
-                    max_inactive_connection_lifetime=300,
-                    timeout=60
-                )
-                logger.info("✅ Пул соединений создан (Python < 3.14)")
-            
-            # Создаем таблицы при подключении
-            await self.create_tables()
+            # Проверяем, работает ли соединение
+            async with db.get_connection() as conn:
+                await conn.execute("SELECT 1")
+            logger.debug("✅ Соединение с БД работает")
+            return True
             
         except Exception as e:
-            logger.error(f"❌ Ошибка подключения к PostgreSQL: {e}")
-            raise
-    
-    async def disconnect(self):
-        """Закрытие пула соединений"""
-        if self.pool:
-            await self.pool.close()
-            self.pool = None
-            logger.info("🔌 Пул соединений с PostgreSQL закрыт")
-    
-    @asynccontextmanager
-    async def get_connection(self):
-        """Контекстный менеджер для получения соединения из пула"""
-        if not self.pool:
-            error_msg = "Пул соединений не инициализирован. Вызовите connect()"
-            logger.error(f"❌ {error_msg}")
-            raise RuntimeError(error_msg)
-        
-        max_retries = 3
-        retry_delay = 0.5
-        
-        for attempt in range(max_retries):
-            try:
-                async with self.pool.acquire() as conn:
-                    yield conn
-                return
-            except asyncpg.exceptions._base.InterfaceError as e:
-                error_str = str(e).lower()
-                if "different loop" in error_str and attempt < max_retries - 1:
-                    logger.warning(f"⚠️ Ошибка цикла событий (попытка {attempt+1}/{max_retries}), повтор через {retry_delay}с...")
+            error_str = str(e).lower()
+            logger.error(f"❌ Ошибка при проверке соединения с БД (попытка {attempt+1}/{max_retries}): {e}")
+            
+            # Проверяем, связана ли ошибка с соединением или циклом событий
+            if any(phrase in error_str for phrase in [
+                "пул закрыт", "pool is closed", "connection", 
+                "timeout", "ssl", "network", "reset", "another operation",
+                "different loop", "attached to a different loop"
+            ]):
+                if attempt < max_retries - 1:
+                    logger.info(f"⏳ Повторная попытка через {retry_delay}с...")
                     await asyncio.sleep(retry_delay)
-                    retry_delay *= 2
+                    retry_delay *= 2  # Увеличиваем задержку
+                    
+                    # Пробуем переподключиться
+                    try:
+                        await db.disconnect()
+                    except:
+                        pass
+                    
+                    # Для Python 3.14 принудительно создаем новый контекст
+                    if sys.version_info >= (3, 14):
+                        await asyncio.sleep(0.2)
+                    
+                    continue
                 else:
-                    logger.error(f"❌ Ошибка интерфейса asyncpg: {e}")
-                    raise
-            except Exception as e:
-                logger.error(f"❌ Ошибка при получении соединения: {e}")
-                raise
-    
-    # ====================== СОЗДАНИЕ ТАБЛИЦ ======================
-    
-    async def create_tables(self):
-        """Создает все необходимые таблицы, если их нет"""
-        async with self.get_connection() as conn:
-            
-            # Таблица пользователей Telegram
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS fredi_users (
-                    user_id BIGINT PRIMARY KEY,
-                    username TEXT,
-                    first_name TEXT,
-                    last_name TEXT,
-                    language_code TEXT,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                    last_activity TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                )
-            """)
-            
-            # Таблица контекста пользователей (UserContext) - ВСЕ ПОЛЯ
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS fredi_user_contexts (
-                    user_id BIGINT PRIMARY KEY REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                    
-                    -- 👤 ЛИЧНЫЕ ДАННЫЕ (СОХРАНЯЕМ!)
-                    name TEXT,
-                    age INTEGER,
-                    gender TEXT,
-                    city TEXT,
-                    birth_date DATE,
-                    
-                    -- 🕒 ЧАСОВОЙ ПОЯС
-                    timezone TEXT DEFAULT 'Europe/Moscow',
-                    timezone_offset INTEGER DEFAULT 3,
-                    
-                    -- ⚙️ НАСТРОЙКИ
-                    communication_mode TEXT DEFAULT 'coach',
-                    last_context_update TIMESTAMP WITH TIME ZONE,
-                    
-                    -- 🌤 ПОГОДА (кэш)
-                    weather_cache JSONB,
-                    weather_cache_time TIMESTAMP WITH TIME ZONE,
-                    
-                    -- 👨‍👩‍👧‍👦 ЖИЗНЕННЫЙ КОНТЕКСТ (для проверки реальности)
-                    family_status TEXT,
-                    has_children BOOLEAN DEFAULT FALSE,
-                    children_ages TEXT,
-                    work_schedule TEXT,
-                    job_title TEXT,
-                    commute_time INTEGER,
-                    housing_type TEXT,
-                    has_private_space BOOLEAN DEFAULT FALSE,
-                    has_car BOOLEAN DEFAULT FALSE,
-                    support_people TEXT,
-                    resistance_people TEXT,
-                    energy_level INTEGER,
-                    life_context_complete BOOLEAN DEFAULT FALSE,
-                    
-                    -- 📋 СОСТОЯНИЕ СБОРА КОНТЕКСТА
-                    awaiting_context TEXT,
-                    
-                    -- 🕐 ВРЕМЕННЫЕ МЕТКИ
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                )
-            """)
-            
-            # Таблица данных пользователей (user_data) - ВСЕ ДАННЫЕ ТЕСТА
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS fredi_user_data (
-                    user_id BIGINT PRIMARY KEY REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                    data JSONB NOT NULL,  -- весь словарь user_data[user_id]
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                )
-            """)
-            
-            # Таблица для хранения сериализованных объектов UserContext (резерв)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS fredi_context_objects (
-                    user_id BIGINT PRIMARY KEY REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                    context_data BYTEA NOT NULL,  -- pickle объект
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                )
-            """)
-            
-            # Таблица маршрутов пользователей
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS fredi_user_routes (
-                    id BIGSERIAL PRIMARY KEY,
-                    user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                    route_data JSONB NOT NULL,
-                    current_step INTEGER DEFAULT 1,
-                    progress JSONB DEFAULT '[]',
-                    is_active BOOLEAN DEFAULT TRUE,
-                    completed_at TIMESTAMP WITH TIME ZONE,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                )
-            """)
-            
-            # Таблица результатов тестов (ПОЛНЫЙ ПРОФИЛЬ)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS fredi_test_results (
-                    id BIGSERIAL PRIMARY KEY,
-                    user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                    test_type TEXT NOT NULL,  -- 'full_profile', 'stage1', 'stage2', etc
-                    results JSONB NOT NULL,   -- полные результаты теста
-                    
-                    -- 👤 ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ (для быстрого доступа)
-                    profile_code TEXT,        -- СБ-4_ТФ-4_УБ-4_ЧВ-4
-                    perception_type TEXT,      -- тип восприятия (этап 1)
-                    thinking_level INTEGER,    -- уровень мышления 1-9 (этап 2)
-                    
-                    -- 📊 ВЕКТОРЫ
-                    vectors JSONB,             -- баллы по векторам {"СБ": 3.5, "ТФ": 4.2, ...}
-                    behavioral_levels JSONB,   -- уровни поведения {"СБ": [2,3,4], ...}
-                    
-                    -- 🌀 ГЛУБИННЫЕ ПАТТЕРНЫ (этап 5)
-                    deep_patterns JSONB,        -- тип привязанности, защиты, убеждения
-                    
-                    -- 🔒 КОНФАЙНМЕНТ-МОДЕЛЬ
-                    confinement_model JSONB,
-                    
-                    -- 🎯 ЦЕЛИ И МАРШРУТЫ
-                    current_destination JSONB,
-                    current_route JSONB,
-                    
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                )
-            """)
-            
-            # Таблица ответов на тест (ДЕТАЛЬНО)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS fredi_test_answers (
-                    id BIGSERIAL PRIMARY KEY,
-                    user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                    test_result_id BIGINT REFERENCES fredi_test_results(id) ON DELETE CASCADE,
-                    
-                    -- 📝 ДАННЫЕ ВОПРОСА
-                    stage INTEGER NOT NULL,     -- 1,2,3,4,5
-                    question_index INTEGER NOT NULL,
-                    question_text TEXT,
-                    answer_text TEXT,
-                    answer_value TEXT,           -- ключ опции (a,b,c,d или 1,2,3,4)
-                    
-                    -- 🎯 СПЕЦИФИЧЕСКИЕ ПОЛЯ ДЛЯ РАЗНЫХ ЭТАПОВ
-                    scores JSONB,                 -- для этапа 1: {"EXTERNAL": 2, ...}
-                    measures TEXT,                -- для этапа 2: 'СБ', 'ТФ', 'ЧВ', 'УБ', 'thinking'
-                    strategy TEXT,                -- для этапа 3: 'СБ', 'ТФ', 'УБ', 'ЧВ'
-                    dilts TEXT,                    -- для этапа 4: 'ENVIRONMENT', 'BEHAVIOR', etc
-                    pattern TEXT,                  -- для этапа 5: 'secure', 'avoidant', etc
-                    target TEXT,                    -- для этапа 5: 'attachment', 'defense', etc
-                    
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                )
-            """)
-            
-            # Таблица гипнотических якорей (из hypno_module)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS fredi_hypno_anchors (
-                    id BIGSERIAL PRIMARY KEY,
-                    user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                    anchor_name TEXT NOT NULL,
-                    anchor_state TEXT NOT NULL,  -- 'calm', 'confidence', 'action', etc
-                    anchor_phrase TEXT NOT NULL,
-                    emoji TEXT,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                    last_used TIMESTAMP WITH TIME ZONE,
-                    use_count INTEGER DEFAULT 0,
-                    UNIQUE(user_id, anchor_name)
-                )
-            """)
-            
-            # Таблица напоминаний (для morning_messages и reminder_manager)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS fredi_reminders (
-                    id BIGSERIAL PRIMARY KEY,
-                    user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                    reminder_type TEXT NOT NULL,  -- 'morning_message', 'motivation', 'checkin', 'deadline'
-                    remind_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                    data JSONB,                    -- дополнительные данные (текст, задача и т.д.)
-                    is_sent BOOLEAN DEFAULT FALSE,
-                    sent_at TIMESTAMP WITH TIME ZONE,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                )
-            """)
-            
-            # Таблица кэша идей на выходные (из weekend_planner)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS fredi_weekend_ideas_cache (
-                    id BIGSERIAL PRIMARY KEY,
-                    user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                    ideas_text TEXT NOT NULL,
-                    main_vector TEXT,
-                    main_level INTEGER,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                    expires_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() + INTERVAL '1 hour'
-                )
-            """)
-            
-            # Таблица анализов вопросов (из question_analyzer)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS fredi_question_analysis_cache (
-                    id BIGSERIAL PRIMARY KEY,
-                    user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                    question_hash INTEGER NOT NULL,
-                    question_text TEXT,
-                    analysis JSONB NOT NULL,       -- полный анализ вопроса
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                    expires_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() + INTERVAL '5 minutes'
-                )
-            """)
-            
-            # Таблица событий для статистики
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS fredi_events (
-                    id BIGSERIAL PRIMARY KEY,
-                    user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                    event_type TEXT NOT NULL,   -- 'start', 'test_completed', 'question_asked', 'route_started', 'hypnosis_used'
-                    event_data JSONB,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                )
-            """)
-            
-            # ИНДЕКСЫ ДЛЯ БЫСТРОГО ПОИСКА
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_reminders_remind_at ON fredi_reminders(remind_at) WHERE is_sent = FALSE")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_events_user_id ON fredi_events(user_id)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON fredi_events(event_type)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_events_created ON fredi_events(created_at)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_test_results_user_id ON fredi_test_results(user_id)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_test_results_profile ON fredi_test_results(profile_code)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_weekend_cache_expires ON fredi_weekend_ideas_cache(expires_at)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_question_cache_hash ON fredi_question_analysis_cache(user_id, question_hash)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_question_cache_expires ON fredi_question_analysis_cache(expires_at)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_hypno_anchors_user ON fredi_hypno_anchors(user_id)")
-            
-            logger.info("✅ Все таблицы созданы или уже существуют")
-    
-    # ====================== ПОЛЬЗОВАТЕЛИ ======================
-    
-    async def save_telegram_user(
-        self,
-        user_id: int,
-        username: Optional[str] = None,
-        first_name: Optional[str] = None,
-        last_name: Optional[str] = None,
-        language_code: Optional[str] = None
-    ) -> bool:
-        """
-        Сохранение или обновление информации о пользователе Telegram
-        
-        Returns:
-            True если пользователь создан, False если обновлен
-        """
-        async with self.get_connection() as conn:
-            # Проверяем существование пользователя
-            existing = await conn.fetchval(
-                "SELECT user_id FROM fredi_users WHERE user_id = $1",
-                user_id
-            )
-            
-            if existing:
-                # Обновление существующего
-                await conn.execute("""
-                    UPDATE fredi_users SET
-                        username = $2,
-                        first_name = $3,
-                        last_name = $4,
-                        language_code = $5,
-                        updated_at = NOW(),
-                        last_activity = NOW()
-                    WHERE user_id = $1
-                """, user_id, username, first_name, last_name, language_code)
+                    logger.warning(f"⚠️ Не удалось восстановить соединение после {max_retries} попыток")
+                    return False
+            else:
+                # Если это не ошибка соединения, возвращаем False
+                logger.warning(f"⚠️ Не связанная с соединением ошибка: {e}")
                 return False
+    
+    return False
+
+# ============================================
+# ✅ ФУНКЦИЯ ДЛЯ ВЫПОЛНЕНИЯ С ПОВТОРНЫМИ ПОПЫТКАМИ
+# ============================================
+
+async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
+    """
+    Выполняет асинхронную функцию с повторными попытками при ошибках соединения
+    
+    Args:
+        coro_func: асинхронная функция для выполнения
+        *args: позиционные аргументы для функции
+        max_retries: максимальное количество попыток
+        **kwargs: именованные аргументы для функции
+    
+    Returns:
+        Результат выполнения функции или None в случае ошибки
+    """
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            # Проверяем соединение перед выполнением
+            if not await ensure_db_connection():
+                logger.warning(f"⚠️ Не удалось установить соединение с БД (попытка {attempt+1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    wait_time = 1 * (attempt + 1)
+                    logger.info(f"⏳ Ожидание {wait_time}с перед следующей попыткой...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"❌ Все попытки подключения исчерпаны")
+                    return None
+            
+            # Выполняем функцию
+            if asyncio.iscoroutinefunction(coro_func):
+                result = await coro_func(*args, **kwargs)
             else:
-                # Вставка нового
-                await conn.execute("""
-                    INSERT INTO fredi_users (
-                        user_id, username, first_name, last_name, 
-                        language_code, created_at, updated_at, last_activity
-                    ) VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), NOW())
-                """, user_id, username, first_name, last_name, language_code)
-                return True
-    
-    async def get_telegram_user(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Получение информации о пользователе"""
-        async with self.get_connection() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM fredi_users WHERE user_id = $1",
-                user_id
-            )
-            return dict(row) if row else None
-    
-    async def update_last_activity(self, user_id: int):
-        """Обновляет время последней активности пользователя"""
-        async with self.get_connection() as conn:
-            await conn.execute("""
-                UPDATE fredi_users SET last_activity = NOW() WHERE user_id = $1
-            """, user_id)
-    
-    # ====================== КОНТЕКСТ ПОЛЬЗОВАТЕЛЯ ======================
-    
-    async def save_user_context(self, user_id: int, context_obj) -> None:
-        """
-        Сохраняет объект UserContext в БД
-        
-        Args:
-            user_id: ID пользователя
-            context_obj: Объект UserContext
-        """
-        # Сначала убеждаемся, что пользователь существует
-        await self.save_telegram_user(user_id)
-        
-        async with self.get_connection() as conn:
-            await conn.execute("""
-                INSERT INTO fredi_user_contexts (
-                    user_id, name, age, gender, city, birth_date,
-                    timezone, timezone_offset, communication_mode, last_context_update,
-                    weather_cache, weather_cache_time,
-                    family_status, has_children, children_ages, work_schedule,
-                    job_title, commute_time, housing_type, has_private_space,
-                    has_car, support_people, resistance_people, energy_level,
-                    life_context_complete, awaiting_context, updated_at
-                ) VALUES (
-                    $1, $2, $3, $4, $5, $6,
-                    $7, $8, $9, $10,
-                    $11, $12,
-                    $13, $14, $15, $16,
-                    $17, $18, $19, $20,
-                    $21, $22, $23, $24,
-                    $25, $26, NOW()
-                )
-                ON CONFLICT (user_id) DO UPDATE SET
-                    name = EXCLUDED.name,
-                    age = EXCLUDED.age,
-                    gender = EXCLUDED.gender,
-                    city = EXCLUDED.city,
-                    birth_date = EXCLUDED.birth_date,
-                    timezone = EXCLUDED.timezone,
-                    timezone_offset = EXCLUDED.timezone_offset,
-                    communication_mode = EXCLUDED.communication_mode,
-                    last_context_update = EXCLUDED.last_context_update,
-                    weather_cache = EXCLUDED.weather_cache,
-                    weather_cache_time = EXCLUDED.weather_cache_time,
-                    family_status = EXCLUDED.family_status,
-                    has_children = EXCLUDED.has_children,
-                    children_ages = EXCLUDED.children_ages,
-                    work_schedule = EXCLUDED.work_schedule,
-                    job_title = EXCLUDED.job_title,
-                    commute_time = EXCLUDED.commute_time,
-                    housing_type = EXCLUDED.housing_type,
-                    has_private_space = EXCLUDED.has_private_space,
-                    has_car = EXCLUDED.has_car,
-                    support_people = EXCLUDED.support_people,
-                    resistance_people = EXCLUDED.resistance_people,
-                    energy_level = EXCLUDED.energy_level,
-                    life_context_complete = EXCLUDED.life_context_complete,
-                    awaiting_context = EXCLUDED.awaiting_context,
-                    updated_at = NOW()
-            """,
-                user_id,
-                getattr(context_obj, 'name', None),
-                getattr(context_obj, 'age', None),
-                getattr(context_obj, 'gender', None),
-                getattr(context_obj, 'city', None),
-                getattr(context_obj, 'birth_date', None),
-                getattr(context_obj, 'timezone', 'Europe/Moscow'),
-                getattr(context_obj, 'timezone_offset', 3),
-                getattr(context_obj, 'communication_mode', 'coach'),
-                getattr(context_obj, 'last_context_update', None),
-                json.dumps(getattr(context_obj, 'weather_cache', {})),
-                getattr(context_obj, 'weather_cache_time', None),
-                getattr(context_obj, 'family_status', None),
-                getattr(context_obj, 'has_children', False),
-                getattr(context_obj, 'children_ages', None),
-                getattr(context_obj, 'work_schedule', None),
-                getattr(context_obj, 'job_title', None),
-                getattr(context_obj, 'commute_time', None),
-                getattr(context_obj, 'housing_type', None),
-                getattr(context_obj, 'has_private_space', False),
-                getattr(context_obj, 'has_car', False),
-                getattr(context_obj, 'support_people', None),
-                getattr(context_obj, 'resistance_people', None),
-                getattr(context_obj, 'energy_level', None),
-                getattr(context_obj, 'life_context_complete', False),
-                getattr(context_obj, 'awaiting_context', None)
-            )
-    
-    async def load_user_context(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Загружает данные для создания объекта UserContext
-        
-        Returns:
-            Dict с данными или None
-        """
-        async with self.get_connection() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM fredi_user_contexts WHERE user_id = $1",
-                user_id
-            )
+                # Если функция не асинхронная, выполняем в executor
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(None, lambda: coro_func(*args, **kwargs))
             
-            if not row:
-                return None
+            return result
             
-            data = dict(row)
+        except Exception as e:
+            last_error = e
+            error_str = str(e).lower()
             
-            # Преобразуем JSON поля
-            if data.get('weather_cache'):
-                data['weather_cache'] = json.loads(data['weather_cache'])
-            
-            return data
+            # Проверяем, связана ли ошибка с соединением или циклом событий
+            if any(phrase in error_str for phrase in [
+                "пул закрыт", "pool is closed", "connection", 
+                "timeout", "ssl", "network", "reset", "another operation",
+                "different loop", "attached to a different loop"
+            ]):
+                logger.warning(f"⚠️ Ошибка соединения с БД (попытка {attempt+1}/{max_retries}): {e}")
+                
+                if attempt < max_retries - 1:
+                    # Увеличиваем задержку с каждой попыткой
+                    wait_time = 1 * (attempt + 1)
+                    logger.info(f"⏳ Ожидание {wait_time}с перед следующей попыткой...")
+                    await asyncio.sleep(wait_time)
+                    
+                    # Принудительно сбрасываем соединение
+                    try:
+                        await db.disconnect()
+                    except:
+                        pass
+                    continue
+            else:
+                # Если это не ошибка соединения, пробрасываем исключение
+                logger.error(f"❌ Неожиданная ошибка: {e}")
+                raise e
     
-    # ====================== ДАННЫЕ ПОЛЬЗОВАТЕЛЕЙ (user_data) ======================
-    
-    async def save_user_data(self, user_id: int, data: Dict[str, Any]) -> None:
-        """
-        Сохраняет user_data[user_id] в JSONB поле
-        
-        Args:
-            user_id: ID пользователя
-            data: Словарь с данными пользователя (весь user_data[user_id])
-        """
-        # Сначала убеждаемся, что пользователь существует
-        await self.save_telegram_user(user_id)
-        
-        async with self.get_connection() as conn:
-            await conn.execute("""
-                INSERT INTO fredi_user_data (user_id, data, updated_at)
-                VALUES ($1, $2, NOW())
-                ON CONFLICT (user_id) DO UPDATE SET
-                    data = $2,
-                    updated_at = NOW()
-            """, user_id, json.dumps(data, default=str))
-    
-    async def load_user_data(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Загружает user_data для пользователя"""
-        async with self.get_connection() as conn:
-            row = await conn.fetchrow(
-                "SELECT data FROM fredi_user_data WHERE user_id = $1",
-                user_id
-            )
-            
-            if row and row['data']:
-                return json.loads(row['data'])
-            
-            return {}
-    
-    # ====================== СЕРИАЛИЗОВАННЫЕ ОБЪЕКТЫ (резерв) ======================
-    
-    async def save_pickled_context(self, user_id: int, context_obj) -> None:
-        """
-        Сохраняет сериализованный объект UserContext (как резерв)
-        
-        Args:
-            user_id: ID пользователя
-            context_obj: Объект UserContext
-        """
-        async with self.get_connection() as conn:
-            pickled = pickle.dumps(context_obj)
-            await conn.execute("""
-                INSERT INTO fredi_context_objects (user_id, context_data, updated_at)
-                VALUES ($1, $2, NOW())
-                ON CONFLICT (user_id) DO UPDATE SET
-                    context_data = $2,
-                    updated_at = NOW()
-            """, user_id, pickled)
-    
-    async def load_pickled_context(self, user_id: int):
-        """
-        Загружает сериализованный объект UserContext
-        
-        Returns:
-            Объект UserContext или None
-        """
-        async with self.get_connection() as conn:
-            row = await conn.fetchrow(
-                "SELECT context_data FROM fredi_context_objects WHERE user_id = $1",
-                user_id
-            )
-            
-            if row and row['context_data']:
+    # Если все попытки исчерпаны
+    logger.error(f"❌ Все {max_retries} попыток выполнения исчерпаны. Последняя ошибка: {last_error}")
+    return None
+
+# ============================================
+# ФУНКЦИИ ДЛЯ СОХРАНЕНИЯ ДАННЫХ
+# ============================================
+
+async def save_user_to_db(
+    user_id: int, 
+    user_data_dict: Dict[int, Dict] = None, 
+    user_contexts_dict: Dict[int, Any] = None, 
+    user_routes_dict: Dict[int, Dict] = None
+):
+    """
+    Сохраняет данные конкретного пользователя в БД
+    Универсальная функция, которая принимает данные из state.py
+    """
+    try:
+        # ✅ Используем execute_with_retry для всех операций с БД
+        async def _do_save():
+            # Если данные не переданы, пытаемся импортировать из state
+            nonlocal user_data_dict, user_contexts_dict, user_routes_dict
+            if user_data_dict is None or user_contexts_dict is None or user_routes_dict is None:
                 try:
-                    return pickle.loads(row['context_data'])
-                except Exception as e:
-                    logger.error(f"Ошибка при десериализации контекста пользователя {user_id}: {e}")
+                    from state import user_data as global_user_data, user_contexts as global_user_contexts, user_routes as global_user_routes
+                    user_data_dict = global_user_data if user_data_dict is None else user_data_dict
+                    user_contexts_dict = global_user_contexts if user_contexts_dict is None else user_contexts_dict
+                    user_routes_dict = global_user_routes if user_routes_dict is None else user_routes_dict
+                except ImportError:
+                    logger.warning(f"⚠️ Не удалось импортировать глобальные данные для user {user_id}")
+                    return False
             
-            return None
-    
-    # ====================== МАРШРУТЫ ======================
-    
-    async def save_user_route(
-        self,
-        user_id: int,
-        route_data: Dict[str, Any],
-        current_step: int = 1,
-        progress: List = None
-    ) -> int:
-        """Сохраняет маршрут пользователя"""
-        if progress is None:
-            progress = []
-        
-        async with self.get_connection() as conn:
-            # Деактивируем предыдущие активные маршруты
-            await conn.execute("""
-                UPDATE fredi_user_routes SET is_active = FALSE
-                WHERE user_id = $1 AND is_active = TRUE
-            """, user_id)
-            
-            # Вставляем новый маршрут
-            route_id = await conn.fetchval("""
-                INSERT INTO fredi_user_routes (
-                    user_id, route_data, current_step, progress, is_active
-                ) VALUES ($1, $2, $3, $4, TRUE)
-                RETURNING id
-            """, user_id, json.dumps(route_data), current_step, json.dumps(progress))
-            
-            return route_id
-    
-    async def load_user_route(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Загружает активный маршрут пользователя"""
-        async with self.get_connection() as conn:
-            row = await conn.fetchrow("""
-                SELECT * FROM fredi_user_routes
-                WHERE user_id = $1 AND is_active = TRUE
-                ORDER BY created_at DESC
-                LIMIT 1
-            """, user_id)
-            
-            if not row:
-                return None
-            
-            data = dict(row)
-            data['route_data'] = json.loads(data['route_data'])
-            data['progress'] = json.loads(data['progress'])
-            
-            return data
-    
-    async def update_user_route(
-        self,
-        route_id: int,
-        current_step: int,
-        progress: List,
-        completed: bool = False
-    ):
-        """Обновляет прогресс по маршруту"""
-        async with self.get_connection() as conn:
-            await conn.execute("""
-                UPDATE fredi_user_routes SET
-                    current_step = $2,
-                    progress = $3,
-                    is_active = NOT $4,
-                    completed_at = CASE WHEN $4 THEN NOW() ELSE completed_at END,
-                    updated_at = NOW()
-                WHERE id = $1
-            """, route_id, current_step, json.dumps(progress), completed)
-    
-    # ====================== РЕЗУЛЬТАТЫ ТЕСТОВ ======================
-    
-    async def save_test_result(
-        self,
-        user_id: int,
-        test_type: str,
-        results: Dict[str, Any],
-        profile_code: Optional[str] = None,
-        perception_type: Optional[str] = None,
-        thinking_level: Optional[int] = None,
-        vectors: Optional[Dict[str, float]] = None,
-        behavioral_levels: Optional[Dict[str, List[int]]] = None,
-        deep_patterns: Optional[Dict] = None,
-        confinement_model: Optional[Dict] = None,
-        current_destination: Optional[Dict] = None,
-        current_route: Optional[Dict] = None
-    ) -> int:
-        """Сохраняет результат тестирования"""
-        
-        # Рассчитываем векторы, если не переданы, но есть results
-        if vectors is None and 'behavioral_levels' in results:
-            vectors = {}
-            behavioral = results.get('behavioral_levels', {})
-            for vector in ['СБ', 'ТФ', 'УБ', 'ЧВ']:
-                levels = behavioral.get(vector, [])
-                vectors[vector] = sum(levels) / len(levels) if levels else 3.0
-        
-        async with self.get_connection() as conn:
-            test_id = await conn.fetchval("""
-                INSERT INTO fredi_test_results (
-                    user_id, test_type, results, profile_code,
-                    perception_type, thinking_level, vectors, behavioral_levels,
-                    deep_patterns, confinement_model, current_destination, current_route
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                RETURNING id
-            """,
-                user_id,
-                test_type,
-                json.dumps(results, default=str),
-                profile_code,
-                perception_type,
-                thinking_level,
-                json.dumps(vectors) if vectors else None,
-                json.dumps(behavioral_levels) if behavioral_levels else None,
-                json.dumps(deep_patterns) if deep_patterns else None,
-                json.dumps(confinement_model) if confinement_model else None,
-                json.dumps(current_destination) if current_destination else None,
-                json.dumps(current_route) if current_route else None
-            )
-            
-            return test_id
-    
-    async def get_user_test_results(
-        self,
-        user_id: int,
-        limit: int = 10,
-        test_type: Optional[str] = None
-    ) -> List[Dict]:
-        """Получает последние результаты тестов пользователя"""
-        async with self.get_connection() as conn:
-            if test_type:
-                rows = await conn.fetch("""
-                    SELECT * FROM fredi_test_results
-                    WHERE user_id = $1 AND test_type = $2
-                    ORDER BY created_at DESC
-                    LIMIT $3
-                """, user_id, test_type, limit)
-            else:
-                rows = await conn.fetch("""
-                    SELECT * FROM fredi_test_results
-                    WHERE user_id = $1
-                    ORDER BY created_at DESC
-                    LIMIT $2
-                """, user_id, limit)
-            
-            results = []
-            for row in rows:
-                data = dict(row)
-                data['results'] = json.loads(data['results'])
-                if data.get('vectors'):
-                    data['vectors'] = json.loads(data['vectors'])
-                if data.get('behavioral_levels'):
-                    data['behavioral_levels'] = json.loads(data['behavioral_levels'])
-                if data.get('deep_patterns'):
-                    data['deep_patterns'] = json.loads(data['deep_patterns'])
-                if data.get('confinement_model'):
-                    data['confinement_model'] = json.loads(data['confinement_model'])
-                if data.get('current_destination'):
-                    data['current_destination'] = json.loads(data['current_destination'])
-                if data.get('current_route'):
-                    data['current_route'] = json.loads(data['current_route'])
-                results.append(data)
-            
-            return results
-    
-    async def get_latest_profile(self, user_id: int) -> Optional[Dict]:
-        """Получает последний полный профиль пользователя"""
-        results = await self.get_user_test_results(user_id, limit=1, test_type='full_profile')
-        return results[0] if results else None
-    
-    # ====================== ОТВЕТЫ НА ТЕСТ ======================
-    
-    async def save_test_answer(
-        self,
-        user_id: int,
-        test_result_id: Optional[int],
-        stage: int,
-        question_index: int,
-        question_text: str,
-        answer_text: str,
-        answer_value: str,
-        scores: Optional[Dict] = None,
-        measures: Optional[str] = None,
-        strategy: Optional[str] = None,
-        dilts: Optional[str] = None,
-        pattern: Optional[str] = None,
-        target: Optional[str] = None
-    ):
-        """Сохраняет отдельный ответ на вопрос теста"""
-        async with self.get_connection() as conn:
-            await conn.execute("""
-                INSERT INTO fredi_test_answers (
-                    user_id, test_result_id, stage, question_index,
-                    question_text, answer_text, answer_value,
-                    scores, measures, strategy, dilts, pattern, target
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-            """,
-                user_id,
-                test_result_id,
-                stage,
-                question_index,
-                question_text,
-                answer_text,
-                answer_value,
-                json.dumps(scores) if scores else None,
-                measures,
-                strategy,
-                dilts,
-                pattern,
-                target
-            )
-    
-    async def get_test_answers(self, test_result_id: int) -> List[Dict]:
-        """Получает все ответы для конкретного результата теста"""
-        async with self.get_connection() as conn:
-            rows = await conn.fetch("""
-                SELECT * FROM fredi_test_answers
-                WHERE test_result_id = $1
-                ORDER BY stage, question_index
-            """, test_result_id)
-            
-            answers = []
-            for row in rows:
-                data = dict(row)
-                if data.get('scores'):
-                    data['scores'] = json.loads(data['scores'])
-                answers.append(data)
-            
-            return answers
-    
-    # ====================== ГИПНОТИЧЕСКИЕ ЯКОРЯ ======================
-    
-    async def save_hypno_anchor(
-        self,
-        user_id: int,
-        anchor_name: str,
-        anchor_state: str,
-        anchor_phrase: str,
-        emoji: Optional[str] = None
-    ) -> int:
-        """Сохраняет гипнотический якорь"""
-        async with self.get_connection() as conn:
-            anchor_id = await conn.fetchval("""
-                INSERT INTO fredi_hypno_anchors (user_id, anchor_name, anchor_state, anchor_phrase, emoji)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (user_id, anchor_name) DO UPDATE SET
-                    anchor_state = EXCLUDED.anchor_state,
-                    anchor_phrase = EXCLUDED.anchor_phrase,
-                    emoji = EXCLUDED.emoji,
-                    last_used = NOW(),
-                    use_count = fredi_hypno_anchors.use_count + 1
-                RETURNING id
-            """, user_id, anchor_name, anchor_state, anchor_phrase, emoji)
-            
-            return anchor_id
-    
-    async def get_user_anchors(self, user_id: int) -> List[Dict]:
-        """Получает все якоря пользователя"""
-        async with self.get_connection() as conn:
-            rows = await conn.fetch("""
-                SELECT * FROM fredi_hypno_anchors
-                WHERE user_id = $1
-                ORDER BY use_count DESC, last_used DESC
-            """, user_id)
-            
-            return [dict(row) for row in rows]
-    
-    async def fire_anchor(self, user_id: int, anchor_name: str) -> Optional[str]:
-        """Активирует якорь и обновляет статистику использования"""
-        async with self.get_connection() as conn:
-            row = await conn.fetchrow("""
-                UPDATE fredi_hypno_anchors
-                SET last_used = NOW(), use_count = use_count + 1
-                WHERE user_id = $1 AND anchor_name = $2
-                RETURNING anchor_phrase, emoji
-            """, user_id, anchor_name)
-            
-            if row:
-                emoji = row['emoji'] or ''
-                return f"{emoji} {row['anchor_phrase']}".strip()
-            
-            return None
-    
-    # ====================== НАПОМИНАНИЯ ======================
-    
-    async def add_reminder(
-        self,
-        user_id: int,
-        reminder_type: str,
-        remind_at: datetime,
-        data: Optional[Dict] = None
-    ) -> int:
-        """Добавляет напоминание"""
-        async with self.get_connection() as conn:
-            reminder_id = await conn.fetchval("""
-                INSERT INTO fredi_reminders (user_id, reminder_type, remind_at, data)
-                VALUES ($1, $2, $3, $4)
-                RETURNING id
-            """, user_id, reminder_type, remind_at, json.dumps(data) if data else None)
-            
-            return reminder_id
-    
-    async def get_pending_reminders(self, limit: int = 100) -> List[Dict]:
-        """Получает список неотправленных напоминаний, которые уже пора отправить"""
-        async with self.get_connection() as conn:
-            rows = await conn.fetch("""
-                SELECT * FROM fredi_reminders
-                WHERE is_sent = FALSE AND remind_at <= NOW()
-                ORDER BY remind_at
-                LIMIT $1
-            """, limit)
-            
-            reminders = []
-            for row in rows:
-                data = dict(row)
-                if data.get('data'):
-                    data['data'] = json.loads(data['data'])
-                reminders.append(data)
-            
-            return reminders
-    
-    async def mark_reminder_sent(self, reminder_id: int):
-        """Отмечает напоминание как отправленное"""
-        async with self.get_connection() as conn:
-            await conn.execute("""
-                UPDATE fredi_reminders
-                SET is_sent = TRUE, sent_at = NOW()
-                WHERE id = $1
-            """, reminder_id)
-    
-    async def get_user_reminders(
-        self,
-        user_id: int,
-        include_sent: bool = False
-    ) -> List[Dict]:
-        """Получает все напоминания пользователя"""
-        async with self.get_connection() as conn:
-            if include_sent:
-                rows = await conn.fetch("""
-                    SELECT * FROM fredi_reminders
-                    WHERE user_id = $1
-                    ORDER BY remind_at DESC
-                """, user_id)
-            else:
-                rows = await conn.fetch("""
-                    SELECT * FROM fredi_reminders
-                    WHERE user_id = $1 AND is_sent = FALSE
-                    ORDER BY remind_at
-                """, user_id)
-            
-            reminders = []
-            for row in rows:
-                data = dict(row)
-                if data.get('data'):
-                    data['data'] = json.loads(data['data'])
-                reminders.append(data)
-            
-            return reminders
-    
-    # ====================== КЭШ ИДЕЙ НА ВЫХОДНЫЕ ======================
-    
-    async def cache_weekend_ideas(
-        self,
-        user_id: int,
-        ideas_text: str,
-        main_vector: str,
-        main_level: int
-    ) -> int:
-        """Сохраняет сгенерированные идеи на выходные в кэш"""
-        async with self.get_connection() as conn:
-            # Удаляем старые записи для этого пользователя
-            await conn.execute("""
-                DELETE FROM fredi_weekend_ideas_cache
-                WHERE user_id = $1
-            """, user_id)
-            
-            # Вставляем новую
-            cache_id = await conn.fetchval("""
-                INSERT INTO fredi_weekend_ideas_cache (user_id, ideas_text, main_vector, main_level)
-                VALUES ($1, $2, $3, $4)
-                RETURNING id
-            """, user_id, ideas_text, main_vector, main_level)
-            
-            return cache_id
-    
-    async def get_cached_weekend_ideas(self, user_id: int) -> Optional[str]:
-        """Получает кэшированные идеи на выходные (если не истекли)"""
-        async with self.get_connection() as conn:
-            row = await conn.fetchrow("""
-                SELECT ideas_text FROM fredi_weekend_ideas_cache
-                WHERE user_id = $1 AND expires_at > NOW()
-                ORDER BY created_at DESC
-                LIMIT 1
-            """, user_id)
-            
-            return row['ideas_text'] if row else None
-    
-    # ====================== КЭШ АНАЛИЗА ВОПРОСОВ ======================
-    
-    async def cache_question_analysis(
-        self,
-        user_id: int,
-        question: str,
-        analysis: Dict[str, Any]
-    ) -> int:
-        """Сохраняет анализ вопроса в кэш"""
-        question_hash = hash(question) % 1000000
-        
-        async with self.get_connection() as conn:
-            # Удаляем старые записи с таким же хешем
-            await conn.execute("""
-                DELETE FROM fredi_question_analysis_cache
-                WHERE user_id = $1 AND question_hash = $2
-            """, user_id, question_hash)
-            
-            cache_id = await conn.fetchval("""
-                INSERT INTO fredi_question_analysis_cache (user_id, question_hash, question_text, analysis)
-                VALUES ($1, $2, $3, $4)
-                RETURNING id
-            """, user_id, question_hash, question[:200], json.dumps(analysis, default=str))
-            
-            return cache_id
-    
-    async def get_cached_question_analysis(self, user_id: int, question: str) -> Optional[Dict]:
-        """Получает кэшированный анализ вопроса (если не истек)"""
-        question_hash = hash(question) % 1000000
-        
-        async with self.get_connection() as conn:
-            row = await conn.fetchrow("""
-                SELECT analysis FROM fredi_question_analysis_cache
-                WHERE user_id = $1 AND question_hash = $2 AND expires_at > NOW()
-                ORDER BY created_at DESC
-                LIMIT 1
-            """, user_id, question_hash)
-            
-            if row and row['analysis']:
-                return json.loads(row['analysis'])
-            
-            return None
-    
-    # ====================== СОБЫТИЯ И СТАТИСТИКА ======================
-    
-    async def log_event(
-        self,
-        user_id: int,
-        event_type: str,
-        event_data: Optional[Dict] = None
-    ):
-        """Логирует событие для статистики"""
-        async with self.get_connection() as conn:
-            await conn.execute("""
-                INSERT INTO fredi_events (user_id, event_type, event_data)
-                VALUES ($1, $2, $3)
-            """, user_id, event_type, json.dumps(event_data) if event_data else None)
-            
-            # Также обновляем last_activity
-            await self.update_last_activity(user_id)
-    
-    async def get_stats(self, days: int = 30) -> Dict[str, Any]:
-        """Получает статистику за указанный период"""
-        async with self.get_connection() as conn:
-            since = datetime.now() - timedelta(days=days)
-            
-            # Общая статистика
-            total_users = await conn.fetchval("SELECT COUNT(*) FROM fredi_users")
-            active_users = await conn.fetchval("""
-                SELECT COUNT(DISTINCT user_id) FROM fredi_events
-                WHERE created_at >= $1
-            """, since)
-            
-            # Завершенные тесты
-            completed_tests = await conn.fetchval("""
-                SELECT COUNT(*) FROM fredi_test_results
-                WHERE created_at >= $1
-            """, since)
-            
-            # Распределение по типам событий
-            event_types = await conn.fetch("""
-                SELECT event_type, COUNT(*) as count
-                FROM fredi_events
-                WHERE created_at >= $1
-                GROUP BY event_type
-                ORDER BY count DESC
-            """, since)
-            
-            # Распределение по типам восприятия
-            perception_types = await conn.fetch("""
-                SELECT perception_type, COUNT(*) as count
-                FROM fredi_test_results
-                WHERE perception_type IS NOT NULL AND created_at >= $1
-                GROUP BY perception_type
-                ORDER BY count DESC
-            """, since)
-            
-            # Распределение по уровням мышления
-            thinking_levels = await conn.fetch("""
-                SELECT thinking_level, COUNT(*) as count
-                FROM fredi_test_results
-                WHERE thinking_level IS NOT NULL AND created_at >= $1
-                GROUP BY thinking_level
-                ORDER BY thinking_level
-            """, since)
-            
-            # Распределение по профилям
-            profiles = await conn.fetch("""
-                SELECT profile_code, COUNT(*) as count
-                FROM fredi_test_results
-                WHERE profile_code IS NOT NULL AND created_at >= $1
-                GROUP BY profile_code
-                ORDER BY count DESC
-                LIMIT 20
-            """, since)
-            
-            # Ежедневная активность
-            daily = await conn.fetch("""
-                SELECT DATE(created_at) as date,
-                       COUNT(DISTINCT user_id) as users,
-                       COUNT(*) as events
-                FROM fredi_events
-                WHERE created_at >= $1
-                GROUP BY DATE(created_at)
-                ORDER BY date DESC
-            """, since)
-            
-            return {
-                'period_days': days,
-                'total_users': total_users,
-                'active_users': active_users,
-                'completed_tests': completed_tests,
-                'event_types': [dict(et) for et in event_types],
-                'perception_types': [dict(pt) for pt in perception_types],
-                'thinking_levels': [dict(tl) for tl in thinking_levels],
-                'profiles': [dict(p) for p in profiles],
-                'daily': [dict(d) for d in daily]
-            }
-    
-    # ====================== ОЧИСТКА СТАРЫХ ДАННЫХ ======================
-    
-    async def cleanup_old_data(self, days: int = 30):
-        """
-        Очищает старые данные (события, неактивные маршруты и т.д.)
-        
-        Args:
-            days: Хранить данные за последние N дней
-        """
-        async with self.get_connection() as conn:
-            # Удаляем старые события
-            await conn.execute("""
-                DELETE FROM fredi_events
-                WHERE created_at < NOW() - INTERVAL '1 day' * $1
-            """, days)
-            
-            # Деактивируем старые неактивные маршруты (старше 90 дней)
-            await conn.execute("""
-                UPDATE fredi_user_routes
-                SET is_active = FALSE
-                WHERE is_active = TRUE
-                  AND updated_at < NOW() - INTERVAL '90 days'
-            """)
-            
-            # Удаляем старые напоминания (отправленные или просроченные более чем на 7 дней)
-            await conn.execute("""
-                DELETE FROM fredi_reminders
-                WHERE (is_sent = TRUE AND sent_at < NOW() - INTERVAL '7 days')
-                   OR (is_sent = FALSE AND remind_at < NOW() - INTERVAL '7 days')
-            """)
-            
-            # Очищаем старый кэш
-            await conn.execute("""
-                DELETE FROM fredi_weekend_ideas_cache WHERE expires_at < NOW()
-            """)
-            await conn.execute("""
-                DELETE FROM fredi_question_analysis_cache WHERE expires_at < NOW()
-            """)
-            
-            logger.info(f"🧹 Очистка старых данных выполнена")
-    
-    # ====================== МИГРАЦИЯ СУЩЕСТВУЮЩИХ ПОЛЬЗОВАТЕЛЕЙ ======================
-    
-    async def migrate_existing_users(
-        self,
-        user_data_dict: Dict[int, Dict],
-        user_contexts_dict: Dict[int, Any],
-        user_names_dict: Dict[int, str],
-        user_routes_dict: Dict[int, Dict]
-    ):
-        """
-        Мигрирует существующих пользователей из памяти в БД
-        
-        Args:
-            user_data_dict: Словарь user_data
-            user_contexts_dict: Словарь user_contexts
-            user_names_dict: Словарь user_names
-            user_routes_dict: Словарь user_routes
-        """
-        migrated_users = 0
-        migrated_contexts = 0
-        migrated_data = 0
-        migrated_routes = 0
-        migrated_tests = 0
-        
-        for user_id in set(
-            list(user_data_dict.keys()) +
-            list(user_contexts_dict.keys()) +
-            list(user_names_dict.keys()) +
-            list(user_routes_dict.keys())
-        ):
-            # Сохраняем пользователя
-            first_name = user_names_dict.get(user_id)
-            if first_name:
-                await self.save_telegram_user(
+            # Сохраняем пользователя в таблицу fredi_users
+            if user_id in user_data_dict:
+                user_info = user_data_dict[user_id]
+                first_name = user_info.get('first_name') or user_info.get('name')
+                username = user_info.get('username')
+                
+                await db.save_telegram_user(
                     user_id=user_id,
+                    username=username,
                     first_name=first_name
                 )
-                migrated_users += 1
             
-            # Сохраняем контекст
+            # Сохраняем user_data (результаты тестов, профиль)
+            if user_id in user_data_dict:
+                await db.save_user_data(user_id, user_data_dict[user_id])
+            
+            # Сохраняем контекст (UserContext объект)
             if user_id in user_contexts_dict:
                 context = user_contexts_dict[user_id]
-                # Убеждаемся, что имя сохранено в контексте
-                if not hasattr(context, 'name') or not context.name:
-                    context.name = user_names_dict.get(user_id)
-                await self.save_user_context(user_id, context)
-                migrated_contexts += 1
+                await db.save_user_context(user_id, context)
+                # Также сохраняем pickled версию как резерв
+                await db.save_pickled_context(user_id, context)
             
-            # Сохраняем данные
-            if user_id in user_data_dict:
-                data = user_data_dict[user_id]
-                await self.save_user_data(user_id, data)
-                migrated_data += 1
-                
-                # Если есть результаты теста, сохраняем их отдельно
-                if data.get('profile_data') or data.get('ai_generated_profile'):
-                    test_id = await self.save_test_result(
-                        user_id=user_id,
-                        test_type='full_profile',
-                        results=data,
-                        profile_code=data.get('profile_data', {}).get('display_name'),
-                        perception_type=data.get('perception_type'),
-                        thinking_level=data.get('thinking_level'),
-                        vectors=data.get('behavioral_levels'),
-                        deep_patterns=data.get('deep_patterns'),
-                        confinement_model=data.get('confinement_model')
-                    )
-                    migrated_tests += 1
-                    
-                    # Сохраняем ответы на тест, если есть
-                    if test_id and data.get('all_answers'):
-                        for answer in data['all_answers']:
-                            await self.save_test_answer(
-                                user_id=user_id,
-                                test_result_id=test_id,
-                                stage=answer.get('stage', 0),
-                                question_index=answer.get('question_index', 0),
-                                question_text=answer.get('question', ''),
-                                answer_text=answer.get('answer', ''),
-                                answer_value=answer.get('option', ''),
-                                scores=answer.get('scores'),
-                                measures=answer.get('measures'),
-                                strategy=answer.get('strategy'),
-                                dilts=answer.get('dilts'),
-                                pattern=answer.get('pattern'),
-                                target=answer.get('target')
-                            )
-            
-            # Сохраняем маршруты
+            # Сохраняем маршрут
             if user_id in user_routes_dict:
-                route_data = user_routes_dict[user_id]
-                await self.save_user_route(
+                route = user_routes_dict[user_id]
+                await db.save_user_route(
                     user_id=user_id,
-                    route_data=route_data.get('route_data', {}),
-                    current_step=route_data.get('current_step', 1),
-                    progress=route_data.get('progress', [])
+                    route_data=route.get('route_data', {}),
+                    current_step=route.get('current_step', 1),
+                    progress=route.get('progress', [])
                 )
-                migrated_routes += 1
+            
+            logger.debug(f"💾 Данные пользователя {user_id} сохранены в БД")
+            return True
         
-        logger.info(f"✅ Мигрировано: {migrated_users} пользователей, {migrated_contexts} контекстов, "
-                   f"{migrated_data} наборов данных, {migrated_routes} маршрутов, {migrated_tests} тестов")
+        # Выполняем с повторными попытками
+        return await execute_with_retry(_do_save, max_retries=3)
         
-        return {
-            'users': migrated_users,
-            'contexts': migrated_contexts,
-            'data': migrated_data,
-            'routes': migrated_routes,
-            'tests': migrated_tests
-        }
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения пользователя {user_id} в БД после всех попыток: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+async def save_test_result_to_db(
+    user_id: int,
+    test_type: str,
+    user_data_dict: Dict[int, Dict]
+):
+    """Сохраняет результаты теста в БД"""
+    try:
+        async def _do_save():
+            data = user_data_dict.get(user_id, {})
+            
+            # Получаем profile_code из данных
+            profile_code = None
+            if data.get("profile_data"):
+                profile_code = data["profile_data"].get("display_name")
+            
+            # Сохраняем результат теста
+            test_id = await db.save_test_result(
+                user_id=user_id,
+                test_type=test_type,
+                results=data,
+                profile_code=profile_code,
+                perception_type=data.get("perception_type"),
+                thinking_level=data.get("thinking_level"),
+                vectors=data.get("behavioral_levels"),
+                deep_patterns=data.get("deep_patterns"),
+                confinement_model=data.get("confinement_model")
+            )
+            
+            # Сохраняем все ответы, если есть
+            all_answers = data.get("all_answers", [])
+            if all_answers and test_id:
+                for answer in all_answers:
+                    await db.save_test_answer(
+                        user_id=user_id,
+                        test_result_id=test_id,
+                        stage=answer.get('stage', 0),
+                        question_index=answer.get('question_index', 0),
+                        question_text=answer.get('question', ''),
+                        answer_text=answer.get('answer', ''),
+                        answer_value=answer.get('option', ''),
+                        scores=answer.get('scores'),
+                        measures=answer.get('measures'),
+                        strategy=answer.get('strategy'),
+                        dilts=answer.get('dilts'),
+                        pattern=answer.get('pattern'),
+                        target=answer.get('target')
+                    )
+            
+            return test_id
+        
+        # Выполняем с повторными попытками
+        return await execute_with_retry(_do_save, max_retries=3)
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения результатов теста для {user_id}: {e}")
+        return None
+
+# ============================================
+# ЭКСПОРТ
+# ============================================
+
+__all__ = [
+    'db',
+    'init_db',
+    'close_db',
+    'save_user_to_db',
+    'save_test_result_to_db',
+    'ensure_db_connection',
+    'execute_with_retry'
+]
