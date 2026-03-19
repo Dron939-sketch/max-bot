@@ -3,7 +3,7 @@
 """
 Централизованный доступ к экземпляру базы данных
 ИСПРАВЛЕНИЕ: Устранение циклического импорта с main.py
-ВЕРСИЯ 2.3 - ДОБАВЛЕНО: Паузы при переподключении, улучшена обработка ошибок
+ВЕРСИЯ 2.4 - ИСПРАВЛЕНО: Поддержка Python 3.14, добавлены повторные попытки
 """
 
 import os
@@ -11,6 +11,7 @@ import json
 import pickle
 import logging
 import asyncio
+import sys
 from typing import Dict, Any, Optional
 from database import BotDatabase
 
@@ -28,6 +29,10 @@ db = BotDatabase(DATABASE_URL)
 async def init_db():
     """Инициализация подключения к БД"""
     try:
+        # Для Python 3.14 добавляем небольшую задержку для инициализации контекста
+        if sys.version_info >= (3, 14):
+            await asyncio.sleep(0.1)
+        
         await db.connect()
         logger.info("✅ Подключение к PostgreSQL установлено")
         return True
@@ -44,60 +49,63 @@ async def close_db():
         logger.error(f"❌ Ошибка при закрытии подключения: {e}")
 
 # ============================================
-# ✅ ДОБАВЛЕНО: ФУНКЦИЯ ПРОВЕРКИ СОЕДИНЕНИЯ С БД (С ПАУЗАМИ)
+# ✅ ФУНКЦИЯ ПРОВЕРКИ СОЕДИНЕНИЯ С БД (С ПАУЗАМИ)
 # ============================================
 
 async def ensure_db_connection():
     """Проверяет, установлено ли соединение с БД, и подключается если нет"""
-    try:
-        # Проверяем, существует ли пул
-        if db.pool is None:
-            logger.info("🔄 Пул соединений не инициализирован, подключаемся...")
-            await db.connect()
-            return True
-        
-        # Проверяем, работает ли соединение
-        async with db.get_connection() as conn:
-            await conn.execute("SELECT 1")
-        return True
-    except Exception as e:
-        error_str = str(e).lower()
-        logger.error(f"❌ Ошибка при проверке соединения с БД: {e}")
-        
-        # Проверяем, связана ли ошибка с соединением
-        if any(phrase in error_str for phrase in [
-            "пул закрыт", "pool is closed", "connection", 
-            "timeout", "ssl", "network", "reset", "another operation"
-        ]):
-            # Пробуем переподключиться
-            try:
-                logger.info("🔄 Пробуем переподключиться к БД...")
-                
-                # ✅ Добавляем паузу перед переподключением
-                await asyncio.sleep(0.5)
-                
-                # Пытаемся закрыть существующее соединение
-                try:
-                    await db.disconnect()
-                except:
-                    pass
-                
-                # ✅ Еще одна пауза между закрытием и открытием
-                await asyncio.sleep(0.5)
-                
-                # Подключаемся заново
+    max_retries = 3
+    retry_delay = 0.5
+    
+    for attempt in range(max_retries):
+        try:
+            # Проверяем, существует ли пул
+            if db.pool is None:
+                logger.info("🔄 Пул соединений не инициализирован, подключаемся...")
                 await db.connect()
-                logger.info("✅ Успешное переподключение к БД")
                 return True
-            except Exception as e2:
-                logger.error(f"❌ Не удалось переподключиться к БД: {e2}")
+            
+            # Проверяем, работает ли соединение
+            async with db.get_connection() as conn:
+                await conn.execute("SELECT 1")
+            return True
+            
+        except Exception as e:
+            error_str = str(e).lower()
+            logger.error(f"❌ Ошибка при проверке соединения с БД (попытка {attempt+1}/{max_retries}): {e}")
+            
+            # Проверяем, связана ли ошибка с соединением или циклом событий
+            if any(phrase in error_str for phrase in [
+                "пул закрыт", "pool is closed", "connection", 
+                "timeout", "ssl", "network", "reset", "another operation",
+                "different loop", "attached to a different loop"
+            ]):
+                if attempt < max_retries - 1:
+                    logger.info(f"⏳ Повторная попытка через {retry_delay}с...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Увеличиваем задержку
+                    
+                    # Пробуем переподключиться
+                    try:
+                        await db.disconnect()
+                    except:
+                        pass
+                    
+                    # Для Python 3.14 принудительно создаем новый контекст
+                    if sys.version_info >= (3, 14):
+                        await asyncio.sleep(0.2)
+                    
+                    continue
+                else:
+                    return False
+            else:
+                # Если это не ошибка соединения, возвращаем False
                 return False
-        else:
-            # Если это не ошибка соединения, возвращаем False
-            return False
+    
+    return False
 
 # ============================================
-# ✅ ДОБАВЛЕНО: ФУНКЦИЯ ДЛЯ ВЫПОЛНЕНИЯ С ПОВТОРНЫМИ ПОПЫТКАМИ
+# ✅ ФУНКЦИЯ ДЛЯ ВЫПОЛНЕНИЯ С ПОВТОРНЫМИ ПОПЫТКАМИ
 # ============================================
 
 async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
@@ -118,7 +126,14 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
     for attempt in range(max_retries):
         try:
             # Проверяем соединение перед выполнением
-            await ensure_db_connection()
+            if not await ensure_db_connection():
+                logger.warning(f"⚠️ Не удалось установить соединение с БД (попытка {attempt+1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    wait_time = 1 * (attempt + 1)
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    return None
             
             # Выполняем функцию
             if asyncio.iscoroutinefunction(coro_func):
@@ -128,14 +143,13 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(None, lambda: coro_func(*args, **kwargs))
             
-            # Если успешно, возвращаем результат
             return result
             
         except Exception as e:
             last_error = e
             error_str = str(e).lower()
             
-            # Проверяем, связана ли ошибка с соединением
+            # Проверяем, связана ли ошибка с соединением или циклом событий
             if any(phrase in error_str for phrase in [
                 "пул закрыт", "pool is closed", "connection", 
                 "timeout", "ssl", "network", "reset", "another operation",
@@ -156,7 +170,7 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
                         pass
                     continue
             else:
-                # Если это не ошибка соединения, сразу выбрасываем исключение
+                # Если это не ошибка соединения, пробрасываем исключение
                 raise e
     
     # Если все попытки исчерпаны
@@ -304,5 +318,5 @@ __all__ = [
     'save_user_to_db',
     'save_test_result_to_db',
     'ensure_db_connection',
-    'execute_with_retry'  # ✅ ДОБАВЛЕНО
+    'execute_with_retry'
 ]
