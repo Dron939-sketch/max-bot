@@ -4,14 +4,17 @@
 Модуль для работы с PostgreSQL базой данных бота "Фреди"
 Все таблицы имеют префикс fredi_ для избежания конфликтов
 
-Версия 2.0 - ИСПРАВЛЕНО: Поддержка Python 3.14, добавлены патчи для asyncpg
+Версия 2.1 - ИСПРАВЛЕНО: Поддержка Python 3.14, добавлены критические патчи для asyncpg
 """
 
-# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ PYTHON 3.14 ==========
+# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ ASYNCPG В PYTHON 3.14 ==========
 import sys
 import asyncio
 import asyncpg
 from asyncpg.pool import Pool
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Сохраняем оригинальную функцию
 original_create_pool = asyncpg.create_pool
@@ -27,10 +30,12 @@ async def patched_create_pool(*args, **kwargs):
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        logger.warning("⚠️ Создан новый цикл событий для пула соединений")
     
     # Для Python 3.14 добавляем loop в kwargs
     if sys.version_info >= (3, 14):
         kwargs['loop'] = loop
+        logger.debug("✅ Добавлен loop в kwargs для Python 3.14")
     
     # Убеждаемся, что есть таймауты
     if 'timeout' not in kwargs:
@@ -41,20 +46,22 @@ async def patched_create_pool(*args, **kwargs):
     # Добавляем небольшую задержку для инициализации контекста
     await asyncio.sleep(0.1)
     
-    return await original_create_pool(*args, **kwargs)
+    try:
+        return await original_create_pool(*args, **kwargs)
+    except Exception as e:
+        logger.error(f"❌ Ошибка при создании пула: {e}")
+        raise
 
 # Применяем патч
 asyncpg.create_pool = patched_create_pool
-# =====================================================
+logger.info("✅ Применён критический патч для asyncpg в Python 3.14")
+# ================================================================
 
 import pickle
 import json
-import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Union
 from contextlib import asynccontextmanager
-
-logger = logging.getLogger(__name__)
 
 
 class BotDatabase:
@@ -91,6 +98,7 @@ class BotDatabase:
                 except RuntimeError:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
+                    logger.warning("⚠️ Создан новый цикл событий для connect")
                 
                 self.pool = await asyncpg.create_pool(
                     self.dsn,
@@ -101,6 +109,7 @@ class BotDatabase:
                     timeout=60,
                     loop=loop  # Явно передаем loop
                 )
+                logger.info("✅ Пул соединений создан с явным loop (Python 3.14)")
             else:
                 # Для старых версий Python
                 self.pool = await asyncpg.create_pool(
@@ -111,8 +120,7 @@ class BotDatabase:
                     max_inactive_connection_lifetime=300,
                     timeout=60
                 )
-            
-            logger.info("✅ Пул соединений с PostgreSQL создан")
+                logger.info("✅ Пул соединений создан (Python < 3.14)")
             
             # Создаем таблицы при подключении
             await self.create_tables()
@@ -132,7 +140,9 @@ class BotDatabase:
     async def get_connection(self):
         """Контекстный менеджер для получения соединения из пула"""
         if not self.pool:
-            raise RuntimeError("Пул соединений не инициализирован. Вызовите connect()")
+            error_msg = "Пул соединений не инициализирован. Вызовите connect()"
+            logger.error(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
         
         max_retries = 3
         retry_delay = 0.5
@@ -143,11 +153,13 @@ class BotDatabase:
                     yield conn
                 return
             except asyncpg.exceptions._base.InterfaceError as e:
-                if "different loop" in str(e).lower() and attempt < max_retries - 1:
-                    logger.warning(f"⚠️ Ошибка цикла событий, повтор через {retry_delay}с...")
+                error_str = str(e).lower()
+                if "different loop" in error_str and attempt < max_retries - 1:
+                    logger.warning(f"⚠️ Ошибка цикла событий (попытка {attempt+1}/{max_retries}), повтор через {retry_delay}с...")
                     await asyncio.sleep(retry_delay)
                     retry_delay *= 2
                 else:
+                    logger.error(f"❌ Ошибка интерфейса asyncpg: {e}")
                     raise
             except Exception as e:
                 logger.error(f"❌ Ошибка при получении соединения: {e}")
