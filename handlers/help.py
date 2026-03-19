@@ -484,7 +484,7 @@ def show_benefits(call: CallbackQuery):
         call.message,
         text,
         reply_markup=keyboard,
-        parse_mode=None,  # 👈 УБРАЛИ HTML, используем Markdown
+        parse_mode='Markdown', 
         delete_previous=True
     )
 
