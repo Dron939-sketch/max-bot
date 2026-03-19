@@ -6,6 +6,7 @@
 ИСПРАВЛЕНО: обработка вопросов без await для синхронных функций
 ДОБАВЛЕНО: FastAPI для мини-приложения с полной синхронизацией
 ДОБАВЛЕНО: PostgreSQL для постоянного хранения данных
+ИСПРАВЛЕНО: правильное обслуживание статических файлов из папки miniapp
 """
 
 import os
@@ -27,6 +28,7 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 # =========================================
 
@@ -351,7 +353,7 @@ async def periodic_cleanup_db():
             logger.error(f"❌ Ошибка при очистке данных: {e}")
 
 # ============================================
-# FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
+# FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ - ИСПРАВЛЕНО
 # ============================================
 
 # Создаем FastAPI приложение
@@ -365,51 +367,45 @@ api_app.add_middleware(
     allow_headers=["*"],
 )
 
-# Путь к статическим файлам мини-приложения
+# ============================================
+# ПОДКЛЮЧЕНИЕ СТАТИЧЕСКИХ ФАЙЛОВ МИНИ-ПРИЛОЖЕНИЯ
+# ============================================
+
+# Путь к папке с мини-приложением
 MINIAPP_PATH = os.path.join(os.path.dirname(__file__), 'miniapp')
 
-# Создаем папку для мини-приложения, если её нет
+# Создаем папку, если её нет
 os.makedirs(MINIAPP_PATH, exist_ok=True)
 
-# Обслуживаем HTML и другие статические файлы
-@api_app.get("/")
-async def serve_miniapp():
-    """Главная страница мини-приложения"""
-    index_path = os.path.join(MINIAPP_PATH, 'index.html')
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    else:
+# Обслуживаем статические файлы из папки miniapp
+if os.path.exists(MINIAPP_PATH):
+    # Монтируем статические файлы по пути /miniapp
+    api_app.mount("/miniapp", StaticFiles(directory=MINIAPP_PATH, html=True), name="miniapp")
+    logger.info(f"✅ Статические файлы подключены из {MINIAPP_PATH}")
+
+    # Перенаправление с корня на index.html из miniapp
+    @api_app.get("/")
+    async def serve_miniapp():
+        index_path = os.path.join(MINIAPP_PATH, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "index.html не найден в папке miniapp"}
+            )
+else:
+    logger.error(f"❌ Папка {MINIAPP_PATH} не найдена")
+    
+    @api_app.get("/")
+    async def error_no_miniapp():
         return JSONResponse(
             status_code=404,
-            content={"error": "Мини-приложение не установлено. Создайте файл miniapp/index.html"}
+            content={"error": "Папка miniapp не найдена"}
         )
 
-@api_app.get("/styles.css")
-async def serve_css():
-    """CSS стили мини-приложения"""
-    css_path = os.path.join(MINIAPP_PATH, 'styles.css')
-    if os.path.exists(css_path):
-        return FileResponse(css_path)
-    return JSONResponse(status_code=404, content={"error": "styles.css not found"})
-
-@api_app.get("/script.js")
-async def serve_js():
-    """JavaScript мини-приложения"""
-    js_path = os.path.join(MINIAPP_PATH, 'script.js')
-    if os.path.exists(js_path):
-        return FileResponse(js_path)
-    return JSONResponse(status_code=404, content={"error": "script.js not found"})
-
-@api_app.get("/api.js")
-async def serve_api_js():
-    """JavaScript API слой мини-приложения"""
-    js_path = os.path.join(MINIAPP_PATH, 'api.js')
-    if os.path.exists(js_path):
-        return FileResponse(js_path)
-    return JSONResponse(status_code=404, content={"error": "api.js not found"})
-
 # ============================================
-# СУЩЕСТВУЮЩИЕ ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
+# API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
 # ============================================
 
 @api_app.post("/api/save-profile")
