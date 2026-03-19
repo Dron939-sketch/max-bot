@@ -7,6 +7,8 @@
 ИСПРАВЛЕНО: Устранен циклический импорт с main.py
 ИСПРАВЛЕНО: Асинхронные вызовы обернуты в threading
 ИСПРАВЛЕНО: Город обрабатывается в отдельном потоке без зависаний
+ИСПРАВЛЕНО: Все parse_mode заменены на 'Markdown'
+ИСПРАВЛЕНО: Добавлено подробное логирование для отладки возраста
 """
 
 import logging
@@ -199,7 +201,7 @@ def start_context(message: Message):
                 message,
                 f"📝 **Давайте познакомимся**\n\n{question}",
                 reply_markup=keyboard,
-                parse_mode=None,
+                parse_mode='Markdown',
                 delete_previous=True
             )
             logger.info(f"✅ Вопрос о городе отправлен, устанавливаем состояние awaiting_context")
@@ -256,7 +258,7 @@ def handle_context_callback(call: CallbackQuery):
                 call.message,
                 f"📝 **Давайте познакомимся**\n\n{question}",
                 reply_markup=keyboard,
-                parse_mode=None,
+                parse_mode='Markdown',
                 delete_previous=True
             )
         else:
@@ -282,7 +284,7 @@ def handle_context_callback(call: CallbackQuery):
                 call.message,
                 f"📝 **Давайте познакомимся**\n\n{question}",
                 reply_markup=keyboard,
-                parse_mode=None,
+                parse_mode='Markdown',
                 delete_previous=True
             )
         else:
@@ -308,7 +310,7 @@ def handle_context_callback(call: CallbackQuery):
                 call.message,
                 f"📝 **Давайте познакомимся**\n\n{question}",
                 reply_markup=keyboard,
-                parse_mode=None,
+                parse_mode='Markdown',
                 delete_previous=True
             )
         else:
@@ -330,7 +332,7 @@ def handle_context_callback(call: CallbackQuery):
             f"⏭ Хорошо, будем общаться без привязки к месту и времени.\n\n"
             "Но помните: с контекстом советы точнее 😉\n"
             "Можете в любой момент рассказать о себе — просто напишите /context",
-            parse_mode=None,
+            parse_mode='Markdown',
             delete_previous=True
         )
         
@@ -400,6 +402,7 @@ def handle_context_message(message: Message) -> bool:
         loading_msg = safe_send_message(
             message,
             "🔄 Получаю данные о погоде и часовом поясе...\nЭто займёт несколько секунд.",
+            parse_mode='Markdown',
             delete_previous=True
         )
         
@@ -430,13 +433,13 @@ def handle_context_message(message: Message) -> bool:
                         message,
                         f"📝 **Давайте познакомимся**\n\n{question}",
                         reply_markup=keyboard,
-                        parse_mode=None,
+                        parse_mode='Markdown',
                         delete_previous=True
                     )
                 else:
                     # Если вопросов больше нет, показываем завершение
-                    # Запускаем в основном потоке через run_async_task
-                    run_async_task(lambda: show_context_complete(message, context))
+                    logger.info(f"🎉 Вопросов больше нет после города, показываем завершение")
+                    show_context_complete(message, context)
                     
             except Exception as e:
                 logger.error(f"❌ Ошибка при обновлении погоды: {e}")
@@ -447,11 +450,12 @@ def handle_context_message(message: Message) -> bool:
                         message,
                         f"📝 **Давайте познакомимся**\n\n{question}",
                         reply_markup=keyboard,
-                        parse_mode=None,
+                        parse_mode='Markdown',
                         delete_previous=True
                     )
                 else:
-                    run_async_task(lambda: show_context_complete(message, context))
+                    logger.info(f"🎉 После ошибки показываем завершение")
+                    show_context_complete(message, context)
         
         # Запускаем в отдельном потоке
         threading.Thread(target=update_weather_and_continue, daemon=True).start()
@@ -459,50 +463,73 @@ def handle_context_message(message: Message) -> bool:
         return True
     
     elif context.awaiting_context == "age":
-        # Обработка возраста
-        logger.info(f"📅 Обрабатываем возраст: {text}")
+        # ========== ОБРАБОТКА ВОЗРАСТА С ПОДРОБНЫМ ЛОГИРОВАНИЕМ ==========
+        logger.info(f"📅 [AGE] Начинаем обработку возраста для user {user_id}")
+        logger.info(f"📅 [AGE] Получен текст: '{text}'")
+        
         try:
             age = int(text)
+            logger.info(f"📅 [AGE] Преобразовано в число: {age}")
+            
             if 1 <= age <= 120:
-                logger.info(f"✅ Возраст корректен: {age}")
-                context.age = age
-                context.awaiting_context = None
+                logger.info(f"✅ [AGE] Возраст корректен: {age}")
                 
-                # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+                # Сохраняем возраст
+                context.age = age
+                logger.info(f"✅ [AGE] Возраст сохранен в context.age = {context.age}")
+                
+                # Сбрасываем состояние ожидания
+                context.awaiting_context = None
+                logger.info(f"✅ [AGE] context.awaiting_context сброшен в None")
+                
+                # Сохраняем в БД
+                logger.info(f"💾 [AGE] Сохраняем в БД...")
                 run_async_task(save_context_to_db, user_id)
+                logger.info(f"✅ [AGE] Задача сохранения запущена")
                 
                 # Получаем следующий вопрос
-                logger.info(f"❓ Получаем следующий вопрос после возраста...")
+                logger.info(f"❓ [AGE] Вызываем context.ask_for_context()...")
                 question, keyboard = context.ask_for_context()
-                logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
+                logger.info(f"📋 [AGE] ask_for_context вернул: question='{question}', keyboard={keyboard is not None}")
                 
                 if question:
-                    logger.info(f"📤 Отправляем следующий вопрос...")
-                    safe_send_message(
+                    logger.info(f"📤 [AGE] Есть следующий вопрос, отправляем...")
+                    logger.info(f"📤 [AGE] Текст вопроса: {question[:50]}...")
+                    
+                    sent = safe_send_message(
                         message,
                         f"📝 **Давайте познакомимся**\n\n{question}",
                         reply_markup=keyboard,
-                        parse_mode=None,
+                        parse_mode='Markdown',
                         delete_previous=True
                     )
-                    logger.info(f"✅ Вопрос отправлен")
+                    logger.info(f"✅ [AGE] Сообщение отправлено, result={sent is not None}")
                 else:
-                    logger.info(f"🎉 Вопросов больше нет, показываем завершение")
-                    show_context_complete(message, context)
+                    logger.info(f"🎉 [AGE] Вопросов больше нет, вызываем show_context_complete")
+                    logger.info(f"🎉 [AGE] Параметры: message type={type(message)}, context type={type(context)}")
+                    
+                    # 👇 ВАЖНО: добавляем try-except вокруг вызова
+                    try:
+                        show_context_complete(message, context)
+                        logger.info(f"✅ [AGE] show_context_complete выполнена успешно")
+                    except Exception as e:
+                        logger.error(f"❌ [AGE] Ошибка в show_context_complete: {e}")
+                        import traceback
+                        traceback.print_exc()
             else:
-                logger.warning(f"⚠️ Возраст вне диапазона: {age}")
+                logger.warning(f"⚠️ [AGE] Возраст вне диапазона: {age}")
                 safe_send_message(
                     message,
                     "**❌ Возраст должен быть от 1 до 120 лет.**\n\n📅 Сколько вам лет? (напишите число)",
-                    parse_mode=None,
+                    parse_mode='Markdown',
                     delete_previous=True
                 )
         except ValueError:
-            logger.warning(f"⚠️ Некорректное число: {text}")
+            logger.warning(f"⚠️ [AGE] Некорректное число: {text}")
             safe_send_message(
                 message,
                 "**❌ Пожалуйста, введите число.**\n\n📅 Сколько вам лет? (напишите число)",
-                parse_mode=None,
+                parse_mode='Markdown',
                 delete_previous=True
             )
         
@@ -538,12 +565,12 @@ def handle_context_message(message: Message) -> bool:
                 message,
                 f"📝 **Давайте познакомимся**\n\n{question}",
                 reply_markup=keyboard,
-                parse_mode=None,
+                parse_mode='Markdown',
                 delete_previous=True
             )
             logger.info(f"✅ Вопрос отправлен")
         else:
-            logger.info(f"🎉 Вопросов больше нет, показываем завершение")
+            logger.info(f"🎉 Вопросов больше нет после пола, показываем завершение")
             show_context_complete(message, context)
         
         return True
@@ -562,53 +589,62 @@ def show_context_complete(message: Message, context: UserContext):
     user_id = message.chat.id
     logger.info(f"🎉 show_context_complete вызван для user {user_id}")
     
-    # 👇 СИНХРОННЫЙ ВЫЗОВ (НО В ОТДЕЛЬНОМ ПОТОКЕ)
-    logger.info(f"🌤️ Обновляем погоду для итогового экрана...")
-    context.update_weather()
-    
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-    run_async_task(save_context_to_db, user_id)
-    
-    # Формируем сводку
-    summary = f"✅ **Отлично! Теперь я знаю о вас:**\n\n"
-    
-    if context.city:
-        summary += f"📍 **Город:** {context.city}\n"
-    if context.gender:
-        gender_str = "Мужчина" if context.gender == "male" else "Женщина" if context.gender == "female" else "Другое"
-        summary += f"👤 **Пол:** {gender_str}\n"
-    if context.age:
-        summary += f"📅 **Возраст:** {context.age}\n"
-    if context.weather_cache:
-        weather = context.weather_cache
-        summary += f"{weather['icon']} **Погода:** {weather['description']}, {weather['temp']}°C\n"
-    
-    summary += f"\n🎯 Теперь я буду учитывать это в наших разговорах!\n\n"
-    summary += f"🧠 **ЧТО ДАЛЬШЕ?**\n\n"
-    summary += "Чтобы я мог помочь по-настоящему, нужно пройти тест (15 минут).\n"
-    summary += "Он определит ваш психологический профиль по 4 векторам и глубинным паттернам.\n\n"
-    summary += f"👇 **Начинаем?**"
-    
-    # ✅ ИСПРАВЛЕНО: меняем callback на прямой старт теста
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton("🚀 НАЧАТЬ ТЕСТ", callback_data="start_stage_1_direct"))
-    keyboard.row(InlineKeyboardButton("📖 ЧТО ДАЕТ ТЕСТ", callback_data="show_benefits"))
-    # ❌ Кнопка "❓ ЗАДАТЬ ВОПРОС" удалена
-    
-    logger.info(f"📤 Отправляем итоговый экран...")
-    safe_send_message(
-        message,
-        summary,
-        reply_markup=keyboard,
-        parse_mode=None,
-        delete_previous=True
-    )
-    logger.info(f"✅ Итоговый экран отправлен")
-    
-    # Очищаем состояние
-    if user_id in user_states:
-        logger.info(f"🧹 Очищаем состояние пользователя {user_id}")
-        del user_states[user_id]
+    try:
+        # 👇 СИНХРОННЫЙ ВЫЗОВ
+        logger.info(f"🌤️ Обновляем погоду для итогового экрана...")
+        context.update_weather()
+        logger.info(f"✅ Погода обновлена")
+        
+        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+        run_async_task(save_context_to_db, user_id)
+        logger.info(f"✅ Задача сохранения в БД запущена")
+        
+        # Формируем сводку
+        summary = f"✅ **Отлично! Теперь я знаю о вас:**\n\n"
+        
+        if context.city:
+            summary += f"📍 **Город:** {context.city}\n"
+        if context.gender:
+            gender_str = "Мужчина" if context.gender == "male" else "Женщина" if context.gender == "female" else "Другое"
+            summary += f"👤 **Пол:** {gender_str}\n"
+        if context.age:
+            summary += f"📅 **Возраст:** {context.age}\n"
+        if context.weather_cache:
+            weather = context.weather_cache
+            summary += f"{weather['icon']} **Погода:** {weather['description']}, {weather['temp']}°C\n"
+        
+        summary += f"\n🎯 Теперь я буду учитывать это в наших разговорах!\n\n"
+        summary += f"🧠 **ЧТО ДАЛЬШЕ?**\n\n"
+        summary += "Чтобы я мог помочь по-настоящему, нужно пройти тест (15 минут).\n"
+        summary += "Он определит ваш психологический профиль по 4 векторам и глубинным паттернам.\n\n"
+        summary += f"👇 **Начинаем?**"
+        
+        # ✅ ИСПРАВЛЕНО: меняем callback на прямой старт теста
+        keyboard = InlineKeyboardMarkup()
+        keyboard.row(InlineKeyboardButton("🚀 НАЧАТЬ ТЕСТ", callback_data="start_stage_1_direct"))
+        keyboard.row(InlineKeyboardButton("📖 ЧТО ДАЕТ ТЕСТ", callback_data="show_benefits"))
+        # ❌ Кнопка "❓ ЗАДАТЬ ВОПРОС" удалена
+        
+        logger.info(f"📤 Отправляем итоговый экран...")
+        sent = safe_send_message(
+            message,
+            summary,
+            reply_markup=keyboard,
+            parse_mode='Markdown',
+            delete_previous=True
+        )
+        logger.info(f"✅ Итоговый экран отправлен, result={sent is not None}")
+        
+        # Очищаем состояние
+        if user_id in user_states:
+            logger.info(f"🧹 Очищаем состояние пользователя {user_id}")
+            del user_states[user_id]
+            logger.info(f"✅ Состояние очищено")
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка в show_context_complete: {e}")
+        import traceback
+        traceback.print_exc()
 
 # ============================================
 # ПРИНУДИТЕЛЬНЫЙ СБОР КОНТЕКСТА (КОМАНДА)
@@ -639,7 +675,7 @@ def cmd_context(message: Message):
     safe_send_message(
         message,
         "🔄 **Давайте обновим ваш контекст**",
-        parse_mode=None,
+        parse_mode='Markdown',
         delete_previous=True
     )
     
@@ -674,7 +710,7 @@ def ensure_context(message: Message) -> bool:
     safe_send_message(
         message,
         "📝 **Для точной работы мне нужно немного узнать о вас.**",
-        parse_mode=None,
+        parse_mode='Markdown',
         delete_previous=True
     )
     
@@ -696,6 +732,7 @@ def show_current_context(message: Message):
         safe_send_message(
             message,
             "❌ Контекст не найден",
+            parse_mode='Markdown',
             delete_previous=True
         )
         return
@@ -712,7 +749,7 @@ def show_current_context(message: Message):
             message,
             text,
             reply_markup=keyboard,
-            parse_mode=None,
+            parse_mode='Markdown',
             delete_previous=True
         )
         return
@@ -755,7 +792,7 @@ def show_current_context(message: Message):
         message,
         text,
         reply_markup=keyboard,
-        parse_mode=None,
+        parse_mode='Markdown',
         delete_previous=True
     )
 
