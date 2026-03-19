@@ -20,6 +20,7 @@ import threading
 import fcntl
 import socket
 import asyncio
+import nest_asyncio
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, List, Any, Tuple, Union
 from datetime import datetime, timedelta
@@ -1970,7 +1971,32 @@ def run_fastapi():
     # Render сам назначает порт через переменную окружения PORT
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск FastAPI на порту {port}")
-    uvicorn.run(api_app, host="0.0.0.0", port=port)
+    
+    # Создаём новый event loop для этого потока
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        logger.info("✅ Создан новый event loop для FastAPI")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при создании event loop: {e}")
+    
+    # Применяем nest_asyncio для возможности вложенных циклов
+    try:
+        import nest_asyncio
+        nest_asyncio.apply()
+        logger.info("✅ nest_asyncio применён")
+    except ImportError:
+        logger.warning("⚠️ nest_asyncio не установлен, игнорируем")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при применении nest_asyncio: {e}")
+    
+    # Запускаем uvicorn
+    try:
+        uvicorn.run(api_app, host="0.0.0.0", port=port)
+    except Exception as e:
+        logger.error(f"❌ Ошибка при запуске uvicorn: {e}")
+        # Пробуем ещё раз без дополнительной настройки
+        uvicorn.run(api_app, host="0.0.0.0", port=port)
 
 
 # ============================================
