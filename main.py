@@ -7,6 +7,7 @@
 ИСПРАВЛЕНО: Корневой маршрут теперь возвращает JSON (обходит баг anyio)
 ИСПРАВЛЕНО: Дополнительный патч для anyio.to_thread
 ИСПРАВЛЕНО: Правильный порядок инициализации FastAPI и БД
+ИСПРАВЛЕНО: Добавлено закрытие глобальной сессии aiohttp
 """
 
 # ========== КРИТИЧЕСКИЕ ПАТЧИ ДЛЯ PYTHON 3.14 ==========
@@ -2173,6 +2174,15 @@ def cleanup_resources():
 async def shutdown_handler():
     """Обработчик завершения работы - сохраняет все данные в БД"""
     logger.info("🛑 Завершение работы, сохраняем данные в БД...")
+    
+    # ===== ДОБАВЛЕНО: Закрываем глобальную сессию aiohttp =====
+    try:
+        from services import close_global_session
+        await close_global_session()
+        logger.info("✅ Глобальная сессия aiohttp закрыта")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при закрытии сессии aiohttp: {e}")
+    # =========================================================
     
     try:
         from state import save_all_users_to_db
