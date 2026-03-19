@@ -3,11 +3,7 @@
 """
 ВИРТУАЛЬНЫЙ ПСИХОЛОГ - МАТРИЦА ПОВЕДЕНИЙ 4×6
 ВЕРСИЯ ДЛЯ MAX
-ИСПРАВЛЕНО: обработка вопросов без await для синхронных функций
-ДОБАВЛЕНО: FastAPI для мини-приложения с полной синхронизацией
-ДОБАВЛЕНО: PostgreSQL для постоянного хранения данных
-ИСПРАВЛЕНО: правильное обслуживание статических файлов из папки miniapp
-ИСПРАВЛЕНО: проблемы с asyncio для Python 3.14
+ИСПРАВЛЕНО: правильный запуск FastAPI для Python 3.14
 """
 
 import os
@@ -22,32 +18,18 @@ import fcntl
 import socket
 import asyncio
 import warnings
+import multiprocessing
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, List, Any, Tuple, Union
 from datetime import datetime, timedelta
 
-# ========== ИСПРАВЛЕНИЕ ПРОБЛЕМ ASYNCIO ==========
 # Игнорируем предупреждения
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# Импортируем nest_asyncio для решения проблем с циклами событий
+# ========== ИМПОРТЫ ДЛЯ ASYNCIO ==========
 import nest_asyncio
-nest_asyncio.apply()  # Применяем глобально
-
-# Дополнительная защита для sniffio
-import sniffio
-
-# Принудительно устанавливаем библиотеку asyncio для sniffio
-try:
-    sniffio.current_async_library()
-except sniffio.AsyncLibraryNotFoundError:
-    # Если библиотека не определена, устанавливаем принудительно
-    sniffio.current_async_library = lambda: "asyncio"
-
-# Принудительно устанавливаем политику цикла событий для разных платформ
-if sys.platform == 'win32':
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-# =================================================
+nest_asyncio.apply()
+# =========================================
 
 # ========== ИМПОРТЫ ДЛЯ FASTAPI ==========
 from fastapi import FastAPI, Request, HTTPException
@@ -59,7 +41,6 @@ import uvicorn
 
 # ========== ИМПОРТЫ ДЛЯ БАЗЫ ДАННЫХ ==========
 from db_instance import db, init_db, close_db, save_user_to_db, save_test_result_to_db
-from db_instance import ensure_db_connection, execute_with_retry
 import asyncpg
 # =============================================
 
@@ -68,10 +49,7 @@ PID_FILE = '/tmp/max-bot.pid'
 LOCK_FILE = '/tmp/max-bot.lock'
 
 def check_single_instance():
-    """
-    Проверяет, не запущен ли уже экземпляр бота
-    """
-    # Проверяем, запущены ли мы на Render
+    """Проверяет, не запущен ли уже экземпляр бота"""
     is_render = os.environ.get('RENDER') is not None
     
     try:
@@ -204,7 +182,7 @@ anchoring = Anchoring()
 weekend_planner = WeekendPlanner()
 scheduler = TaskScheduler()
 
-# Устанавливаем morning_manager для profile.py (чтобы избежать циклического импорта)
+# Устанавливаем morning_manager для profile.py
 set_morning_manager(morning_manager)
 
 # Привязываем morning_manager к боту и контекстам
@@ -218,20 +196,13 @@ morning_manager.set_contexts(user_contexts, user_data)
 async def init_database():
     """Инициализация базы данных"""
     try:
-        # Подключаемся к базе
         await init_db()
         logger.info("✅ Подключение к PostgreSQL установлено")
         
-        # Проверяем соединение с защитой от ошибок
-        await ensure_db_connection()
-        
-        # Загружаем всех пользователей из БД в память
         await load_all_users_from_db()
         
-        # ✅ ЗАПУСКАЕМ АВТОСОХРАНЕНИЕ
-        setup_auto_save(interval_seconds=300)  # Каждые 5 минут
+        setup_auto_save(interval_seconds=300)
         
-        # Запускаем фоновые задачи
         asyncio.create_task(periodic_save_to_db())
         asyncio.create_task(periodic_cleanup_db())
         
@@ -247,22 +218,17 @@ async def load_all_users_from_db():
     logger.info("🔄 Загрузка данных из PostgreSQL...")
     
     try:
-        # Загружаем пользователей из таблицы fredi_users
         async with db.get_connection() as conn:
             rows = await conn.fetch("SELECT user_id, first_name, username FROM fredi_users")
             for row in rows:
                 user_names[row['user_id']] = row['first_name'] or row['username'] or f"user_{row['user_id']}"
         
-        # Загружаем контексты из полей таблицы
         async with db.get_connection() as conn:
             rows = await conn.fetch("SELECT * FROM fredi_user_contexts")
             for row in rows:
                 user_id = row['user_id']
-                
-                # Восстанавливаем объект UserContext
                 context = UserContext(user_id)
                 
-                # Заполняем поля из строки БД
                 context.name = row.get('name')
                 context.age = row.get('age')
                 context.gender = row.get('gender')
@@ -273,12 +239,10 @@ async def load_all_users_from_db():
                 context.communication_mode = row.get('communication_mode', 'coach')
                 context.last_context_update = row.get('last_context_update')
                 
-                # Погода (JSON)
                 if row.get('weather_cache'):
                     context.weather_cache = json.loads(row['weather_cache'])
                 context.weather_cache_time = row.get('weather_cache_time')
                 
-                # Жизненный контекст
                 context.family_status = row.get('family_status')
                 context.has_children = row.get('has_children', False)
                 context.children_ages = row.get('children_ages')
@@ -292,13 +256,10 @@ async def load_all_users_from_db():
                 context.resistance_people = row.get('resistance_people')
                 context.energy_level = row.get('energy_level')
                 context.life_context_complete = row.get('life_context_complete', False)
-                
-                # Состояние сбора
                 context.awaiting_context = row.get('awaiting_context')
                 
                 user_contexts[user_id] = context
         
-        # Загружаем user_data
         async with db.get_connection() as conn:
             rows = await conn.fetch("SELECT user_id, data FROM fredi_user_data")
             for row in rows:
@@ -307,7 +268,6 @@ async def load_all_users_from_db():
                     data = json.loads(data)
                 user_data[row['user_id']] = data
         
-        # Загружаем активные маршруты
         async with db.get_connection() as conn:
             rows = await conn.fetch("""
                 SELECT user_id, route_data, current_step, progress 
@@ -329,12 +289,10 @@ async def load_all_users_from_db():
                     'progress': progress
                 }
         
-        # Также пробуем загрузить из pickled контекстов (резерв)
         async with db.get_connection() as conn:
             rows = await conn.fetch("SELECT user_id, context_data FROM fredi_context_objects")
             for row in rows:
                 user_id = row['user_id']
-                # Если контекст еще не загружен из основной таблицы
                 if user_id not in user_contexts:
                     try:
                         import pickle
@@ -356,31 +314,21 @@ async def load_all_users_from_db():
 async def periodic_save_to_db():
     """Периодически сохраняет всех пользователей в БД"""
     while True:
-        await asyncio.sleep(300)  # Каждые 5 минут
-        
+        await asyncio.sleep(300)
         logger.info("🔄 Периодическое сохранение данных в БД...")
-        
         saved_count = 0
         for user_id in list(user_data.keys()):
             try:
-                # Используем execute_with_retry для защиты от ошибок
-                result = await execute_with_retry(
-                    save_user_to_db, 
-                    user_id, user_data, user_contexts, user_routes,
-                    max_retries=3
-                )
-                if result:
-                    saved_count += 1
+                await save_user_to_db(user_id, user_data, user_contexts, user_routes)
+                saved_count += 1
             except Exception as e:
                 logger.error(f"❌ Ошибка сохранения {user_id}: {e}")
-        
         logger.info(f"✅ Сохранено {saved_count} пользователей")
 
 async def periodic_cleanup_db():
     """Периодическая очистка старых данных"""
     while True:
-        await asyncio.sleep(86400)  # 24 часа
-        
+        await asyncio.sleep(86400)
         try:
             await db.cleanup_old_data(days=30)
             logger.info("🧹 Очистка старых данных выполнена")
@@ -388,285 +336,750 @@ async def periodic_cleanup_db():
             logger.error(f"❌ Ошибка при очистке данных: {e}")
 
 # ============================================
-# FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ - ИСПРАВЛЕНО
+# FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
 # ============================================
 
-# Создаем FastAPI приложение
-api_app = FastAPI(title="Фреди - Мини-приложение")
-
-# Настройка CORS
-api_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ============================================
-# ПОДКЛЮЧЕНИЕ СТАТИЧЕСКИХ ФАЙЛОВ МИНИ-ПРИЛОЖЕНИЯ
-# ============================================
-
-# Путь к папке с мини-приложением
-MINIAPP_PATH = os.path.join(os.path.dirname(__file__), 'miniapp')
-
-# Создаем папку, если её нет
-os.makedirs(MINIAPP_PATH, exist_ok=True)
-
-# Обслуживаем статические файлы из папки miniapp
-if os.path.exists(MINIAPP_PATH):
-    # Монтируем статические файлы по пути /miniapp
-    api_app.mount("/miniapp", StaticFiles(directory=MINIAPP_PATH, html=True), name="miniapp")
-    logger.info(f"✅ Статические файлы подключены из {MINIAPP_PATH}")
-
-    # Перенаправление с корня на index.html из miniapp
-    @api_app.get("/")
-    async def serve_miniapp():
-        index_path = os.path.join(MINIAPP_PATH, "index.html")
-        if os.path.exists(index_path):
-            return FileResponse(index_path)
-        else:
+def create_fastapi_app():
+    """Создает и настраивает FastAPI приложение"""
+    
+    app = FastAPI(title="Фреди - Мини-приложение")
+    
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    
+    MINIAPP_PATH = os.path.join(os.path.dirname(__file__), 'miniapp')
+    os.makedirs(MINIAPP_PATH, exist_ok=True)
+    
+    if os.path.exists(MINIAPP_PATH):
+        app.mount("/miniapp", StaticFiles(directory=MINIAPP_PATH, html=True), name="miniapp")
+        logger.info(f"✅ Статические файлы подключены из {MINIAPP_PATH}")
+        
+        @app.get("/")
+        async def serve_miniapp():
+            index_path = os.path.join(MINIAPP_PATH, "index.html")
+            if os.path.exists(index_path):
+                return FileResponse(index_path)
+            else:
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "index.html не найден в папке miniapp"}
+                )
+    else:
+        logger.error(f"❌ Папка {MINIAPP_PATH} не найдена")
+        
+        @app.get("/")
+        async def error_no_miniapp():
             return JSONResponse(
                 status_code=404,
-                content={"error": "index.html не найден в папке miniapp"}
+                content={"error": "Папка miniapp не найдена"}
             )
-else:
-    logger.error(f"❌ Папка {MINIAPP_PATH} не найдена")
     
-    @api_app.get("/")
-    async def error_no_miniapp():
-        return JSONResponse(
-            status_code=404,
-            content={"error": "Папка miniapp не найдена"}
-        )
-
-# ============================================
-# API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
-# ============================================
-
-@api_app.post("/api/save-profile")
-async def save_profile(request: Request):
-    """Сохраняет профиль из мини-приложения"""
-    try:
-        data = await request.json()
-        user_id = data.get('user_id')
-        profile = data.get('profile')
-        
-        if not user_id or not profile:
-            raise HTTPException(status_code=400, detail="user_id and profile required")
-        
-        # Сохраняем в user_data
-        if user_id not in user_data:
-            user_data[user_id] = {}
-        
-        user_data[user_id]['ai_generated_profile'] = profile
-        user_data[user_id]['profile_data'] = profile.get('profile_data', {})
-        
-        # Сохраняем в БД с защитой от ошибок
-        asyncio.create_task(execute_with_retry(
-            save_user_to_db, user_id, user_data, user_contexts, user_routes,
-            max_retries=3
-        ))
-        
-        return JSONResponse({
-            "success": True,
-            "message": "Profile saved"
-        })
-    except Exception as e:
-        logger.error(f"❌ Error in save_profile: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
-
-@api_app.post("/api/save-test-progress")
-async def save_test_progress(request: Request):
-    """Сохраняет прогресс теста из мини-приложения"""
-    try:
-        data = await request.json()
-        user_id = data.get('user_id')
-        stage = data.get('stage')
-        answers = data.get('answers', [])
-        
-        if not user_id or stage is None:
-            raise HTTPException(status_code=400, detail="user_id and stage required")
-        
-        # Сохраняем в user_data
-        if user_id not in user_data:
-            user_data[user_id] = {}
-        
-        # Инициализируем хранилище ответов
-        if 'all_answers' not in user_data[user_id]:
-            user_data[user_id]['all_answers'] = []
-        
-        # Добавляем новые ответы
-        stage_key = f'stage{stage}_answers'
-        if stage_key not in user_data[user_id]:
-            user_data[user_id][stage_key] = []
-        
-        for answer in answers:
-            user_data[user_id]['all_answers'].append({
-                'stage': stage,
-                'question_index': answer.get('question'),
-                'answer': answer.get('answer'),
-                'option': answer.get('option'),
-                'timestamp': datetime.now().isoformat()
-            })
-            user_data[user_id][stage_key].append(answer)
-        
-        # Сохраняем в БД с защитой от ошибок
-        asyncio.create_task(execute_with_retry(
-            save_user_to_db, user_id, user_data, user_contexts, user_routes,
-            max_retries=3
-        ))
-        
-        return JSONResponse({
-            "success": True,
-            "message": f"Stage {stage} progress saved"
-        })
-    except Exception as e:
-        logger.error(f"❌ Error in save_test_progress: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
-
-@api_app.post("/api/save-mode")
-async def save_mode(request: Request):
-    """Сохраняет режим общения из мини-приложения"""
-    try:
-        data = await request.json()
-        user_id = data.get('user_id')
-        mode = data.get('mode')
-        
-        if not user_id or not mode:
-            raise HTTPException(status_code=400, detail="user_id and mode required")
-        
-        # Сохраняем в контексте
-        if user_id in user_contexts:
-            user_contexts[user_id].communication_mode = mode
-        
-        # Сохраняем в user_data
-        if user_id not in user_data:
-            user_data[user_id] = {}
-        user_data[user_id]['communication_mode'] = mode
-        
-        # Сохраняем в БД с защитой от ошибок
-        asyncio.create_task(execute_with_retry(
-            save_user_to_db, user_id, user_data, user_contexts, user_routes,
-            max_retries=3
-        ))
-        
-        return JSONResponse({
-            "success": True,
-            "message": f"Mode {mode} saved"
-        })
-    except Exception as e:
-        logger.error(f"❌ Error in save_mode: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
-
-@api_app.post("/api/sync")
-async def sync_data(request: Request):
-    """Синхронизирует данные с мини-приложения"""
-    try:
-        data = await request.json()
-        user_id = data.get('user_id')
-        sync_data = data.get('data', {})
-        
-        if not user_id:
-            raise HTTPException(status_code=400, detail="user_id required")
-        
-        # Инициализируем данные пользователя
-        if user_id not in user_data:
-            user_data[user_id] = {}
-        
-        # Синхронизируем ответы
-        if 'answers' in sync_data:
+    @app.post("/api/save-profile")
+    async def save_profile(request: Request):
+        try:
+            data = await request.json()
+            user_id = data.get('user_id')
+            profile = data.get('profile')
+            
+            if not user_id or not profile:
+                raise HTTPException(status_code=400, detail="user_id and profile required")
+            
+            if user_id not in user_data:
+                user_data[user_id] = {}
+            
+            user_data[user_id]['ai_generated_profile'] = profile
+            user_data[user_id]['profile_data'] = profile.get('profile_data', {})
+            
+            asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
+            
+            return JSONResponse({"success": True, "message": "Profile saved"})
+        except Exception as e:
+            logger.error(f"❌ Error in save_profile: {e}")
+            return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    
+    @app.post("/api/save-test-progress")
+    async def save_test_progress(request: Request):
+        try:
+            data = await request.json()
+            user_id = data.get('user_id')
+            stage = data.get('stage')
+            answers = data.get('answers', [])
+            
+            if not user_id or stage is None:
+                raise HTTPException(status_code=400, detail="user_id and stage required")
+            
+            if user_id not in user_data:
+                user_data[user_id] = {}
+            
             if 'all_answers' not in user_data[user_id]:
                 user_data[user_id]['all_answers'] = []
-            user_data[user_id]['all_answers'].extend(sync_data['answers'])
-        
-        # Синхронизируем профиль
-        if 'profile' in sync_data:
-            user_data[user_id]['ai_generated_profile'] = sync_data['profile']
-        
-        # Синхронизируем режим
-        if 'mode' in sync_data and user_id in user_contexts:
-            user_contexts[user_id].communication_mode = sync_data['mode']
-        
-        # Сохраняем в БД с защитой от ошибок
-        await execute_with_retry(
-            save_user_to_db, user_id, user_data, user_contexts, user_routes,
-            max_retries=3
-        )
-        
-        return JSONResponse({
-            "success": True,
-            "message": "Data synchronized"
-        })
-    except Exception as e:
-        logger.error(f"❌ Error in sync: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
+            
+            stage_key = f'stage{stage}_answers'
+            if stage_key not in user_data[user_id]:
+                user_data[user_id][stage_key] = []
+            
+            for answer in answers:
+                user_data[user_id]['all_answers'].append({
+                    'stage': stage,
+                    'question_index': answer.get('question'),
+                    'answer': answer.get('answer'),
+                    'option': answer.get('option'),
+                    'timestamp': datetime.now().isoformat()
+                })
+                user_data[user_id][stage_key].append(answer)
+            
+            asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
+            
+            return JSONResponse({"success": True, "message": f"Stage {stage} progress saved"})
+        except Exception as e:
+            logger.error(f"❌ Error in save_test_progress: {e}")
+            return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    
+    @app.post("/api/save-mode")
+    async def save_mode(request: Request):
+        try:
+            data = await request.json()
+            user_id = data.get('user_id')
+            mode = data.get('mode')
+            
+            if not user_id or not mode:
+                raise HTTPException(status_code=400, detail="user_id and mode required")
+            
+            if user_id in user_contexts:
+                user_contexts[user_id].communication_mode = mode
+            
+            if user_id not in user_data:
+                user_data[user_id] = {}
+            user_data[user_id]['communication_mode'] = mode
+            
+            asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
+            
+            return JSONResponse({"success": True, "message": f"Mode {mode} saved"})
+        except Exception as e:
+            logger.error(f"❌ Error in save_mode: {e}")
+            return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    
+    @app.post("/api/sync")
+    async def sync_data(request: Request):
+        try:
+            data = await request.json()
+            user_id = data.get('user_id')
+            sync_data = data.get('data', {})
+            
+            if not user_id:
+                raise HTTPException(status_code=400, detail="user_id required")
+            
+            if user_id not in user_data:
+                user_data[user_id] = {}
+            
+            if 'answers' in sync_data:
+                if 'all_answers' not in user_data[user_id]:
+                    user_data[user_id]['all_answers'] = []
+                user_data[user_id]['all_answers'].extend(sync_data['answers'])
+            
+            if 'profile' in sync_data:
+                user_data[user_id]['ai_generated_profile'] = sync_data['profile']
+            
+            if 'mode' in sync_data and user_id in user_contexts:
+                user_contexts[user_id].communication_mode = sync_data['mode']
+            
+            await save_user_to_db(user_id, user_data, user_contexts, user_routes)
+            
+            return JSONResponse({"success": True, "message": "Data synchronized"})
+        except Exception as e:
+            logger.error(f"❌ Error in sync: {e}")
+            return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    
+    @app.get("/api/get-profile")
+    async def get_profile_miniapp(user_id: int):
+        try:
+            user_id = int(user_id)
+            data = user_data.get(user_id, {})
+            
+            profile = {
+                "ai_generated_profile": data.get("ai_generated_profile"),
+                "profile_data": data.get("profile_data"),
+                "perception_type": data.get("perception_type"),
+                "thinking_level": data.get("thinking_level"),
+                "behavioral_levels": data.get("behavioral_levels"),
+                "deep_patterns": data.get("deep_patterns")
+            }
+            
+            return JSONResponse(profile)
+        except Exception as e:
+            logger.error(f"❌ Error in get_profile_miniapp: {e}")
+            return JSONResponse(status_code=500, content={"error": str(e)})
+    
+    @app.get("/api/get-test-progress")
+    async def get_test_progress(user_id: int):
+        try:
+            user_id = int(user_id)
+            data = user_data.get(user_id, {})
+            
+            progress = {
+                "stage1_complete": 'perception_type' in data,
+                "stage2_complete": 'thinking_level' in data,
+                "stage3_complete": 'behavioral_levels' in data and len(data.get('behavioral_levels', {})) > 0,
+                "stage4_complete": 'dilts_counts' in data,
+                "stage5_complete": 'deep_patterns' in data,
+                "answers_count": len(data.get('all_answers', [])),
+                "current_stage": data.get('current_stage', 1)
+            }
+            
+            return JSONResponse(progress)
+        except Exception as e:
+            logger.error(f"❌ Error in get_test_progress: {e}")
+            return JSONResponse(status_code=500, content={"error": str(e)})
+    
+    @app.get("/api/user-data")
+    async def get_user_data_api(user_id: int):
+        try:
+            user_id = int(user_id)
+            context = user_contexts.get(user_id)
+            
+            return {
+                "user_id": user_id,
+                "user_name": context.name if context else user_names.get(user_id, "друг"),
+                "has_profile": bool(user_data.get(user_id, {}).get("ai_generated_profile")) or 
+                              bool(user_data.get(user_id, {}).get("profile_data"))
+            }
+        except Exception as e:
+            logger.error(f"API error in get_user_data: {e}")
+            return JSONResponse(status_code=500, content={"error": str(e)})
+    
+    @app.get("/api/profile")
+    async def get_profile(user_id: int):
+        try:
+            user_id = int(user_id)
+            data = user_data.get(user_id, {})
+            
+            profile = data.get("ai_generated_profile")
+            if not profile:
+                scores = {}
+                for k in VECTORS:
+                    levels = data.get("behavioral_levels", {}).get(k, [])
+                    scores[k] = sum(levels) / len(levels) if levels else 3.0
+                
+                perception_type = data.get("perception_type", "не определен")
+                thinking_level = data.get("thinking_level", 5)
+                dilts_counts = data.get("dilts_counts", {})
+                dominant_dilts = determine_dominant_dilts(dilts_counts)
+                
+                profile = get_human_readable_profile(
+                    scores,
+                    perception_type=perception_type,
+                    thinking_level=thinking_level,
+                    dominant_dilts=dominant_dilts
+                )
+            
+            return {"profile": profile}
+        except Exception as e:
+            logger.error(f"API error in get_profile: {e}")
+            return JSONResponse(status_code=500, content={"error": str(e)})
+    
+    @app.get("/api/thought")
+    async def get_thought(user_id: int):
+        try:
+            user_id = int(user_id)
+            data = user_data.get(user_id, {})
+            
+            thought = data.get("psychologist_thought")
+            if not thought:
+                thought = await generate_psychologist_thought(user_id, data)
+                if thought:
+                    if user_id not in user_data:
+                        user_data[user_id] = {}
+                    user_data[user_id]["psychologist_thought"] = thought
+                    asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
+                else:
+                    thought = "Мысли психолога еще не сгенерированы."
+            
+            return {"thought": thought}
+        except Exception as e:
+            logger.error(f"API error in get_thought: {e}")
+            return JSONResponse(status_code=500, content={"error": str(e)})
+    
+    @app.get("/api/ideas")
+    async def get_ideas(user_id: int):
+        try:
+            user_id = int(user_id)
+            data = user_data.get(user_id, {})
+            context = user_contexts.get(user_id)
+            user_name = context.name if context else user_names.get(user_id, "друг")
+            
+            cached_ideas = await db.get_cached_weekend_ideas(user_id)
+            if cached_ideas:
+                return {"ideas": [{"title": "Идеи на выходные", "description": cached_ideas}]}
+            
+            scores = {}
+            for k in VECTORS:
+                levels = data.get("behavioral_levels", {}).get(k, [])
+                scores[k] = sum(levels) / len(levels) if levels else 3.0
+            
+            profile_data = data.get("profile_data", {})
+            
+            ideas_text = await weekend_planner.get_weekend_ideas(
+                user_id=user_id,
+                user_name=user_name,
+                scores=scores,
+                profile_data=profile_data,
+                context=context
+            )
+            
+            if scores:
+                main_vector = max(scores.items(), key=lambda x: x[1])[0]
+                main_level = int(scores.get(main_vector, 3))
+                asyncio.create_task(db.cache_weekend_ideas(user_id, ideas_text, main_vector, main_level))
+            
+            ideas = []
+            paragraphs = ideas_text.split('\n\n')
+            for p in paragraphs:
+                if p.strip() and not p.startswith('#'):
+                    ideas.append({
+                        "title": p[:50] + "..." if len(p) > 50 else p,
+                        "description": p
+                    })
+            
+            return {"ideas": ideas[:5]}
+        except Exception as e:
+            logger.error(f"API error in get_ideas: {e}")
+            return JSONResponse(status_code=500, content={"error": str(e)})
+    
+    @app.get("/health")
+    async def health_check():
+        return {"status": "ok"}
+    
+    @app.get("/api/chat/history")
+    async def get_chat_history(user_id: int, limit: int = 50):
+        try:
+            user_id = int(user_id)
+            return JSONResponse({"success": True, "history": []})
+        except Exception as e:
+            logger.error(f"❌ Error in get_chat_history: {e}")
+            return JSONResponse(status_code=500, content={"success": False, "error": str(e), "history": []})
+    
+    @app.post("/api/chat/message")
+    async def chat_message(request: Request):
+        try:
+            data = await request.json()
+            user_id = data.get('user_id')
+            message_text = data.get('message')
+            mode = data.get('mode')
+            
+            if not user_id or not message_text:
+                raise HTTPException(status_code=400, detail="user_id and message required")
+            
+            user_id = int(user_id)
+            
+            if user_id not in user_contexts:
+                user_contexts[user_id] = UserContext(user_id)
+            
+            context = user_contexts[user_id]
+            
+            if mode and mode in COMMUNICATION_MODES:
+                context.communication_mode = mode
+            
+            user_info = user_data.get(user_id, {})
+            
+            from question_analyzer import QuestionAnalyzer
+            analyzer = QuestionAnalyzer(user_id, user_info)
+            analysis = await analyzer.analyze_question_async(message_text)
+            
+            from services import call_deepseek_with_context
+            
+            system_prompt = f"Ты психолог Фреди. Режим: {context.communication_mode}. "
+            
+            if context.name:
+                system_prompt += f"Имя пользователя: {context.name}. "
+            
+            if user_info.get('perception_type'):
+                system_prompt += f"Тип восприятия: {user_info['perception_type']}. "
+            
+            if user_info.get('thinking_level'):
+                system_prompt += f"Уровень мышления: {user_info['thinking_level']}/9. "
+            
+            if analysis:
+                system_prompt += f"Анализ вопроса: {analysis.get('analysis', '')}. "
+            
+            response = await call_deepseek_with_context(
+                user_id=user_id,
+                user_message=message_text,
+                context=context,
+                mode=context.communication_mode,
+                profile_data=user_info
+            )
+            
+            if not response:
+                response = "Я понял ваш запрос. Дайте подумать..."
+            
+            buttons = None
+            text_lower = response.lower()
+            
+            if any(word in text_lower for word in ['тест', 'пройди', 'этап']):
+                buttons = [
+                    {"text": "🧠 Пройти тест", "action": "start_test"},
+                    {"text": "📊 Мой портрет", "action": "show_profile"}
+                ]
+            elif any(word in text_lower for word in ['профиль', 'портрет', 'результат']):
+                buttons = [
+                    {"text": "📊 Посмотреть", "action": "show_profile"},
+                    {"text": "🧠 Мысли", "action": "show_thoughts"}
+                ]
+            elif any(word in text_lower for word in ['выходные', 'идеи', 'план']):
+                buttons = [
+                    {"text": "🎯 Идеи", "action": "show_weekend"},
+                    {"text": "📊 В профиль", "action": "show_profile"}
+                ]
+            
+            return JSONResponse({
+                "success": True,
+                "response": response,
+                "mode": context.communication_mode,
+                "analysis": analysis,
+                "buttons": buttons
+            })
+            
+        except Exception as e:
+            logger.error(f"❌ Error in chat_message: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "success": False, 
+                    "error": str(e),
+                    "response": "Произошла ошибка. Попробуйте еще раз."
+                }
+            )
+    
+    @app.post("/api/chat/action")
+    async def chat_action(request: Request):
+        try:
+            data = await request.json()
+            user_id = data.get('user_id')
+            action = data.get('action')
+            
+            if not user_id or not action:
+                raise HTTPException(status_code=400, detail="user_id and action required")
+            
+            user_id = int(user_id)
+            
+            if action == "start_test":
+                return JSONResponse({
+                    "success": True,
+                    "action": action,
+                    "data": {
+                        "stage": 1,
+                        "question_index": 0,
+                        "message": "Начинаем тест. Этап 1: Тип восприятия"
+                    }
+                })
+                
+            elif action == "show_profile":
+                profile_data = await get_profile(user_id)
+                return JSONResponse({
+                    "success": True,
+                    "action": action,
+                    "data": profile_data
+                })
+                
+            elif action == "show_thoughts":
+                thoughts = await get_thought(user_id)
+                return JSONResponse({
+                    "success": True,
+                    "action": action,
+                    "data": thoughts
+                })
+                
+            elif action == "show_weekend":
+                ideas = await get_ideas(user_id)
+                return JSONResponse({
+                    "success": True,
+                    "action": action,
+                    "data": ideas
+                })
+                
+            elif action == "ask_question":
+                return JSONResponse({
+                    "success": True,
+                    "action": action,
+                    "data": {"message": "Задайте ваш вопрос"}
+                })
+            
+            return JSONResponse({"success": True, "action": action})
+            
+        except Exception as e:
+            logger.error(f"❌ Error in chat_action: {e}")
+            return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    
+    @app.get("/api/test/question")
+    async def get_test_question(user_id: int, stage: int, index: int):
+        try:
+            user_id = int(user_id)
+            stage = int(stage)
+            index = int(index)
+            
+            stage_questions_count = {1: 4, 2: 6, 3: 24, 4: 12, 5: 8}
+            total = stage_questions_count.get(stage, 4)
+            
+            stage1_questions = [
+                {
+                    "text": "Как вы обычно воспринимаете новую информацию?",
+                    "options": [
+                        {"id": "A", "text": "Через визуальные образы и картинки", "value": "visual"},
+                        {"id": "B", "text": "Через ощущения и телесный опыт", "value": "kinesthetic"},
+                        {"id": "C", "text": "Через логические схемы и структуры", "value": "auditory"},
+                        {"id": "D", "text": "Через интуицию и общее впечатление", "value": "digital"}
+                    ]
+                },
+                {
+                    "text": "Что для вас важнее при принятии решения?",
+                    "options": [
+                        {"id": "A", "text": "Как это будет выглядеть", "value": "visual"},
+                        {"id": "B", "text": "Что я чувствую по этому поводу", "value": "kinesthetic"},
+                        {"id": "C", "text": "Логика и факты", "value": "auditory"},
+                        {"id": "D", "text": "Общая картина и смысл", "value": "digital"}
+                    ]
+                },
+                {
+                    "text": "Как вы лучше запоминаете?",
+                    "options": [
+                        {"id": "A", "text": "Когда вижу схему или изображение", "value": "visual"},
+                        {"id": "B", "text": "Когда записываю или проживаю", "value": "kinesthetic"},
+                        {"id": "C", "text": "Когда проговариваю вслух", "value": "auditory"},
+                        {"id": "D", "text": "Когда понимаю суть", "value": "digital"}
+                    ]
+                },
+                {
+                    "text": "Что вас вдохновляет?",
+                    "options": [
+                        {"id": "A", "text": "Красота и гармония", "value": "visual"},
+                        {"id": "B", "text": "Глубокие переживания", "value": "kinesthetic"},
+                        {"id": "C", "text": "Идеи и концепции", "value": "auditory"},
+                        {"id": "D", "text": "Смысл и предназначение", "value": "digital"}
+                    ]
+                }
+            ]
+            
+            stage2_questions = [
+                {
+                    "text": "Я часто анализирую свои мысли и чувства",
+                    "options": [
+                        {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                        {"id": "B", "text": "Скорее не согласен", "value": 2},
+                        {"id": "C", "text": "Нейтрально", "value": 3},
+                        {"id": "D", "text": "Скорее согласен", "value": 4},
+                        {"id": "E", "text": "Полностью согласен", "value": 5}
+                    ]
+                },
+                {
+                    "text": "Мне важно понимать причины своих поступков",
+                    "options": [
+                        {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                        {"id": "B", "text": "Скорее не согласен", "value": 2},
+                        {"id": "C", "text": "Нейтрально", "value": 3},
+                        {"id": "D", "text": "Скорее согласен", "value": 4},
+                        {"id": "E", "text": "Полностью согласен", "value": 5}
+                    ]
+                },
+                {
+                    "text": "Я вижу взаимосвязи между разными событиями",
+                    "options": [
+                        {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                        {"id": "B", "text": "Скорее не согласен", "value": 2},
+                        {"id": "C", "text": "Нейтрально", "value": 3},
+                        {"id": "D", "text": "Скорее согласен", "value": 4},
+                        {"id": "E", "text": "Полностью согласен", "value": 5}
+                    ]
+                },
+                {
+                    "text": "Я задумываюсь о смысле жизни",
+                    "options": [
+                        {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                        {"id": "B", "text": "Скорее не согласен", "value": 2},
+                        {"id": "C", "text": "Нейтрально", "value": 3},
+                        {"id": "D", "text": "Скорее согласен", "value": 4},
+                        {"id": "E", "text": "Полностью согласен", "value": 5}
+                    ]
+                },
+                {
+                    "text": "Мне интересно изучать новые концепции",
+                    "options": [
+                        {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                        {"id": "B", "text": "Скорее не согласен", "value": 2},
+                        {"id": "C", "text": "Нейтрально", "value": 3},
+                        {"id": "D", "text": "Скорее согласен", "value": 4},
+                        {"id": "E", "text": "Полностью согласен", "value": 5}
+                    ]
+                },
+                {
+                    "text": "Я замечаю, как меняются мои взгляды со временем",
+                    "options": [
+                        {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                        {"id": "B", "text": "Скорее не согласен", "value": 2},
+                        {"id": "C", "text": "Нейтрально", "value": 3},
+                        {"id": "D", "text": "Скорее согласен", "value": 4},
+                        {"id": "E", "text": "Полностью согласен", "value": 5}
+                    ]
+                }
+            ]
+            
+            if stage == 1 and index < len(stage1_questions):
+                question = stage1_questions[index]
+            elif stage == 2 and index < len(stage2_questions):
+                question = stage2_questions[index]
+            else:
+                question = {
+                    "text": f"Вопрос {index + 1} этапа {stage}",
+                    "options": [
+                        {"id": "A", "text": "Вариант А", "value": "A"},
+                        {"id": "B", "text": "Вариант Б", "value": "B"},
+                        {"id": "C", "text": "Вариант В", "value": "C"},
+                        {"id": "D", "text": "Вариант Г", "value": "D"}
+                    ]
+                }
+            
+            has_answer = False
+            if user_id in user_data:
+                answers = user_data[user_id].get('all_answers', [])
+                for ans in answers:
+                    if ans.get('stage') == stage and ans.get('question_index') == index:
+                        has_answer = True
+                        break
+            
+            return JSONResponse({
+                "success": True,
+                "stage": stage,
+                "index": index,
+                "total": total,
+                "text": question["text"],
+                "options": question["options"],
+                "hasAnswer": has_answer
+            })
+            
+        except Exception as e:
+            logger.error(f"❌ Error in get_test_question: {e}")
+            return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    
+    @app.post("/api/test/answer")
+    async def submit_test_answer(request: Request):
+        try:
+            data = await request.json()
+            user_id = data.get('user_id')
+            stage = data.get('stage')
+            question_index = data.get('question_index')
+            answer = data.get('answer')
+            option = data.get('option')
+            
+            if not user_id or stage is None or question_index is None or answer is None:
+                raise HTTPException(status_code=400, detail="Missing required fields")
+            
+            user_id = int(user_id)
+            
+            if user_id not in user_data:
+                user_data[user_id] = {}
+            
+            if 'all_answers' not in user_data[user_id]:
+                user_data[user_id]['all_answers'] = []
+            
+            answer_record = {
+                'stage': stage,
+                'question_index': question_index,
+                'answer': answer,
+                'option': option,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            user_data[user_id]['all_answers'].append(answer_record)
+            
+            stage_key = f'stage{stage}_answers'
+            if stage_key not in user_data[user_id]:
+                user_data[user_id][stage_key] = []
+            user_data[user_id][stage_key].append(answer_record)
+            
+            asyncio.create_task(save_user_to_db(user_id, user_data, user_contexts, user_routes))
+            
+            stage_questions_count = {1: 4, 2: 6, 3: 24, 4: 12, 5: 8}
+            total = stage_questions_count.get(stage, 4)
+            
+            stage_answers = [a for a in user_data[user_id].get('all_answers', []) 
+                            if a.get('stage') == stage]
+            stage_complete = len(stage_answers) >= total
+            
+            if stage_complete:
+                if stage == 1 and 'perception_type' not in user_data[user_id]:
+                    user_data[user_id]['perception_type'] = 'visual'
+                elif stage == 2 and 'thinking_level' not in user_data[user_id]:
+                    user_data[user_id]['thinking_level'] = 5
+                elif stage == 3 and 'behavioral_levels' not in user_data[user_id]:
+                    user_data[user_id]['behavioral_levels'] = {
+                        'extraversion': [3,4,3,4,3,4],
+                        'neuroticism': [3,3,3,3,3,3],
+                        'agreeableness': [4,4,4,4,4,4],
+                        'conscientiousness': [4,4,4,4,4,4]
+                    }
+                
+                if stage < 5:
+                    user_data[user_id]['current_stage'] = stage + 1
+                else:
+                    user_data[user_id]['current_stage'] = 5
+            
+            return JSONResponse({"success": True, "stageComplete": stage_complete})
+            
+        except Exception as e:
+            logger.error(f"❌ Error in submit_test_answer: {e}")
+            return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    
+    @app.get("/api/test/results")
+    async def get_test_stage_results(user_id: int, stage: int):
+        try:
+            user_id = int(user_id)
+            stage = int(stage)
+            data = user_data.get(user_id, {})
+            
+            results = {}
+            
+            if stage == 1:
+                results = {
+                    "perception_type": data.get('perception_type', 'не определен'),
+                    "answers": data.get('stage1_answers', [])
+                }
+            elif stage == 2:
+                results = {
+                    "thinking_level": data.get('thinking_level', 5),
+                    "answers": data.get('stage2_answers', [])
+                }
+            elif stage == 3:
+                results = {
+                    "behavioral_levels": data.get('behavioral_levels', {}),
+                    "answers": data.get('stage3_answers', [])
+                }
+            elif stage == 4:
+                results = {
+                    "dilts_counts": data.get('dilts_counts', {}),
+                    "answers": data.get('stage4_answers', [])
+                }
+            elif stage == 5:
+                results = {
+                    "deep_patterns": data.get('deep_patterns', {}),
+                    "answers": data.get('stage5_answers', [])
+                }
+            
+            return JSONResponse({"success": True, "stage": stage, "results": results})
+            
+        except Exception as e:
+            logger.error(f"❌ Error in get_test_stage_results: {e}")
+            return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+    
+    return app
 
-@api_app.get("/api/get-profile")
-async def get_profile_miniapp(user_id: int):
-    """Возвращает профиль для мини-приложения"""
-    try:
-        user_id = int(user_id)
-        data = user_data.get(user_id, {})
-        
-        profile = {
-            "ai_generated_profile": data.get("ai_generated_profile"),
-            "profile_data": data.get("profile_data"),
-            "perception_type": data.get("perception_type"),
-            "thinking_level": data.get("thinking_level"),
-            "behavioral_levels": data.get("behavioral_levels"),
-            "deep_patterns": data.get("deep_patterns")
-        }
-        
-        return JSONResponse(profile)
-    except Exception as e:
-        logger.error(f"❌ Error in get_profile_miniapp: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
+# Создаем экземпляр FastAPI приложения
+api_app = create_fastapi_app()
 
-@api_app.get("/api/get-test-progress")
-async def get_test_progress(user_id: int):
-    """Возвращает прогресс теста для мини-приложения"""
-    try:
-        user_id = int(user_id)
-        data = user_data.get(user_id, {})
-        
-        progress = {
-            "stage1_complete": 'perception_type' in data,
-            "stage2_complete": 'thinking_level' in data,
-            "stage3_complete": 'behavioral_levels' in data and len(data.get('behavioral_levels', {})) > 0,
-            "stage4_complete": 'dilts_counts' in data,
-            "stage5_complete": 'deep_patterns' in data,
-            "answers_count": len(data.get('all_answers', [])),
-            "current_stage": data.get('current_stage', 1)
-        }
-        
-        return JSONResponse(progress)
-    except Exception as e:
-        logger.error(f"❌ Error in get_test_progress: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
-
-# ============================================
-# СТАРЫЕ ЭНДПОИНТЫ (ОСТАВЛЯЕМ ДЛЯ СОВМЕСТИМОСТИ)
-# ============================================
-
-# Вспомогательные функции для API
 def determine_dominant_dilts(dilts_counts: dict) -> str:
     """Определяет доминирующий уровень Дилтса"""
     if not dilts_counts:
@@ -700,648 +1113,6 @@ def get_human_readable_profile(scores: dict, perception_type="не опреде�
     
     return "\n".join(lines)
 
-@api_app.get("/api/user-data")
-async def get_user_data_api(user_id: int):
-    """Возвращает базовую информацию о пользователе"""
-    try:
-        user_id = int(user_id)
-        context = user_contexts.get(user_id)
-        
-        return {
-            "user_id": user_id,
-            "user_name": context.name if context else user_names.get(user_id, "друг"),
-            "has_profile": bool(user_data.get(user_id, {}).get("ai_generated_profile")) or 
-                          bool(user_data.get(user_id, {}).get("profile_data"))
-        }
-    except Exception as e:
-        logger.error(f"API error in get_user_data: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
-
-@api_app.get("/api/profile")
-async def get_profile(user_id: int):
-    """Возвращает психологический портрет"""
-    try:
-        user_id = int(user_id)
-        data = user_data.get(user_id, {})
-        
-        profile = data.get("ai_generated_profile")
-        if not profile:
-            # Если нет AI профиля, генерируем стандартный
-            scores = {}
-            for k in VECTORS:
-                levels = data.get("behavioral_levels", {}).get(k, [])
-                scores[k] = sum(levels) / len(levels) if levels else 3.0
-            
-            perception_type = data.get("perception_type", "не определен")
-            thinking_level = data.get("thinking_level", 5)
-            dilts_counts = data.get("dilts_counts", {})
-            dominant_dilts = determine_dominant_dilts(dilts_counts)
-            
-            profile = get_human_readable_profile(
-                scores,
-                perception_type=perception_type,
-                thinking_level=thinking_level,
-                dominant_dilts=dominant_dilts
-            )
-        
-        return {"profile": profile}
-    except Exception as e:
-        logger.error(f"API error in get_profile: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
-
-@api_app.get("/api/thought")
-async def get_thought(user_id: int):
-    """Возвращает мысли психолога"""
-    try:
-        user_id = int(user_id)
-        data = user_data.get(user_id, {})
-        
-        thought = data.get("psychologist_thought")
-        if not thought:
-            # Генерируем мысль, если её нет
-            thought = await generate_psychologist_thought(user_id, data)
-            if thought:
-                if user_id not in user_data:
-                    user_data[user_id] = {}
-                user_data[user_id]["psychologist_thought"] = thought
-                # Сразу сохраняем в БД с защитой
-                asyncio.create_task(execute_with_retry(
-                    save_user_to_db, user_id, user_data, user_contexts, user_routes,
-                    max_retries=3
-                ))
-            else:
-                thought = "Мысли психолога еще не сгенерированы."
-        
-        return {"thought": thought}
-    except Exception as e:
-        logger.error(f"API error in get_thought: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
-
-@api_app.get("/api/ideas")
-async def get_ideas(user_id: int):
-    """Возвращает идеи на выходные"""
-    try:
-        user_id = int(user_id)
-        data = user_data.get(user_id, {})
-        context = user_contexts.get(user_id)
-        user_name = context.name if context else user_names.get(user_id, "друг")
-        
-        # Проверяем кэш в БД
-        cached_ideas = await db.get_cached_weekend_ideas(user_id)
-        if cached_ideas:
-            return {"ideas": [{"title": "Идеи на выходные", "description": cached_ideas}]}
-        
-        scores = {}
-        for k in VECTORS:
-            levels = data.get("behavioral_levels", {}).get(k, [])
-            scores[k] = sum(levels) / len(levels) if levels else 3.0
-        
-        profile_data = data.get("profile_data", {})
-        
-        ideas_text = await weekend_planner.get_weekend_ideas(
-            user_id=user_id,
-            user_name=user_name,
-            scores=scores,
-            profile_data=profile_data,
-            context=context
-        )
-        
-        # Сохраняем в кэш БД
-        if scores:
-            main_vector = max(scores.items(), key=lambda x: x[1])[0]
-            main_level = int(scores.get(main_vector, 3))
-            asyncio.create_task(db.cache_weekend_ideas(user_id, ideas_text, main_vector, main_level))
-        
-        # Преобразуем текст в структурированные идеи
-        ideas = []
-        paragraphs = ideas_text.split('\n\n')
-        for p in paragraphs:
-            if p.strip() and not p.startswith('#'):
-                ideas.append({
-                    "title": p[:50] + "..." if len(p) > 50 else p,
-                    "description": p
-                })
-        
-        return {"ideas": ideas[:5]}  # Возвращаем первые 5 идей
-    except Exception as e:
-        logger.error(f"API error in get_ideas: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
-
-@api_app.get("/health")
-async def health_check():
-    """Health check для Render (FastAPI)"""
-    return {"status": "ok"}
-
-# ============================================
-# НОВЫЕ ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ (ЧАТ И ТЕСТЫ)
-# ============================================
-
-@api_app.get("/api/chat/history")
-async def get_chat_history(user_id: int, limit: int = 50):
-    """Возвращает историю чата пользователя"""
-    try:
-        user_id = int(user_id)
-        
-        # Здесь можно получать из БД, если сохраняете историю
-        # Пока возвращаем пустую историю - приветствие покажет script.js
-        return JSONResponse({
-            "success": True,
-            "history": []
-        })
-    except Exception as e:
-        logger.error(f"❌ Error in get_chat_history: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e), "history": []}
-        )
-
-@api_app.post("/api/chat/message")
-async def chat_message(request: Request):
-    """Отправляет сообщение боту и получает ответ"""
-    try:
-        data = await request.json()
-        user_id = data.get('user_id')
-        message_text = data.get('message')
-        mode = data.get('mode')
-        
-        if not user_id or not message_text:
-            raise HTTPException(status_code=400, detail="user_id and message required")
-        
-        user_id = int(user_id)
-        
-        # Получаем контекст пользователя
-        if user_id not in user_contexts:
-            user_contexts[user_id] = UserContext(user_id)
-        
-        context = user_contexts[user_id]
-        
-        # Устанавливаем режим, если передан
-        if mode and mode in COMMUNICATION_MODES:
-            context.communication_mode = mode
-        
-        # Получаем данные пользователя
-        user_info = user_data.get(user_id, {})
-        
-        # Анализируем вопрос (если это вопрос)
-        from question_analyzer import QuestionAnalyzer
-        analyzer = QuestionAnalyzer(user_id, user_info)
-        analysis = await analyzer.analyze_question_async(message_text)
-        
-        # Генерируем ответ через DeepSeek
-        from services import call_deepseek_with_context
-        
-        # Формируем промпт с учетом контекста и профиля
-        system_prompt = f"Ты психолог Фреди. Режим: {context.communication_mode}. "
-        
-        if context.name:
-            system_prompt += f"Имя пользователя: {context.name}. "
-        
-        if user_info.get('perception_type'):
-            system_prompt += f"Тип восприятия: {user_info['perception_type']}. "
-        
-        if user_info.get('thinking_level'):
-            system_prompt += f"Уровень мышления: {user_info['thinking_level']}/9. "
-        
-        if analysis:
-            system_prompt += f"Анализ вопроса: {analysis.get('analysis', '')}. "
-        
-        # Вызываем DeepSeek
-        response = await call_deepseek_with_context(
-            user_id=user_id,
-            user_message=message_text,
-            context=context,
-            mode=context.communication_mode,
-            profile_data=user_info
-        )
-        
-        if not response:
-            response = "Я понял ваш запрос. Дайте подумать..."
-        
-        # Определяем, нужно ли показать кнопки
-        buttons = None
-        text_lower = response.lower()
-        
-        if any(word in text_lower for word in ['тест', 'пройди', 'этап']):
-            buttons = [
-                {"text": "🧠 Пройти тест", "action": "start_test"},
-                {"text": "📊 Мой портрет", "action": "show_profile"}
-            ]
-        elif any(word in text_lower for word in ['профиль', 'портрет', 'результат']):
-            buttons = [
-                {"text": "📊 Посмотреть", "action": "show_profile"},
-                {"text": "🧠 Мысли", "action": "show_thoughts"}
-            ]
-        elif any(word in text_lower for word in ['выходные', 'идеи', 'план']):
-            buttons = [
-                {"text": "🎯 Идеи", "action": "show_weekend"},
-                {"text": "📊 В профиль", "action": "show_profile"}
-            ]
-        
-        return JSONResponse({
-            "success": True,
-            "response": response,
-            "mode": context.communication_mode,
-            "analysis": analysis,
-            "buttons": buttons
-        })
-        
-    except Exception as e:
-        logger.error(f"❌ Error in chat_message: {e}")
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(
-            status_code=500,
-            content={
-                "success": False, 
-                "error": str(e),
-                "response": "Произошла ошибка. Попробуйте еще раз."
-            }
-        )
-
-@api_app.post("/api/chat/action")
-async def chat_action(request: Request):
-    """Обрабатывает нажатия на кнопки"""
-    try:
-        data = await request.json()
-        user_id = data.get('user_id')
-        action = data.get('action')
-        action_data = data.get('data', {})
-        
-        if not user_id or not action:
-            raise HTTPException(status_code=400, detail="user_id and action required")
-        
-        user_id = int(user_id)
-        
-        # Обрабатываем различные действия
-        if action == "start_test":
-            return JSONResponse({
-                "success": True,
-                "action": action,
-                "data": {
-                    "stage": 1,
-                    "question_index": 0,
-                    "message": "Начинаем тест. Этап 1: Тип восприятия"
-                }
-            })
-            
-        elif action == "show_profile":
-            profile_data = await get_profile(user_id)
-            return JSONResponse({
-                "success": True,
-                "action": action,
-                "data": profile_data
-            })
-            
-        elif action == "show_thoughts":
-            thoughts = await get_thought(user_id)
-            return JSONResponse({
-                "success": True,
-                "action": action,
-                "data": thoughts
-            })
-            
-        elif action == "show_weekend":
-            ideas = await get_ideas(user_id)
-            return JSONResponse({
-                "success": True,
-                "action": action,
-                "data": ideas
-            })
-            
-        elif action == "ask_question":
-            return JSONResponse({
-                "success": True,
-                "action": action,
-                "data": {"message": "Задайте ваш вопрос"}
-            })
-        
-        return JSONResponse({"success": True, "action": action})
-        
-    except Exception as e:
-        logger.error(f"❌ Error in chat_action: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
-
-@api_app.get("/api/test/question")
-async def get_test_question(user_id: int, stage: int, index: int):
-    """Возвращает вопрос теста"""
-    try:
-        user_id = int(user_id)
-        stage = int(stage)
-        index = int(index)
-        
-        # Определяем общее количество вопросов для этапа
-        stage_questions_count = {
-            1: 4,  # Тип восприятия
-            2: 6,  # Уровень мышления
-            3: 24, # Поведенческие уровни (4 вектора × 6)
-            4: 12, # Уровни Дилтса
-            5: 8   # Глубинные паттерны
-        }
-        
-        total = stage_questions_count.get(stage, 4)
-        
-        # Вопросы для этапа 1 (Тип восприятия)
-        stage1_questions = [
-            {
-                "text": "Как вы обычно воспринимаете новую информацию?",
-                "options": [
-                    {"id": "A", "text": "Через визуальные образы и картинки", "value": "visual"},
-                    {"id": "B", "text": "Через ощущения и телесный опыт", "value": "kinesthetic"},
-                    {"id": "C", "text": "Через логические схемы и структуры", "value": "auditory"},
-                    {"id": "D", "text": "Через интуицию и общее впечатление", "value": "digital"}
-                ]
-            },
-            {
-                "text": "Что для вас важнее при принятии решения?",
-                "options": [
-                    {"id": "A", "text": "Как это будет выглядеть", "value": "visual"},
-                    {"id": "B", "text": "Что я чувствую по этому поводу", "value": "kinesthetic"},
-                    {"id": "C", "text": "Логика и факты", "value": "auditory"},
-                    {"id": "D", "text": "Общая картина и смысл", "value": "digital"}
-                ]
-            },
-            {
-                "text": "Как вы лучше запоминаете?",
-                "options": [
-                    {"id": "A", "text": "Когда вижу схему или изображение", "value": "visual"},
-                    {"id": "B", "text": "Когда записываю или проживаю", "value": "kinesthetic"},
-                    {"id": "C", "text": "Когда проговариваю вслух", "value": "auditory"},
-                    {"id": "D", "text": "Когда понимаю суть", "value": "digital"}
-                ]
-            },
-            {
-                "text": "Что вас вдохновляет?",
-                "options": [
-                    {"id": "A", "text": "Красота и гармония", "value": "visual"},
-                    {"id": "B", "text": "Глубокие переживания", "value": "kinesthetic"},
-                    {"id": "C", "text": "Идеи и концепции", "value": "auditory"},
-                    {"id": "D", "text": "Смысл и предназначение", "value": "digital"}
-                ]
-            }
-        ]
-        
-        # Вопросы для этапа 2 (Уровень мышления)
-        stage2_questions = [
-            {
-                "text": "Я часто анализирую свои мысли и чувства",
-                "options": [
-                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
-                    {"id": "B", "text": "Скорее не согласен", "value": 2},
-                    {"id": "C", "text": "Нейтрально", "value": 3},
-                    {"id": "D", "text": "Скорее согласен", "value": 4},
-                    {"id": "E", "text": "Полностью согласен", "value": 5}
-                ]
-            },
-            {
-                "text": "Мне важно понимать причины своих поступков",
-                "options": [
-                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
-                    {"id": "B", "text": "Скорее не согласен", "value": 2},
-                    {"id": "C", "text": "Нейтрально", "value": 3},
-                    {"id": "D", "text": "Скорее согласен", "value": 4},
-                    {"id": "E", "text": "Полностью согласен", "value": 5}
-                ]
-            },
-            {
-                "text": "Я вижу взаимосвязи между разными событиями",
-                "options": [
-                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
-                    {"id": "B", "text": "Скорее не согласен", "value": 2},
-                    {"id": "C", "text": "Нейтрально", "value": 3},
-                    {"id": "D", "text": "Скорее согласен", "value": 4},
-                    {"id": "E", "text": "Полностью согласен", "value": 5}
-                ]
-            },
-            {
-                "text": "Я задумываюсь о смысле жизни",
-                "options": [
-                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
-                    {"id": "B", "text": "Скорее не согласен", "value": 2},
-                    {"id": "C", "text": "Нейтрально", "value": 3},
-                    {"id": "D", "text": "Скорее согласен", "value": 4},
-                    {"id": "E", "text": "Полностью согласен", "value": 5}
-                ]
-            },
-            {
-                "text": "Мне интересно изучать новые концепции",
-                "options": [
-                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
-                    {"id": "B", "text": "Скорее не согласен", "value": 2},
-                    {"id": "C", "text": "Нейтрально", "value": 3},
-                    {"id": "D", "text": "Скорее согласен", "value": 4},
-                    {"id": "E", "text": "Полностью согласен", "value": 5}
-                ]
-            },
-            {
-                "text": "Я замечаю, как меняются мои взгляды со временем",
-                "options": [
-                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
-                    {"id": "B", "text": "Скорее не согласен", "value": 2},
-                    {"id": "C", "text": "Нейтрально", "value": 3},
-                    {"id": "D", "text": "Скорее согласен", "value": 4},
-                    {"id": "E", "text": "Полностью согласен", "value": 5}
-                ]
-            }
-        ]
-        
-        # Выбираем нужный вопрос
-        if stage == 1 and index < len(stage1_questions):
-            question = stage1_questions[index]
-        elif stage == 2 and index < len(stage2_questions):
-            question = stage2_questions[index]
-        else:
-            # Заглушка для остальных этапов
-            question = {
-                "text": f"Вопрос {index + 1} этапа {stage}",
-                "options": [
-                    {"id": "A", "text": "Вариант А", "value": "A"},
-                    {"id": "B", "text": "Вариант Б", "value": "B"},
-                    {"id": "C", "text": "Вариант В", "value": "C"},
-                    {"id": "D", "text": "Вариант Г", "value": "D"}
-                ]
-            }
-        
-        # Проверяем, отвечал ли пользователь уже на этот вопрос
-        has_answer = False
-        if user_id in user_data:
-            answers = user_data[user_id].get('all_answers', [])
-            for ans in answers:
-                if ans.get('stage') == stage and ans.get('question_index') == index:
-                    has_answer = True
-                    break
-        
-        return JSONResponse({
-            "success": True,
-            "stage": stage,
-            "index": index,
-            "total": total,
-            "text": question["text"],
-            "options": question["options"],
-            "hasAnswer": has_answer
-        })
-        
-    except Exception as e:
-        logger.error(f"❌ Error in get_test_question: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
-
-@api_app.post("/api/test/answer")
-async def submit_test_answer(request: Request):
-    """Сохраняет ответ на вопрос теста"""
-    try:
-        data = await request.json()
-        user_id = data.get('user_id')
-        stage = data.get('stage')
-        question_index = data.get('question_index')
-        answer = data.get('answer')
-        option = data.get('option')
-        
-        if not user_id or stage is None or question_index is None or answer is None:
-            raise HTTPException(status_code=400, detail="Missing required fields")
-        
-        user_id = int(user_id)
-        
-        # Сохраняем ответ в user_data
-        if user_id not in user_data:
-            user_data[user_id] = {}
-        
-        if 'all_answers' not in user_data[user_id]:
-            user_data[user_id]['all_answers'] = []
-        
-        # Добавляем ответ
-        answer_record = {
-            'stage': stage,
-            'question_index': question_index,
-            'answer': answer,
-            'option': option,
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        user_data[user_id]['all_answers'].append(answer_record)
-        
-        # Сохраняем в специфичное для этапа хранилище
-        stage_key = f'stage{stage}_answers'
-        if stage_key not in user_data[user_id]:
-            user_data[user_id][stage_key] = []
-        user_data[user_id][stage_key].append(answer_record)
-        
-        # Сохраняем в БД с защитой
-        asyncio.create_task(execute_with_retry(
-            save_user_to_db, user_id, user_data, user_contexts, user_routes,
-            max_retries=3
-        ))
-        
-        # Определяем, завершен ли этап
-        stage_questions_count = {
-            1: 4, 2: 6, 3: 24, 4: 12, 5: 8
-        }
-        total = stage_questions_count.get(stage, 4)
-        
-        # Считаем количество ответов на этом этапе
-        stage_answers = [a for a in user_data[user_id].get('all_answers', []) 
-                        if a.get('stage') == stage]
-        stage_complete = len(stage_answers) >= total
-        
-        # Если этап завершен, обновляем прогресс
-        if stage_complete:
-            if stage == 1 and 'perception_type' not in user_data[user_id]:
-                # Определяем тип восприятия (заглушка)
-                user_data[user_id]['perception_type'] = 'visual'
-            elif stage == 2 and 'thinking_level' not in user_data[user_id]:
-                # Определяем уровень мышления (заглушка)
-                user_data[user_id]['thinking_level'] = 5
-            elif stage == 3 and 'behavioral_levels' not in user_data[user_id]:
-                user_data[user_id]['behavioral_levels'] = {
-                    'extraversion': [3,4,3,4,3,4],
-                    'neuroticism': [3,3,3,3,3,3],
-                    'agreeableness': [4,4,4,4,4,4],
-                    'conscientiousness': [4,4,4,4,4,4]
-                }
-            
-            # Обновляем current_stage
-            if stage < 5:
-                user_data[user_id]['current_stage'] = stage + 1
-            else:
-                user_data[user_id]['current_stage'] = 5
-        
-        return JSONResponse({
-            "success": True,
-            "stageComplete": stage_complete
-        })
-        
-    except Exception as e:
-        logger.error(f"❌ Error in submit_test_answer: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
-
-@api_app.get("/api/test/results")
-async def get_test_stage_results(user_id: int, stage: int):
-    """Возвращает результаты этапа теста"""
-    try:
-        user_id = int(user_id)
-        stage = int(stage)
-        data = user_data.get(user_id, {})
-        
-        results = {}
-        
-        if stage == 1:
-            results = {
-                "perception_type": data.get('perception_type', 'не определен'),
-                "answers": data.get('stage1_answers', [])
-            }
-        elif stage == 2:
-            results = {
-                "thinking_level": data.get('thinking_level', 5),
-                "answers": data.get('stage2_answers', [])
-            }
-        elif stage == 3:
-            results = {
-                "behavioral_levels": data.get('behavioral_levels', {}),
-                "answers": data.get('stage3_answers', [])
-            }
-        elif stage == 4:
-            results = {
-                "dilts_counts": data.get('dilts_counts', {}),
-                "answers": data.get('stage4_answers', [])
-            }
-        elif stage == 5:
-            results = {
-                "deep_patterns": data.get('deep_patterns', {}),
-                "answers": data.get('stage5_answers', [])
-            }
-        
-        return JSONResponse({
-            "success": True,
-            "stage": stage,
-            "results": results
-        })
-        
-    except Exception as e:
-        logger.error(f"❌ Error in get_test_stage_results: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
-
 # ============================================
 # HEALTH CHECK ДЛЯ RENDER (HTTP сервер)
 # ============================================
@@ -1369,7 +1140,6 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 def run_health_server():
     """Запускает HTTP сервер для health check на порту, отличном от основного"""
-    # Начинаем с порта 10001, чтобы не конфликтовать с FastAPI
     ports = [10001, 10002, 10003, 10004, 10005]
     for port in ports:
         try:
@@ -1389,11 +1159,6 @@ health_thread = threading.Thread(target=run_health_server, daemon=True)
 health_thread.start()
 
 # ============================================
-# ФУНКЦИИ ДЛЯ РАБОТЫ С ДЛИННЫМИ СООБЩЕНИЯМИ
-# ============================================
-# Функция split_long_message теперь импортируется из formatters.py
-
-# ============================================
 # ФУНКЦИЯ ДЛЯ ГЕНЕРАЦИИ УНИКАЛЬНЫХ CALLBACK'ОВ
 # ============================================
 
@@ -1403,7 +1168,7 @@ def generate_unique_callback(prefix: str, user_id: int, question: int, option: s
     return f"{prefix}_{question}_{option}_{extra}_{user_id}_{timestamp}"
 
 # ============================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (УНИКАЛЬНЫЕ ДЛЯ MAIN)
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================
 
 def should_be_ironic(text: str) -> bool:
@@ -1445,7 +1210,6 @@ async def check_api_on_startup():
         "openweather": False
     }
     
-    # Проверка DeepSeek
     if DEEPSEEK_API_KEY:
         try:
             test_response = await call_deepseek("Ответь 'OK' одним словом", max_tokens=10)
@@ -1454,17 +1218,14 @@ async def check_api_on_startup():
         except Exception as e:
             logger.error(f"❌ DeepSeek API ошибка: {e}")
     
-    # Проверка Deepgram (по наличию ключа)
     if DEEPGRAM_API_KEY:
         results["deepgram"] = True
         logger.info("✅ Deepgram API ключ найден")
     
-    # Проверка Yandex (по наличию ключа)
     if YANDEX_API_KEY:
         results["yandex"] = True
         logger.info("✅ Yandex TTS ключ найден")
     
-    # Проверка OpenWeather
     if OPENWEATHER_API_KEY:
         results["openweather"] = True
         logger.info("✅ OpenWeather API ключ найден")
@@ -1527,10 +1288,8 @@ def cmd_context(message: types.Message):
     safe_send_message(message, "🔄 Давайте обновим ваш контекст")
     start_context(message)
 
-# 👇 КОМАНДЫ ДЛЯ АДМИНИСТРАТОРОВ
 @bot.message_handler(commands=['test_yandex'])
 def cmd_test_yandex(message: types.Message):
-    """Тестирование Yandex TTS"""
     if message.from_user.id not in ADMIN_IDS:
         safe_send_message(message, "⛔ Доступ запрещен")
         return
@@ -1542,7 +1301,6 @@ def cmd_test_yandex(message: types.Message):
 
 @bot.message_handler(commands=['test_weather'])
 def cmd_test_weather(message: types.Message):
-    """Тестирование OpenWeather API"""
     if message.from_user.id not in ADMIN_IDS:
         safe_send_message(message, "⛔ Доступ запрещен")
         return
@@ -1554,7 +1312,6 @@ def cmd_test_weather(message: types.Message):
 
 @bot.message_handler(commands=['test_voices'])
 def cmd_test_voices(message: types.Message):
-    """Тестирование голосов"""
     if message.from_user.id not in ADMIN_IDS:
         safe_send_message(message, "⛔ Доступ запрещен")
         return
@@ -1566,7 +1323,6 @@ def cmd_test_voices(message: types.Message):
 
 @bot.message_handler(commands=['test_voice_send'])
 def cmd_test_voice_send(message: types.Message):
-    """Тест отправки голосового сообщения"""
     if message.from_user.id not in ADMIN_IDS:
         safe_send_message(message, "⛔ Доступ запрещен")
         return
@@ -1578,7 +1334,6 @@ def cmd_test_voice_send(message: types.Message):
 
 @bot.message_handler(commands=['weekend'])
 def cmd_weekend(message: types.Message):
-    """Команда /weekend - идеи на выходные"""
     user_id = message.from_user.id
     data = user_data.get(user_id, {})
     
@@ -1597,7 +1352,6 @@ def cmd_weekend(message: types.Message):
 
 @bot.message_handler(commands=['dbstats'])
 def cmd_dbstats(message: types.Message):
-    """Статистика базы данных (только для админов)"""
     if message.from_user.id not in ADMIN_IDS:
         safe_send_message(message, "⛔ Доступ запрещен")
         return
@@ -1733,7 +1487,6 @@ async def show_weekend_ideas(message: types.Message, user_id: int):
     context = user_contexts.get(user_id)
     user_name = user_names.get(user_id, "друг")
     
-    # Получаем scores из данных
     scores = {}
     for k in VECTORS:
         levels = data.get("behavioral_levels", {}).get(k, [])
@@ -1741,7 +1494,6 @@ async def show_weekend_ideas(message: types.Message, user_id: int):
     
     profile_data = data.get("profile_data", {})
     
-    # Отправляем статусное сообщение
     status_msg = await safe_send_message(
         message,
         "🎨 Генерирую идеи специально для тебя...\n\nЭто займёт несколько секунд.",
@@ -1777,7 +1529,7 @@ async def show_weekend_ideas(message: types.Message, user_id: int):
         )
 
 # ============================================
-# ФУНКЦИЯ show_context_complete (вынесена из stages.py)
+# ФУНКЦИЯ show_context_complete
 # ============================================
 
 def show_context_complete(message: types.Message, context: UserContext):
@@ -1813,7 +1565,7 @@ def show_context_complete(message: types.Message, context: UserContext):
     clear_state(message.from_user.id)
 
 # ============================================
-# ФУНКЦИИ ДЛЯ ГЛАВНОГО МЕНЮ (вынесены из modes.py)
+# ФУНКЦИИ ДЛЯ ГЛАВНОГО МЕНЮ
 # ============================================
 
 def show_main_menu(message: types.Message, context: UserContext):
@@ -1906,10 +1658,6 @@ def handle_context_message_wrapper(message: types.Message):
             keep_last=1
         )
 
-# ============================================
-# ОБРАБОТЧИКИ ТЕКСТОВЫХ СООБЩЕНИЙ ПО СОСТОЯНИЯМ
-# ============================================
-
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_question)
 def handle_question_message(message: types.Message):
     """Обрабатывает текстовые сообщения в состоянии ожидания вопроса"""
@@ -1919,13 +1667,10 @@ def handle_question_message(message: types.Message):
     logger.info(f"❓ Получен вопрос от пользователя {user_id} в состоянии awaiting_question: {text[:50]}...")
     
     def run_sync():
-        # Импортируем синхронную функцию из questions.py
         from handlers.questions import process_text_question_sync
         process_text_question_sync(message, user_id, text)
     
-    # Запускаем в отдельном потоке (без asyncio.run)
     threading.Thread(target=run_sync, daemon=True).start()
-
 
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_custom_goal)
 def handle_custom_goal_message(message: types.Message):
@@ -1939,7 +1684,6 @@ def handle_custom_goal_message(message: types.Message):
         asyncio.run(process_custom_goal_async(message, user_id, text))
     
     threading.Thread(target=run_async, daemon=True).start()
-
 
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.pretest_question)
 def handle_pretest_question(message: types.Message):
@@ -1957,11 +1701,6 @@ def handle_pretest_question(message: types.Message):
     )
     clear_state(user_id)
 
-
-# ============================================
-# ОБРАБОТЧИК ГОЛОСОВЫХ СООБЩЕНИЙ
-# ============================================
-
 @bot.message_handler(content_types=['voice'])
 def handle_voice_wrapper(message: types.Message):
     """Обработчик голосовых сообщений"""
@@ -1969,7 +1708,6 @@ def handle_voice_wrapper(message: types.Message):
         asyncio.run(handle_voice_message(message))
     
     threading.Thread(target=run_async, daemon=True).start()
-
 
 @bot.message_handler(func=lambda message: True)
 def handle_unknown_message(message: types.Message):
@@ -1993,7 +1731,6 @@ def handle_unknown_message(message: types.Message):
         keep_last=1
     )
 
-
 # ============================================
 # АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ ОБРАБОТКИ СООБЩЕНИЙ
 # ============================================
@@ -2013,57 +1750,42 @@ async def process_custom_goal_async(message: types.Message, user_id: int, text: 
             delete_previous=True
         )
 
-
 # ============================================
-# ФУНКЦИЯ ЗАПУСКА FASTAPI - ИСПРАВЛЕНА ДЛЯ PYTHON 3.14
+# ФУНКЦИЯ ЗАПУСКА FASTAPI В ОТДЕЛЬНОМ ПРОЦЕССЕ - ИСПРАВЛЕНО ДЛЯ PYTHON 3.14
 # ============================================
 
-def run_fastapi():
-    """Запускает FastAPI сервер в отдельном потоке"""
-    # Render сам назначает порт через переменную окружения PORT
+def run_fastapi_process():
+    """Запускает FastAPI в отдельном процессе с правильной конфигурацией для Python 3.14"""
     port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Запуск FastAPI на порту {port}")
+    logger.info(f"🚀 Запуск FastAPI в отдельном процессе на порту {port}")
     
-    # СОЗДАЁМ НОВЫЙ ЦИКЛ СОБЫТИЙ ПРАВИЛЬНЫМ СПОСОБОМ
+    # Не создаем свой event loop - позволяем uvicorn управлять этим
+    # Запускаем uvicorn с правильными параметрами
     try:
-        # Пытаемся получить текущий цикл
-        try:
-            loop = asyncio.get_running_loop()
-            logger.info("✅ Используем существующий цикл событий")
-        except RuntimeError:
-            # Если нет запущенного цикла, создаём новый
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            logger.info("✅ Создан новый цикл событий")
-    except Exception as e:
-        logger.error(f"❌ Ошибка при настройке цикла событий: {e}")
-        loop = None
-    
-    # Применяем nest_asyncio
-    try:
-        import nest_asyncio
-        nest_asyncio.apply()
-        logger.info("✅ nest_asyncio применён")
-    except Exception as e:
-        logger.error(f"❌ Ошибка при применении nest_asyncio: {e}")
-    
-    # ЗАПУСКАЕМ UVICORN БЕЗ ПАРАМЕТРА loop
-    try:
-        # Важно: НЕ передаём loop="asyncio" в Python 3.14!
         uvicorn.run(
-            api_app, 
-            host="0.0.0.0", 
+            "main:api_app",  # указываем строкой "модуль:переменная"
+            host="0.0.0.0",
             port=port,
-            log_level="info"
+            reload=False,
+            log_level="info",
+            access_log=True
         )
     except Exception as e:
-        logger.error(f"❌ Ошибка при запуске uvicorn: {e}")
-        # Последняя попытка
-        uvicorn.run(api_app, host="0.0.0.0", port=port)
-
+        logger.error(f"❌ Ошибка при запуске FastAPI: {e}")
+        # Пробуем альтернативный способ
+        try:
+            import subprocess
+            subprocess.run([
+                "uvicorn", "main:api_app", 
+                "--host", "0.0.0.0", 
+                "--port", str(port),
+                "--log-level", "info"
+            ], check=True)
+        except Exception as e2:
+            logger.error(f"❌ Ошибка при запуске uvicorn через subprocess: {e2}")
 
 # ============================================
-# ФУНКЦИЯ ЗАПУСКА АСИНХРОННЫХ ЗАДАЧ - ИСПРАВЛЕНА
+# ФУНКЦИЯ ЗАПУСКА АСИНХРОННЫХ ЗАДАЧ
 # ============================================
 
 def run_async_tasks():
@@ -2071,13 +1793,9 @@ def run_async_tasks():
     # Создаём новый цикл для этого потока
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
-    # Применяем nest_asyncio
     nest_asyncio.apply(loop)
     
-    # Запускаем проверку API
     try:
-        # Используем run_until_complete с обработкой ошибок
         loop.run_until_complete(check_api_on_startup())
     except RuntimeError as e:
         if 'already running' in str(e):
@@ -2086,10 +1804,6 @@ def run_async_tasks():
             logger.error(f"❌ Ошибка при проверке API: {e}")
     except Exception as e:
         logger.error(f"❌ Ошибка при проверке API: {e}")
-    
-    # Не закрываем цикл, оставляем для других задач
-    # loop.close() - закомментировано
-
 
 # ============================================
 # ЗАПУСК БОТА
@@ -2121,8 +1835,7 @@ async def shutdown_handler():
     
     try:
         from state import save_all_users_to_db
-        # Используем execute_with_retry для защиты от ошибок
-        saved_count = await execute_with_retry(save_all_users_to_db, db, max_retries=3)
+        saved_count = await save_all_users_to_db(db)
         logger.info(f"✅ Сохранено {saved_count} пользователей")
     except Exception as e:
         logger.error(f"❌ Ошибка при сохранении: {e}")
@@ -2149,13 +1862,13 @@ def main():
     print("🗓 Планировщик задач: ✅")
     print("🎨 Идеи на выходные: ✅")
     print("🔬 Глубинный анализ вопросов: ✅")
-    print("📱 Мини-приложение: ✅ (FastAPI + полная синхронизация)")
+    print("📱 Мини-приложение: ✅ (FastAPI)")
     print("🗄️ Постоянное хранение: ✅ (PostgreSQL)")
     print("="*80 + "\n")
     
     logger.info("🚀 Бот для MAX запущен!")
     
-    # Создаем новый event loop
+    # Создаем новый event loop для главного потока
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
@@ -2173,10 +1886,15 @@ def main():
     async_thread = threading.Thread(target=run_async_tasks, daemon=True)
     async_thread.start()
     
-    # Запускаем FastAPI в отдельном потоке
-    api_thread = threading.Thread(target=run_fastapi, daemon=True)
-    api_thread.start()
-    logger.info("✅ FastAPI сервер запущен")
+    # Запускаем FastAPI в отдельном процессе
+    # Используем multiprocessing для полной изоляции
+    try:
+        fastapi_process = multiprocessing.Process(target=run_fastapi_process, daemon=True)
+        fastapi_process.start()
+        logger.info(f"✅ FastAPI сервер запущен в отдельном процессе (PID: {fastapi_process.pid})")
+    except Exception as e:
+        logger.error(f"❌ Не удалось запустить FastAPI процесс: {e}")
+        logger.warning("⚠️ Продолжаем работу без FastAPI")
     
     # Добавляем обработчик сигналов для корректного завершения
     try:
@@ -2186,8 +1904,11 @@ def main():
             asyncio.create_task(shutdown_handler())
         
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, signal_handler)
-    except (ImportError, NotImplementedError, AttributeError) as e:
+            try:
+                loop.add_signal_handler(sig, signal_handler)
+            except (NotImplementedError, RuntimeError):
+                logger.warning(f"⚠️ Не удалось установить обработчик сигнала {sig}")
+    except (ImportError, AttributeError) as e:
         logger.warning(f"⚠️ Не удалось установить обработчик сигналов: {e}")
     
     is_render = os.environ.get('RENDER') is not None
@@ -2200,7 +1921,6 @@ def main():
                 bot.polling()
             except KeyboardInterrupt:
                 logger.info("👋 Бот остановлен пользователем")
-                # Сохраняем данные перед выходом
                 loop.run_until_complete(shutdown_handler())
                 break
             except Exception as e:
@@ -2213,10 +1933,11 @@ def main():
                     time.sleep(delay)
                 else:
                     logger.error("❌ Превышено количество попыток")
-                    # Сохраняем данные перед выходом
                     loop.run_until_complete(shutdown_handler())
     finally:
         cleanup_resources()
 
 if __name__ == "__main__":
+    # Важно для multiprocessing
+    multiprocessing.freeze_support()
     main()
