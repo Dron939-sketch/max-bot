@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ 2.7 - ИСПРАВЛЕНО: Поддержка внешнего URL для кросс-регионального подключения
+ВЕРСИЯ 2.9 - ИСПРАВЛЕНО: Добавлен импорт BotDatabase из database.py
 """
 
 import os
@@ -13,13 +13,13 @@ import asyncio
 import sys
 from typing import Dict, Any, Optional
 
-# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ ASYNCPG (ДОЛЖЕН БЫТЬ ДО ИМПОРТА database) ==========
+# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ ASYNCPG (ДОЛЖЕН БЫТЬ В САМОМ НАЧАЛЕ) ==========
 import asyncpg
 from asyncpg.pool import Pool
 
 logger = logging.getLogger(__name__)
 
-# Сохраняем оригинальную функцию
+# Сохраняем оригинальную функцию ДО любых изменений
 original_create_pool = asyncpg.create_pool
 
 async def patched_create_pool(*args, **kwargs):
@@ -60,15 +60,21 @@ async def patched_create_pool(*args, **kwargs):
         logger.error(f"❌ Ошибка при создании пула через патч: {e}")
         raise
 
-# Применяем патч
+# Принудительно применяем патч (перезаписываем функцию)
 asyncpg.create_pool = patched_create_pool
-logger.info("✅ Применён критический патч для asyncpg в Python 3.14")
+logger.info("🔥🔥🔥 ПАТЧ ПРИМЕНЁН В db_instance.py 🔥🔥🔥")
+
+# Проверяем, что патч действительно применился
+if asyncpg.create_pool is patched_create_pool:
+    logger.info("✅ ПАТЧ РАБОТАЕТ: create_pool заменён на patched_create_pool")
+else:
+    logger.error("❌ ПАТЧ НЕ ПРИМЕНИЛСЯ! create_pool остался оригинальным")
 # =================================================================================
 
-# Теперь импортируем database (после применения патча)
-from database import BotDatabase
+# ========== ИМПОРТ БАЗЫ ДАННЫХ ==========
+from database import BotDatabase  # <--- ВАЖНО: импортируем класс после патча
+# ======================================
 
-# ========== НАСТРОЙКА URL ПОДКЛЮЧЕНИЯ ==========
 # URL базы данных из переменных окружения Render
 # Сначала пробуем внешний URL, затем внутренний, затем захардкоженный
 DATABASE_URL = os.environ.get(
@@ -86,7 +92,6 @@ if len(url_parts) > 1:
 else:
     safe_url = DATABASE_URL[:50] + "..." if len(DATABASE_URL) > 50 else DATABASE_URL
 logger.info(f"🔗 Используем URL базы данных: {safe_url}")
-# ===============================================
 
 # Создаем единый экземпляр БД
 db = BotDatabase(DATABASE_URL)
