@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Сервисные функции для работы с API и генерации ответов
-Версия 9.6.1 - ИСПРАВЛЕНО: Добавлены патчи для aiohttp в Python 3.14
+Версия 9.6.2 - ИСПРАВЛЕНО: Усиленные патчи для aiohttp в Python 3.14
 """
 
 import os
@@ -29,55 +29,86 @@ from config import (
 logger = logging.getLogger(__name__)
 
 
-# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ AIOHTTP (Python 3.14) ==========
+# ========== УСИЛЕННЫЙ ПАТЧ ДЛЯ AIOHTTP (Python 3.14) ==========
 if sys.version_info >= (3, 14):
     try:
+        import aiohttp
         from aiohttp.helpers import TimerContext
+        from aiohttp.client import ClientSession
+        from aiohttp.connector import TCPConnector
         
-        # Сохраняем оригинальные классы
+        logger.info("🔧 Применяем усиленные патчи для aiohttp в Python 3.14")
+        
+        # 1. Патч для TimerContext
         original_TimerContext = TimerContext
-        original_ClientSession = aiohttp.ClientSession
         
         class PatchedTimerContext(TimerContext):
-            """Исправленный таймер для Python 3.14"""
+            """Полностью отключаем таймер для Python 3.14"""
             def __enter__(self):
-                # Для Python 3.14 просто возвращаем self без вызова super()
-                # Это обходит ошибку с таймаутами вне задачи
+                # Просто возвращаем self, ничего не делаем
                 return self
+            
+            def __exit__(self, *args):
+                pass
         
-        class PatchedClientSession(aiohttp.ClientSession):
-            """Исправленная сессия для Python 3.14"""
-            def __init__(self, *args, **kwargs):
-                # Убираем loop если он есть (для Python 3.14)
-                if 'loop' in kwargs:
-                    kwargs.pop('loop')
-                super().__init__(*args, **kwargs)
-        
-        # Применяем патчи
         aiohttp.helpers.TimerContext = PatchedTimerContext
-        aiohttp.ClientSession = PatchedClientSession
+        logger.debug("✅ TimerContext заменён")
         
-        # Дополнительный патч для ClientSession._request
-        original_request = aiohttp.ClientSession._request
+        # 2. Патч для ClientSession._request
+        original_request = ClientSession._request
         
         async def patched_request(self, *args, **kwargs):
-            """Обёртка для _request с обработкой таймаутов"""
-            try:
-                return await original_request(self, *args, **kwargs)
-            except RuntimeError as e:
-                if "Timeout context manager" in str(e):
-                    logger.warning("⚠️ Перехвачена ошибка таймаута, пробуем без таймаута")
-                    # Пробуем ещё раз без таймаута
-                    kwargs.pop('timeout', None)
-                    return await original_request(self, *args, **kwargs)
-                raise
+            # Убираем все параметры таймаута из kwargs
+            kwargs.pop('timeout', None)
+            # Убираем параметры, которые могут вызвать проблемы
+            kwargs.pop('conn_timeout', None)
+            kwargs.pop('read_timeout', None)
+            kwargs.pop('sock_read', None)
+            kwargs.pop('sock_connect', None)
+            return await original_request(self, *args, **kwargs)
         
-        aiohttp.ClientSession._request = patched_request
+        ClientSession._request = patched_request
+        logger.debug("✅ ClientSession._request заменён")
         
-        logger.info("✅ Применён критический патч для aiohttp в Python 3.14")
+        # 3. Патч для TCPConnector._connect
+        original_connect = TCPConnector._connect
+        
+        async def patched_connect(self, req, traces, timeout):
+            # Создаем упрощенный таймаут без сложной логики
+            simplified_timeout = aiohttp.ClientTimeout(
+                total=60,
+                connect=None,
+                sock_read=None,
+                sock_connect=None
+            )
+            return await original_connect(self, req, traces, simplified_timeout)
+        
+        TCPConnector._connect = patched_connect
+        logger.debug("✅ TCPConnector._connect заменён")
+        
+        # 4. Патч для создания сессии
+        original_ClientSession = aiohttp.ClientSession
+        
+        class PatchedClientSession(original_ClientSession):
+            """Исправленная сессия для Python 3.14"""
+            def __init__(self, *args, **kwargs):
+                # Убираем loop если он есть
+                kwargs.pop('loop', None)
+                # Убираем timeout если он есть (будем использовать свой)
+                kwargs.pop('timeout', None)
+                # Создаем свой упрощенный таймаут
+                kwargs['timeout'] = aiohttp.ClientTimeout(total=60)
+                super().__init__(*args, **kwargs)
+        
+        aiohttp.ClientSession = PatchedClientSession
+        logger.debug("✅ ClientSession заменён")
+        
+        logger.info("✅ Усиленные патчи для aiohttp успешно применены")
+        
     except Exception as e:
-        logger.warning(f"⚠️ Не удалось применить патч для aiohttp: {e}")
-# ================================================================
+        logger.warning(f"⚠️ Не удалось применить усиленные патчи для aiohttp: {e}")
+        logger.warning(traceback.format_exc())
+# ===============================================================
 
 
 # ============================================
@@ -165,11 +196,10 @@ async def call_deepseek(prompt: str, system_prompt: str = None, max_tokens: int 
             logger.info(f"🔄 Попытка {attempt + 1}/{retry_count + 1}")
             start_time = datetime.now()
             
-            # Создаем сессию с явной обработкой таймаутов
-            timeout = aiohttp.ClientTimeout(total=60)
-            connector = aiohttp.TCPConnector(force_close=True)
+            # Создаем сессию с минимальными настройками
+            connector = aiohttp.TCPConnector(force_close=True, limit=10)
             
-            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.post(
                     DEEPSEEK_API_URL, 
                     headers=headers, 
@@ -919,10 +949,9 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
             "smart_format": True
         }
         
-        timeout = aiohttp.ClientTimeout(total=30)
         connector = aiohttp.TCPConnector(force_close=True)
         
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             async with session.post(
                 DEEPGRAM_API_URL,
                 headers=headers,
@@ -988,10 +1017,9 @@ async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
     }
     
     try:
-        timeout = aiohttp.ClientTimeout(total=30)
         connector = aiohttp.TCPConnector(force_close=True)
         
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             async with session.post(
                 YANDEX_TTS_API_URL,
                 headers=headers,
