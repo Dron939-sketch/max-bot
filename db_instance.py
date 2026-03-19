@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ИСПРАВЛЕНИЕ: Поддержка Python 3.14, патчи для asyncpg
-ВЕРСИЯ 2.5 - ИСПРАВЛЕНО: Ошибка "Timeout should be used inside a task"
+ВЕРСИЯ 2.6 - ИСПРАВЛЕНО: Патчи применяются до импорта database
 """
 
 import os
@@ -14,9 +13,11 @@ import asyncio
 import sys
 from typing import Dict, Any, Optional
 
-# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ ASYNCPG В PYTHON 3.14 ==========
+# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ ASYNCPG (ДОЛЖЕН БЫТЬ ДО ИМПОРТА database) ==========
 import asyncpg
 from asyncpg.pool import Pool
+
+logger = logging.getLogger(__name__)
 
 # Сохраняем оригинальную функцию
 original_create_pool = asyncpg.create_pool
@@ -29,32 +30,43 @@ async def patched_create_pool(*args, **kwargs):
     # Получаем или создаем цикл событий
     try:
         loop = asyncio.get_running_loop()
+        logger.debug(f"✅ Используем текущий цикл событий: {loop}")
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        logger.warning("⚠️ Создан новый цикл событий для пула соединений")
     
     # Для Python 3.14 добавляем loop в kwargs
     if sys.version_info >= (3, 14):
         kwargs['loop'] = loop
+        logger.debug("✅ Добавлен loop в kwargs для Python 3.14")
     
     # Убеждаемся, что есть таймауты
     if 'timeout' not in kwargs:
         kwargs['timeout'] = 60
+        logger.debug("✅ Добавлен timeout=60")
     if 'command_timeout' not in kwargs:
         kwargs['command_timeout'] = 60
+        logger.debug("✅ Добавлен command_timeout=60")
     
     # Добавляем небольшую задержку для инициализации контекста
     await asyncio.sleep(0.1)
     
-    return await original_create_pool(*args, **kwargs)
+    try:
+        result = await original_create_pool(*args, **kwargs)
+        logger.info("✅ Пул соединений успешно создан через патч")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка при создании пула через патч: {e}")
+        raise
 
 # Применяем патч
 asyncpg.create_pool = patched_create_pool
-# ===============================================================
+logger.info("✅ Применён критический патч для asyncpg в Python 3.14")
+# =================================================================================
 
+# Теперь импортируем database (после применения патча)
 from database import BotDatabase
-
-logger = logging.getLogger(__name__)
 
 # URL базы данных из переменных окружения Render
 DATABASE_URL = os.environ.get(
@@ -71,6 +83,7 @@ async def init_db():
         # Для Python 3.14 добавляем небольшую задержку
         if sys.version_info >= (3, 14):
             await asyncio.sleep(0.2)
+            logger.debug("✅ Задержка 0.2с для инициализации контекста")
         
         await db.connect()
         logger.info("✅ Подключение к PostgreSQL установлено")
@@ -107,6 +120,7 @@ async def ensure_db_connection():
             # Проверяем, работает ли соединение
             async with db.get_connection() as conn:
                 await conn.execute("SELECT 1")
+            logger.debug("✅ Соединение с БД работает")
             return True
             
         except Exception as e:
@@ -136,9 +150,11 @@ async def ensure_db_connection():
                     
                     continue
                 else:
+                    logger.warning(f"⚠️ Не удалось восстановить соединение после {max_retries} попыток")
                     return False
             else:
                 # Если это не ошибка соединения, возвращаем False
+                logger.warning(f"⚠️ Не связанная с соединением ошибка: {e}")
                 return False
     
     return False
@@ -169,9 +185,11 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
                 logger.warning(f"⚠️ Не удалось установить соединение с БД (попытка {attempt+1}/{max_retries})")
                 if attempt < max_retries - 1:
                     wait_time = 1 * (attempt + 1)
+                    logger.info(f"⏳ Ожидание {wait_time}с перед следующей попыткой...")
                     await asyncio.sleep(wait_time)
                     continue
                 else:
+                    logger.error(f"❌ Все попытки подключения исчерпаны")
                     return None
             
             # Выполняем функцию
@@ -210,6 +228,7 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
                     continue
             else:
                 # Если это не ошибка соединения, пробрасываем исключение
+                logger.error(f"❌ Неожиданная ошибка: {e}")
                 raise e
     
     # Если все попытки исчерпаны
