@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Сервисные функции для работы с API и генерации ответов
-Версия 9.6.2 - ИСПРАВЛЕНО: Усиленные патчи для aiohttp в Python 3.14
+Версия 9.7.0 - ИСПРАВЛЕНО: Глобальная сессия aiohttp для всех API
 """
 
 import os
@@ -29,86 +29,67 @@ from config import (
 logger = logging.getLogger(__name__)
 
 
-# ========== УСИЛЕННЫЙ ПАТЧ ДЛЯ AIOHTTP (Python 3.14) ==========
-if sys.version_info >= (3, 14):
-    try:
-        import aiohttp
-        from aiohttp.helpers import TimerContext
-        from aiohttp.client import ClientSession
-        from aiohttp.connector import TCPConnector
-        
-        logger.info("🔧 Применяем усиленные патчи для aiohttp в Python 3.14")
-        
-        # 1. Патч для TimerContext
-        original_TimerContext = TimerContext
-        
-        class PatchedTimerContext(TimerContext):
-            """Полностью отключаем таймер для Python 3.14"""
-            def __enter__(self):
-                # Просто возвращаем self, ничего не делаем
-                return self
-            
-            def __exit__(self, *args):
-                pass
-        
-        aiohttp.helpers.TimerContext = PatchedTimerContext
-        logger.debug("✅ TimerContext заменён")
-        
-        # 2. Патч для ClientSession._request
-        original_request = ClientSession._request
-        
-        async def patched_request(self, *args, **kwargs):
-            # Убираем все параметры таймаута из kwargs
-            kwargs.pop('timeout', None)
-            # Убираем параметры, которые могут вызвать проблемы
-            kwargs.pop('conn_timeout', None)
-            kwargs.pop('read_timeout', None)
-            kwargs.pop('sock_read', None)
-            kwargs.pop('sock_connect', None)
-            return await original_request(self, *args, **kwargs)
-        
-        ClientSession._request = patched_request
-        logger.debug("✅ ClientSession._request заменён")
-        
-        # 3. Патч для TCPConnector._connect
-        original_connect = TCPConnector._connect
-        
-        async def patched_connect(self, req, traces, timeout):
-            # Создаем упрощенный таймаут без сложной логики
-            simplified_timeout = aiohttp.ClientTimeout(
-                total=60,
-                connect=None,
-                sock_read=None,
-                sock_connect=None
-            )
-            return await original_connect(self, req, traces, simplified_timeout)
-        
-        TCPConnector._connect = patched_connect
-        logger.debug("✅ TCPConnector._connect заменён")
-        
-        # 4. Патч для создания сессии
-        original_ClientSession = aiohttp.ClientSession
-        
-        class PatchedClientSession(original_ClientSession):
-            """Исправленная сессия для Python 3.14"""
-            def __init__(self, *args, **kwargs):
-                # Убираем loop если он есть
-                kwargs.pop('loop', None)
-                # Убираем timeout если он есть (будем использовать свой)
-                kwargs.pop('timeout', None)
-                # Создаем свой упрощенный таймаут
-                kwargs['timeout'] = aiohttp.ClientTimeout(total=60)
-                super().__init__(*args, **kwargs)
-        
-        aiohttp.ClientSession = PatchedClientSession
-        logger.debug("✅ ClientSession заменён")
-        
-        logger.info("✅ Усиленные патчи для aiohttp успешно применены")
-        
-    except Exception as e:
-        logger.warning(f"⚠️ Не удалось применить усиленные патчи для aiohttp: {e}")
-        logger.warning(traceback.format_exc())
-# ===============================================================
+# ========== ГЛОБАЛЬНАЯ СЕССИЯ ДЛЯ ВСЕХ API ==========
+_global_session = None
+_session_lock = asyncio.Lock()
+_session_loop = None
+
+async def get_global_session():
+    """
+    Возвращает глобальную сессию aiohttp для всех API-вызовов
+    Сессия создаётся один раз и используется во всём приложении
+    """
+    global _global_session, _session_loop
+    
+    # Сохраняем цикл, в котором создана сессия
+    current_loop = asyncio.get_running_loop()
+    
+    if _global_session is None or _global_session.closed or _session_loop != current_loop:
+        async with _session_lock:
+            if _global_session is None or _global_session.closed or _session_loop != current_loop:
+                logger.info("🔄 Создаём новую глобальную сессию aiohttp")
+                
+                # Закрываем старую сессию если есть
+                if _global_session and not _global_session.closed:
+                    await _global_session.close()
+                
+                # Создаём коннектор с оптимальными настройками
+                connector = aiohttp.TCPConnector(
+                    force_close=False,  # Не закрываем соединения после каждого запроса
+                    limit=100,          # Максимум 100 одновременных соединений
+                    limit_per_host=20,  # Максимум 20 соединений на один хост
+                    ttl_dns_cache=300,  # Кэш DNS на 5 минут
+                    use_dns_cache=True,
+                    ssl=False
+                )
+                
+                # Создаём таймаут
+                timeout = aiohttp.ClientTimeout(
+                    total=60,           # Общий таймаут 60 секунд
+                    connect=10,         # Таймаут подключения 10 секунд
+                    sock_read=30        # Таймаут чтения сокета 30 секунд
+                )
+                
+                # Создаём сессию
+                _global_session = aiohttp.ClientSession(
+                    connector=connector,
+                    timeout=timeout
+                )
+                _session_loop = current_loop
+                logger.info("✅ Глобальная сессия создана")
+    
+    return _global_session
+
+
+async def close_global_session():
+    """Закрывает глобальную сессию при завершении работы"""
+    global _global_session
+    if _global_session and not _global_session.closed:
+        logger.info("🔒 Закрываем глобальную сессию aiohttp")
+        await _global_session.close()
+        _global_session = None
+        _session_loop = None
+# =====================================================
 
 
 # ============================================
@@ -196,62 +177,61 @@ async def call_deepseek(prompt: str, system_prompt: str = None, max_tokens: int 
             logger.info(f"🔄 Попытка {attempt + 1}/{retry_count + 1}")
             start_time = datetime.now()
             
-            # Создаем сессию с минимальными настройками
-            connector = aiohttp.TCPConnector(force_close=True, limit=10)
+            # Используем глобальную сессию
+            session = await get_global_session()
             
-            async with aiohttp.ClientSession(connector=connector) as session:
-                async with session.post(
-                    DEEPSEEK_API_URL, 
-                    headers=headers, 
-                    json=payload
-                ) as response:
-                    elapsed = (datetime.now() - start_time).total_seconds()
-                    logger.info(f"⏱️ Время ответа: {elapsed:.2f} сек, статус: {response.status}")
-                    
-                    # ПОЛУЧАЕМ ТЕКСТ ОТВЕТА
-                    response_text = await response.text()
-                    logger.info(f"📄 Получен ответ, длина: {len(response_text)} символов")
-                    
-                    if response.status == 200:
-                        try:
-                            data = json.loads(response_text)
-                            logger.info(f"✅ JSON распарсен, структура: {list(data.keys())}")
+            async with session.post(
+                DEEPSEEK_API_URL, 
+                headers=headers, 
+                json=payload
+            ) as response:
+                elapsed = (datetime.now() - start_time).total_seconds()
+                logger.info(f"⏱️ Время ответа: {elapsed:.2f} сек, статус: {response.status}")
+                
+                # Получаем текст ответа
+                response_text = await response.text()
+                logger.info(f"📄 Получен ответ, длина: {len(response_text)} символов")
+                
+                if response.status == 200:
+                    try:
+                        data = json.loads(response_text)
+                        logger.info(f"✅ JSON распарсен, структура: {list(data.keys())}")
+                        
+                        # Проверяем структуру ответа
+                        if 'choices' in data and len(data['choices']) > 0:
+                            logger.info(f"✅ Найдены choices, количество: {len(data['choices'])}")
                             
-                            # Проверяем структуру ответа
-                            if 'choices' in data and len(data['choices']) > 0:
-                                logger.info(f"✅ Найдены choices, количество: {len(data['choices'])}")
+                            if 'message' in data['choices'][0]:
+                                logger.info(f"✅ Найден message в первом choice")
                                 
-                                if 'message' in data['choices'][0]:
-                                    logger.info(f"✅ Найден message в первом choice")
+                                if 'content' in data['choices'][0]['message']:
+                                    content = data['choices'][0]['message']['content'].strip()
+                                    logger.info(f"✅ Найден content, длина: {len(content)} символов")
                                     
-                                    if 'content' in data['choices'][0]['message']:
-                                        content = data['choices'][0]['message']['content'].strip()
-                                        logger.info(f"✅ Найден content, длина: {len(content)} символов")
-                                        
-                                        if content:
-                                            logger.info(f"✅ Возвращаем ответ пользователю")
-                                            return content
-                                        else:
-                                            logger.error("❌ Content пустой")
+                                    if content:
+                                        logger.info(f"✅ Возвращаем ответ пользователю")
+                                        return content
                                     else:
-                                        logger.error(f"❌ Нет content в message: {data['choices'][0]['message'].keys()}")
+                                        logger.error("❌ Content пустой")
                                 else:
-                                    logger.error(f"❌ Нет message в choices[0]: {data['choices'][0].keys()}")
+                                    logger.error(f"❌ Нет content в message: {data['choices'][0]['message'].keys()}")
                             else:
-                                logger.error(f"❌ Нет choices в ответе: {data.keys()}")
-                        except json.JSONDecodeError as e:
-                            logger.error(f"❌ Ошибка парсинга JSON: {e}")
-                            logger.error(f"❌ Текст ответа: {response_text[:500]}")
-                    else:
-                        logger.error(f"❌ DeepSeek API error {response.status}: {response_text[:500]}")
-                    
-                    # Если дошли сюда, что-то пошло не так
-                    if attempt < retry_count:
-                        wait_time = 2 ** attempt
-                        logger.info(f"🔄 Повторная попытка {attempt + 1}/{retry_count} через {wait_time}с...")
-                        await asyncio.sleep(wait_time)
-                        continue
-                    return None
+                                logger.error(f"❌ Нет message в choices[0]: {data['choices'][0].keys()}")
+                        else:
+                            logger.error(f"❌ Нет choices в ответе: {data.keys()}")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"❌ Ошибка парсинга JSON: {e}")
+                        logger.error(f"❌ Текст ответа: {response_text[:500]}")
+                else:
+                    logger.error(f"❌ DeepSeek API error {response.status}: {response_text[:500]}")
+                
+                # Если дошли сюда, что-то пошло не так
+                if attempt < retry_count:
+                    wait_time = 2 ** attempt
+                    logger.info(f"🔄 Повторная попытка {attempt + 1}/{retry_count} через {wait_time}с...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                return None
                         
         except asyncio.TimeoutError:
             logger.error(f"❌ DeepSeek API timeout (попытка {attempt + 1}/{retry_count + 1})")
@@ -949,24 +929,24 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
             "smart_format": True
         }
         
-        connector = aiohttp.TCPConnector(force_close=True)
+        # Используем глобальную сессию
+        session = await get_global_session()
         
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.post(
-                DEEPGRAM_API_URL,
-                headers=headers,
-                params=params,
-                data=audio_data
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    transcript = data['results']['channels'][0]['alternatives'][0]['transcript']
-                    logger.info(f"✅ Речь распознана: {len(transcript)} символов")
-                    return transcript
-                else:
-                    error_text = await response.text()
-                    logger.error(f"❌ Deepgram API error {response.status}: {error_text[:200]}")
-                    return None
+        async with session.post(
+            DEEPGRAM_API_URL,
+            headers=headers,
+            params=params,
+            data=audio_data
+        ) as response:
+            if response.status == 200:
+                data = await response.json()
+                transcript = data['results']['channels'][0]['alternatives'][0]['transcript']
+                logger.info(f"✅ Речь распознана: {len(transcript)} символов")
+                return transcript
+            else:
+                error_text = await response.text()
+                logger.error(f"❌ Deepgram API error {response.status}: {error_text[:200]}")
+                return None
     except Exception as e:
         logger.error(f"❌ Ошибка распознавания речи: {e}")
         logger.error(traceback.format_exc())
@@ -1017,22 +997,22 @@ async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
     }
     
     try:
-        connector = aiohttp.TCPConnector(force_close=True)
+        # Используем глобальную сессию
+        session = await get_global_session()
         
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.post(
-                YANDEX_TTS_API_URL,
-                headers=headers,
-                data=data
-            ) as response:
-                if response.status == 200:
-                    audio_data = await response.read()
-                    logger.info(f"✅ Речь синтезирована: {len(audio_data)} байт")
-                    return audio_data
-                else:
-                    error_text = await response.text()
-                    logger.error(f"❌ Yandex TTS API error {response.status}: {error_text[:200]}")
-                    return None
+        async with session.post(
+            YANDEX_TTS_API_URL,
+            headers=headers,
+            data=data
+        ) as response:
+            if response.status == 200:
+                audio_data = await response.read()
+                logger.info(f"✅ Речь синтезирована: {len(audio_data)} байт")
+                return audio_data
+            else:
+                error_text = await response.text()
+                logger.error(f"❌ Yandex TTS API error {response.status}: {error_text[:200]}")
+                return None
     except Exception as e:
         logger.error(f"❌ Ошибка синтеза речи: {e}")
         logger.error(traceback.format_exc())
@@ -1064,5 +1044,6 @@ __all__ = [
     'emoji_text',
     
     # Вспомогательные
-    'make_json_serializable'
+    'make_json_serializable',
+    'close_global_session'
 ]
