@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ 2.6 - ИСПРАВЛЕНО: Патчи применяются до импорта database
+ВЕРСИЯ 2.7 - ИСПРАВЛЕНО: Поддержка внешнего URL для кросс-регионального подключения
 """
 
 import os
@@ -68,11 +68,25 @@ logger.info("✅ Применён критический патч для asyncpg
 # Теперь импортируем database (после применения патча)
 from database import BotDatabase
 
+# ========== НАСТРОЙКА URL ПОДКЛЮЧЕНИЯ ==========
 # URL базы данных из переменных окружения Render
+# Сначала пробуем внешний URL, затем внутренний, затем захардкоженный
 DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://variatica:Ben9BvM0OnppX1EVSabWQQSwTCrqkahh@dpg-d639vucr85hc73b2ge00-a.oregon-postgres.render.com/variatica"
+    "EXTERNAL_DATABASE_URL",  # Сначала внешний URL (для кросс-регионального подключения)
+    os.environ.get(
+        "DATABASE_URL",        # Потом внутренний URL (для подключения в одном регионе)
+        "postgresql://variatica:Ben9BvM0OnppX1EVSabWQQSwTCrqkahh@dpg-d639vucr85hc73b2ge00-a.oregon-postgres.render.com/variatica"
+    )
 )
+
+# Логируем используемый URL (без пароля для безопасности)
+url_parts = DATABASE_URL.split('@')
+if len(url_parts) > 1:
+    safe_url = f"postgresql://{url_parts[1]}"
+else:
+    safe_url = DATABASE_URL[:50] + "..." if len(DATABASE_URL) > 50 else DATABASE_URL
+logger.info(f"🔗 Используем URL базы данных: {safe_url}")
+# ===============================================
 
 # Создаем единый экземпляр БД
 db = BotDatabase(DATABASE_URL)
