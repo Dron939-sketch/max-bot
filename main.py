@@ -4,6 +4,7 @@
 ВИРТУАЛЬНЫЙ ПСИХОЛОГ - МАТРИЦА ПОВЕДЕНИЙ 4×6
 ВЕРСИЯ ДЛЯ MAX
 ИСПРАВЛЕНО: Все патчи для Python 3.14, anyio, sniffio, PostgreSQL
+ИСПРАВЛЕНО: Корневой маршрут теперь возвращает JSON (обходит баг anyio)
 """
 
 # ========== КРИТИЧЕСКИЕ ПАТЧИ ДЛЯ PYTHON 3.14 ==========
@@ -434,66 +435,36 @@ MINIAPP_PATH = os.path.join(os.path.dirname(__file__), 'miniapp')
 # Создаем папку, если её нет
 os.makedirs(MINIAPP_PATH, exist_ok=True)
 
-# Проверяем наличие папки и подключаем статические файлы
+# Обслуживаем статические файлы из папки miniapp
 if os.path.exists(MINIAPP_PATH) and os.path.isdir(MINIAPP_PATH):
     try:
-        # Для Python 3.14 используем специальный обработчик статических файлов
-        @api_app.get("/{full_path:path}")
-        async def serve_static(full_path: str):
-            """Обслуживает статические файлы вручную (обход бага anyio)"""
-            import os.path
-            
-            # Безопасные пути
-            if '..' in full_path or full_path.startswith('/'):
-                return JSONResponse(status_code=404, content={"error": "Not found"})
-            
-            # Определяем путь к файлу
-            file_path = os.path.join(MINIAPP_PATH, full_path)
-            
-            # Если путь заканчивается на / или не указан файл, ищем index.html
-            if full_path == "" or full_path.endswith('/') or not os.path.exists(file_path):
-                index_path = os.path.join(file_path if os.path.isdir(file_path) else MINIAPP_PATH, 'index.html')
-                if os.path.exists(index_path):
-                    return FileResponse(index_path)
-                return JSONResponse(status_code=404, content={"error": "Not found"})
-            
-            # Проверяем существование файла
-            if os.path.exists(file_path) and os.path.isfile(file_path):
-                return FileResponse(file_path)
-            
-            return JSONResponse(status_code=404, content={"error": "Not found"})
-        
-        # Корневой маршрут
-        @api_app.get("/")
-        async def serve_root():
-            index_path = os.path.join(MINIAPP_PATH, "index.html")
-            if os.path.exists(index_path):
-                return FileResponse(index_path)
-            return JSONResponse({
-                "status": "ok",
-                "message": "API работает, мини-приложение в разработке"
-            })
-        
-        logger.info(f"✅ Статические файлы подключены из {MINIAPP_PATH} (ручной режим)")
-        
+        # Монтируем статические файлы по пути /miniapp
+        api_app.mount("/miniapp", StaticFiles(directory=MINIAPP_PATH, html=True), name="miniapp")
+        logger.info(f"✅ Статические файлы подключены из {MINIAPP_PATH} (путь /miniapp)")
     except Exception as e:
-        logger.error(f"❌ Ошибка при подключении статических файлов: {e}")
-        
-        @api_app.get("/")
-        async def error_handler():
-            return JSONResponse({
-                "status": "error",
-                "message": f"Ошибка статических файлов: {e}"
-            })
+        logger.error(f"❌ Ошибка при монтировании статических файлов: {e}")
 else:
     logger.warning(f"⚠️ Папка {MINIAPP_PATH} не найдена")
-    
-    @api_app.get("/")
-    async def no_miniapp():
-        return JSONResponse({
-            "status": "ok",
-            "message": "API работает, папка miniapp не найдена"
-        })
+
+# ============================================
+# КОРНЕВОЙ МАРШРУТ - ИСПРАВЛЕНО (JSON вместо статики)
+# ============================================
+
+@api_app.get("/")
+async def root():
+    """Главная страница API - возвращает JSON (обходит баг anyio)"""
+    return {
+        "name": "MAX Bot",
+        "version": "9.6",
+        "status": "online",
+        "message": "API работает. Мини-приложение доступно по пути /miniapp/",
+        "endpoints": {
+            "health": "/health",
+            "docs": "/docs",
+            "api": "/api/*",
+            "miniapp": "/miniapp/"
+        }
+    }
 
 # ============================================
 # API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
