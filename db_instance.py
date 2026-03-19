@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ 2.9 - ИСПРАВЛЕНО: Добавлен импорт BotDatabase из database.py
+ВЕРСИЯ 3.0 - ЧИСТАЯ ВЕРСИЯ ДЛЯ PYTHON 3.11 (БЕЗ ПАТЧЕЙ)
 """
 
 import os
@@ -10,79 +10,18 @@ import json
 import pickle
 import logging
 import asyncio
-import sys
 from typing import Dict, Any, Optional
-
-# ========== КРИТИЧЕСКИЙ ПАТЧ ДЛЯ ASYNCPG (ДОЛЖЕН БЫТЬ В САМОМ НАЧАЛЕ) ==========
-import asyncpg
-from asyncpg.pool import Pool
 
 logger = logging.getLogger(__name__)
 
-# Сохраняем оригинальную функцию ДО любых изменений
-original_create_pool = asyncpg.create_pool
-
-async def patched_create_pool(*args, **kwargs):
-    """
-    Исправленная версия create_pool для Python 3.14
-    Добавляет явный loop и таймауты
-    """
-    # Получаем или создаем цикл событий
-    try:
-        loop = asyncio.get_running_loop()
-        logger.debug(f"✅ Используем текущий цикл событий: {loop}")
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        logger.warning("⚠️ Создан новый цикл событий для пула соединений")
-    
-    # Для Python 3.14 добавляем loop в kwargs
-    if sys.version_info >= (3, 14):
-        kwargs['loop'] = loop
-        logger.debug("✅ Добавлен loop в kwargs для Python 3.14")
-    
-    # Убеждаемся, что есть таймауты
-    if 'timeout' not in kwargs:
-        kwargs['timeout'] = 60
-        logger.debug("✅ Добавлен timeout=60")
-    if 'command_timeout' not in kwargs:
-        kwargs['command_timeout'] = 60
-        logger.debug("✅ Добавлен command_timeout=60")
-    
-    # Добавляем небольшую задержку для инициализации контекста
-    await asyncio.sleep(0.1)
-    
-    try:
-        result = await original_create_pool(*args, **kwargs)
-        logger.info("✅ Пул соединений успешно создан через патч")
-        return result
-    except Exception as e:
-        logger.error(f"❌ Ошибка при создании пула через патч: {e}")
-        raise
-
-# Принудительно применяем патч (перезаписываем функцию)
-asyncpg.create_pool = patched_create_pool
-logger.info("🔥🔥🔥 ПАТЧ ПРИМЕНЁН В db_instance.py 🔥🔥🔥")
-
-# Проверяем, что патч действительно применился
-if asyncpg.create_pool is patched_create_pool:
-    logger.info("✅ ПАТЧ РАБОТАЕТ: create_pool заменён на patched_create_pool")
-else:
-    logger.error("❌ ПАТЧ НЕ ПРИМЕНИЛСЯ! create_pool остался оригинальным")
-# =================================================================================
-
 # ========== ИМПОРТ БАЗЫ ДАННЫХ ==========
-from database import BotDatabase  # <--- ВАЖНО: импортируем класс после патча
+from database import BotDatabase  # Импортируем класс
 # ======================================
 
 # URL базы данных из переменных окружения Render
-# Сначала пробуем внешний URL, затем внутренний, затем захардкоженный
 DATABASE_URL = os.environ.get(
-    "EXTERNAL_DATABASE_URL",  # Сначала внешний URL (для кросс-регионального подключения)
-    os.environ.get(
-        "DATABASE_URL",        # Потом внутренний URL (для подключения в одном регионе)
-        "postgresql://variatica:Ben9BvM0OnppX1EVSabWQQSwTCrqkahh@dpg-d639vucr85hc73b2ge00-a.oregon-postgres.render.com/variatica"
-    )
+    "DATABASE_URL",
+    "postgresql://variatica:Ben9BvM0OnppX1EVSabWQQSwTCrqkahh@dpg-d639vucr85hc73b2ge00-a.oregon-postgres.render.com/variatica"
 )
 
 # Логируем используемый URL (без пароля для безопасности)
@@ -99,11 +38,6 @@ db = BotDatabase(DATABASE_URL)
 async def init_db():
     """Инициализация подключения к БД"""
     try:
-        # Для Python 3.14 добавляем небольшую задержку
-        if sys.version_info >= (3, 14):
-            await asyncio.sleep(0.2)
-            logger.debug("✅ Задержка 0.2с для инициализации контекста")
-        
         await db.connect()
         logger.info("✅ Подключение к PostgreSQL установлено")
         return True
@@ -146,11 +80,10 @@ async def ensure_db_connection():
             error_str = str(e).lower()
             logger.error(f"❌ Ошибка при проверке соединения с БД (попытка {attempt+1}/{max_retries}): {e}")
             
-            # Проверяем, связана ли ошибка с соединением или циклом событий
+            # Проверяем, связана ли ошибка с соединением
             if any(phrase in error_str for phrase in [
                 "пул закрыт", "pool is closed", "connection", 
-                "timeout", "ssl", "network", "reset", "another operation",
-                "different loop", "attached to a different loop"
+                "timeout", "ssl", "network", "reset"
             ]):
                 if attempt < max_retries - 1:
                     logger.info(f"⏳ Повторная попытка через {retry_delay}с...")
@@ -162,10 +95,6 @@ async def ensure_db_connection():
                         await db.disconnect()
                     except:
                         pass
-                    
-                    # Для Python 3.14 принудительно создаем новый контекст
-                    if sys.version_info >= (3, 14):
-                        await asyncio.sleep(0.2)
                     
                     continue
                 else:
@@ -225,11 +154,10 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
             last_error = e
             error_str = str(e).lower()
             
-            # Проверяем, связана ли ошибка с соединением или циклом событий
+            # Проверяем, связана ли ошибка с соединением
             if any(phrase in error_str for phrase in [
                 "пул закрыт", "pool is closed", "connection", 
-                "timeout", "ssl", "network", "reset", "another operation",
-                "different loop", "attached to a different loop"
+                "timeout", "ssl", "network", "reset"
             ]):
                 logger.warning(f"⚠️ Ошибка соединения с БД (попытка {attempt+1}/{max_retries}): {e}")
                 
