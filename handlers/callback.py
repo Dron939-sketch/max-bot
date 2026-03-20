@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик всех callback-запросов для MAX
-Версия 2.1 - ИСПРАВЛЕНО: добавлен call.answer() во все ветки
+Версия 2.2 - ИСПРАВЛЕНО: добавлен непустой ответ на callback
 """
 
 import logging
@@ -162,9 +162,9 @@ async def async_callback_handler(call: CallbackQuery):
     
     logger.info(f"🔔 Асинхронный обратный вызов: {data} от пользователя {user_id}")
     
-    # 👇 ВАЖНО: ВСЕГДА ОТВЕЧАЕМ НА CALLBACK
+    # 👇 ИСПРАВЛЕНО: отправляем непустой ответ
     try:
-        call.answer()
+        call.answer("⏳ Обрабатываю...", show_alert=False)
     except Exception as e:
         logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
     
@@ -656,11 +656,12 @@ def callback_handler(call: CallbackQuery):
     """
     Синхронная обертка для асинхронного обработчика callback'ов
     """
-    # 👇 ДОБАВЛЕНО: отвечаем на callback даже до запуска асинхронной части
+    # 👇 ИСПРАВЛЕНО: отправляем непустой ответ
     try:
-        call.answer()
+        call.answer("✅", show_alert=False)
+        logger.debug(f"✅ Ответ на callback {call.data} отправлен")
     except Exception as e:
-        logger.warning(f"⚠️ Не удалось ответить на callback в синхронной обертке: {e}")
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
     
     try:
         # Пытаемся получить текущий цикл событий
