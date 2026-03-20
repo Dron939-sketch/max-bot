@@ -60,6 +60,9 @@ from question_analyzer import create_analyzer_from_user_data
 # Импортируем функцию отправки голоса
 from handlers.voice import send_voice_to_max
 
+# ✅ ИМПОРТ УМНЫХ ВОПРОСОВ (вынесено в отдельный файл)
+from smart_questions import generate_smart_questions, show_smart_questions, handle_smart_question
+
 logger = logging.getLogger(__name__)
 
 
@@ -1192,258 +1195,8 @@ def update_profile_with_clarifications(message, user_id: int):
 
 
 # ============================================
-# ЧАСТЬ 3: ФУНКЦИИ ДЛЯ УМНЫХ ВОПРОСОВ
+# ЭКРАН ВВОДА ВОПРОСА
 # ============================================
-
-def generate_smart_questions(scores: Dict[str, float]) -> List[str]:
-    """
-    Генерирует вопросы на основе профиля
-    """
-    questions = []
-    
-    tf = level(scores.get("ТФ", 3))
-    sb = level(scores.get("СБ", 3))
-    ub = level(scores.get("УБ", 3))
-    cv = level(scores.get("ЧВ", 3))
-    
-    # Вопросы про деньги (ТФ)
-    if tf <= 2:
-        questions.append("Как начать зарабатывать, если нет денег?")
-        questions.append("Почему мне не везет с деньгами?")
-    elif tf <= 4:
-        questions.append("Как увеличить доход без новых вложений?")
-        questions.append("Как создать финансовую подушку?")
-    elif tf <= 6:
-        questions.append("Как диверсифицировать источники дохода?")
-        questions.append("Как начать инвестировать с умом?")
-    
-    # Вопросы про страх и защиту (СБ)
-    if sb <= 2:
-        questions.append("Как перестать бояться конфликтов?")
-        questions.append("Как научиться говорить 'нет'?")
-    elif sb <= 4:
-        questions.append("Почему я злюсь внутри, но молчу?")
-        questions.append("Как защищать границы без агрессии?")
-    elif sb <= 6:
-        questions.append("Как использовать свою силу во благо?")
-        questions.append("Как защищать других, не выгорая?")
-    
-    # Вопросы про понимание мира (УБ)
-    if ub <= 2:
-        questions.append("Как понять, что происходит в жизни?")
-        questions.append("Почему всё так сложно?")
-    elif ub <= 4:
-        questions.append("Как перестать искать заговоры?")
-        questions.append("Как отличить правду от лжи?")
-    elif ub <= 6:
-        questions.append("Как видеть закономерности в хаосе?")
-        questions.append("Как предсказывать развитие событий?")
-    
-    # Вопросы про отношения (ЧВ)
-    if cv <= 2:
-        questions.append("Как перестать зависеть от других?")
-        questions.append("Почему меня бросают?")
-    elif cv <= 4:
-        questions.append("Как строить здоровые отношения?")
-        questions.append("Почему отношения поверхностные?")
-    elif cv <= 6:
-        questions.append("Как создавать глубокие связи?")
-        questions.append("Как быть лидером в отношениях?")
-    
-    # Общие вопросы
-    general = [
-        "С чего начать изменения?",
-        "Что мне делать с этой ситуацией?",
-        "Как не срываться на близких?",
-        "Как найти своё призвание?",
-        "Как обрести внутренний покой?"
-    ]
-    
-    # Добавляем общие вопросы, если не хватает
-    while len(questions) < 5:
-        for q in general:
-            if q not in questions and len(questions) < 5:
-                questions.append(q)
-    
-    return questions[:5]
-
-
-def show_smart_questions(call: CallbackQuery):
-    """
-    Показывает умные вопросы на основе профиля
-    """
-    user_id = call.from_user.id
-    user_data_dict = get_user_data_dict(user_id)
-    context = get_user_context_obj(user_id)
-    
-    # Проверяем, завершен ли тест
-    if not is_test_completed_check(user_data_dict):
-        text = f"""
-🧠 **ФРЕДИ: СНАЧАЛА ПРОЙДИ ТЕСТ**
-
-Чтобы я мог задавать точные вопросы, нужно знать твой профиль.
-
-👇 Пройди тест (15 минут), и я смогу помогать глубже.
-"""
-        keyboard = InlineKeyboardMarkup()
-        keyboard.row(InlineKeyboardButton("🚀 ПРОЙТИ ТЕСТ", callback_data="show_stage_1_intro"))
-        keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="main_menu"))
-        
-        safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
-        return
-    
-    # Получаем scores
-    scores = {}
-    for k in VECTORS:
-        levels = user_data_dict.get("behavioral_levels", {}).get(k, [])
-        scores[k] = sum(levels) / len(levels) if levels else 3.0
-    
-    questions = generate_smart_questions(scores)
-    update_state_data(user_id, smart_questions=questions)
-    
-    mode = context.communication_mode if context else "coach"
-    mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
-    
-    # Разные заголовки для разных режимов
-    if mode == "coach":
-        header = f"{mode_config['emoji']} **ЗАДАЙТЕ ВОПРОС (КОУЧ)**\n\n"
-        header += "Я буду задавать открытые вопросы, помогая вам найти ответы внутри себя.\n\n"
-    elif mode == "psychologist":
-        header = f"{mode_config['emoji']} **РАССКАЖИТЕ МНЕ (ПСИХОЛОГ)**\n\n"
-        header += "Я здесь, чтобы помочь исследовать глубинные паттерны.\n\n"
-    elif mode == "trainer":
-        header = f"{mode_config['emoji']} **ПОСТАВЬТЕ ЗАДАЧУ (ТРЕНЕР)**\n\n"
-        header += "Чётко сформулируйте, что хотите решить. Я дам конкретные шаги.\n\n"
-    else:
-        header = f"❓ **ЗАДАЙТЕ ВОПРОС**\n\n"
-    
-    text = header + "👇 **Выберите вопрос или напишите свой:**"
-    
-    # Строим клавиатуру
-    keyboard = InlineKeyboardMarkup()
-    
-    for i, q in enumerate(questions, 1):
-        q_short = q[:40] + "..." if len(q) > 40 else q
-        keyboard.add(InlineKeyboardButton(
-            text=f"{q_short}",
-            callback_data=f"ask_{i}"
-        ))
-    
-    # Добавляем категории
-    keyboard.row(
-        InlineKeyboardButton("🗣 Отношения", callback_data="help_cat_relations"),
-        InlineKeyboardButton("💰 Деньги", callback_data="help_cat_money")
-    )
-    keyboard.row(
-        InlineKeyboardButton("🧠 Самоощущение", callback_data="help_cat_self"),
-        InlineKeyboardButton("📚 Знания", callback_data="help_cat_knowledge")
-    )
-    keyboard.row(
-        InlineKeyboardButton("💪 Поддержка", callback_data="help_cat_support"),
-        InlineKeyboardButton("🎨 Муза", callback_data="help_cat_muse")
-    )
-    keyboard.row(InlineKeyboardButton("🍏 Забота о себе", callback_data="help_cat_care"))
-    keyboard.row(InlineKeyboardButton("✏️ Написать самому", callback_data="ask_question"))
-    keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="show_results"))
-    
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
-
-
-def handle_smart_question(call: CallbackQuery, question_num: int):
-    """
-    Обрабатывает выбранный умный вопрос
-    """
-    user_id = call.from_user.id
-    user_data_dict = get_user_data_dict(user_id)
-    
-    # Получаем вопрос из сохраненных
-    data = get_state_data(user_id)
-    questions = data.get("smart_questions", [])
-    
-    if question_num < 1 or question_num > len(questions):
-        logger.error(f"❌ Неверный номер вопроса: {question_num}")
-        return
-    
-    question = questions[question_num - 1]
-    
-    # Отправляем статусное сообщение
-    status_msg = safe_send_message(
-        call.message,
-        "🤔 Думаю над ответом...\n\nЭто займёт около 10-15 секунд",
-        parse_mode=None,
-        delete_previous=True
-    )
-    
-    context_obj = get_user_context_obj(user_id)
-    mode_name = context_obj.communication_mode if context_obj else "coach"
-    
-    # Получаем режим
-    from modes import get_mode
-    mode = get_mode(mode_name, user_id, user_data_dict, context_obj)
-    
-    # Обрабатываем вопрос через режим
-    result = mode.process_question(question)
-    response = result["response"]
-    
-    # Обновляем данные с новой историей
-    if "history" not in user_data_dict:
-        user_data_dict["history"] = []
-    user_data_dict["history"] = mode.history
-    
-    # ✅ Сохраняем в БД
-    sync_db.save_user_to_db(user_id)
-    
-    # Очищаем ответ от форматирования для отображения
-    clean_response = clean_text_for_safe_display(response)
-    
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(
-        InlineKeyboardButton("❓ Ещё вопрос", callback_data="smart_questions"),
-        InlineKeyboardButton("🧠 К ПОРТРЕТУ", callback_data="show_results")
-    )
-    keyboard.row(InlineKeyboardButton("🎯 ЧЕМ ПОМОЧЬ", callback_data="show_help"))
-    
-    # Добавляем предложения, если есть
-    suggestions_text = ""
-    if result.get("suggestions"):
-        suggestions_text = "\n\n" + "\n".join(result["suggestions"])
-    
-    # Удаляем статусное и отправляем ответ
-    if status_msg:
-        try:
-            safe_delete_message(call.message.chat.id, status_msg.message_id)
-        except:
-            pass
-    
-    safe_send_message(
-        call.message,
-        f"❓ **{question}**\n\n{clean_response}{suggestions_text}",
-        reply_markup=keyboard,
-        parse_mode=None,
-        delete_previous=True
-    )
-    
-    # ✅ Генерируем и отправляем голосовой ответ
-    try:
-        # Создаем асинхронную задачу для генерации и отправки голоса
-        async def send_voice():
-            audio_data = await text_to_speech(response, mode_name)
-            if audio_data:
-                success = await send_voice_to_max(call.message.chat.id, audio_data)
-                if success:
-                    logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
-                else:
-                    logger.warning(f"⚠️ Не удалось отправить голос пользователю {user_id}")
-            else:
-                logger.warning(f"⚠️ Не удалось сгенерировать голос для пользователя {user_id}")
-        
-        # Запускаем в текущем event loop
-        loop = asyncio.get_event_loop()
-        loop.create_task(send_voice())
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка при отправке голоса: {e}")
-
 
 def show_question_input(call: CallbackQuery):
     """
@@ -1775,10 +1528,11 @@ __all__ = [
     'handle_clarifying_answer',
     'update_profile_with_clarifications',
     
-    # Функции умных вопросов
+    # Функции умных вопросов (импортированы из smart_questions.py)
     'generate_smart_questions',
     'show_smart_questions',
     'handle_smart_question',
+    
     'show_question_input',
     'process_text_question_sync',
     'process_text_question_async',
@@ -1792,6 +1546,6 @@ __all__ = [
     'determine_dominant_dilts',
     'calculate_profile_final',
     
-    # ✅ ДОБАВЛЕНО: синхронная функция сохранения
+    # Синхронная функция сохранения
     'save_answer_to_db_sync'
 ]
