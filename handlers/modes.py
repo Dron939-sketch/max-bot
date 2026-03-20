@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики выбора и подтверждения режима для MAX
-Версия 2.4 - ИСПРАВЛЕНО: используется sync_db вместо прямых вызовов db
+Версия 2.5 - ИСПРАВЛЕНО: имя пользователя из get_user_name
 """
 import logging
 import time
@@ -22,6 +22,7 @@ from message_utils import safe_send_message, safe_edit_message
 
 # Импорты из state.py
 from state import (
+    get_user_name,
     get_user_context, 
     get_user_context_dict, 
     get_state_data,
@@ -492,7 +493,7 @@ def show_mode_selection(message: types.Message):
 {bold('ЧТО БУДУ ДЕЛАТЬ:')}
 Формировать твои поведенческие и мыслительные навыки. Работаю по законам научения: правильные действия закрепляются, ненужные — угасают.
 
-Научу мыслить системно — видеть структуру там, где раньше был хаос. Дам инструменты ТРИЗ, чтобы ты мог находить неочевидные решения.
+Научу мыслить системным образом — видеть структуру там, где раньше был хаос. Дам инструменты ТРИЗ, чтобы ты мог находить неочевидные решения.
 
 {bold('ЧТО ТЫ ПОЛУЧИШЬ:')}
 
@@ -523,7 +524,11 @@ def show_mode_selected(message: types.Message, mode: str):
     """Показывает экран подтверждения выбранного режима"""
     user_id = message.chat.id
     context = get_user_context(user_id)
-    user_name = context.name if context and context.name else "друг"
+    
+    # ✅ ИСПРАВЛЕНО: используем get_user_name из state
+    user_name = get_user_name(user_id)
+    if context and context.name:
+        user_name = context.name
     
     # Получаем данные профиля
     profile_data = getattr(context, 'profile_data', {})
@@ -624,12 +629,21 @@ def show_main_menu(message: types.Message, context: UserContext = None):
             contexts_dict = get_user_context_dict()
             contexts_dict[user_id] = context
     
+    # ✅ ИСПРАВЛЕНО: получаем имя
+    user_name = get_user_name(user_id)
+    if context and context.name:
+        user_name = context.name
+    
+    # Обновляем контекст с именем если его нет
+    if not context.name and user_name != "друг":
+        context.name = user_name
+    
     # Обновляем погоду
     context.update_weather()
     
     day_context = context.get_day_context()
     
-    welcome_text = f"{context.get_greeting(context.name)}\n\n"
+    welcome_text = f"{context.get_greeting(user_name)}\n\n"
     
     if context.weather_cache:
         weather = context.weather_cache
@@ -653,6 +667,13 @@ def show_main_menu_after_mode(message: types.Message, context: UserContext):
     """Показывает главное меню после выбора режима"""
     from keyboards import get_main_menu_after_mode_keyboard
     
+    user_id = message.chat.id
+    
+    # ✅ ИСПРАВЛЕНО: получаем имя
+    user_name = get_user_name(user_id)
+    if context and context.name:
+        user_name = context.name
+    
     mode_config = COMMUNICATION_MODES.get(context.communication_mode, COMMUNICATION_MODES["coach"])
     
     # Обновляем погоду
@@ -661,7 +682,7 @@ def show_main_menu_after_mode(message: types.Message, context: UserContext):
     
     mode_display_name = mode_config["display_name"]
     text = f"{mode_config['emoji']} {bold(f'РЕЖИМ {mode_display_name}')}\n\n"
-    text += context.get_greeting(context.name) + "\n"
+    text += context.get_greeting(user_name) + "\n"
     text += f"📅 Сегодня {day_context['weekday']}, {day_context['day']} {day_context['month']}, {day_context['time_str']}\n"
     
     if hasattr(context, 'weather_cache') and context.weather_cache:
@@ -681,7 +702,6 @@ def show_main_menu_after_mode(message: types.Message, context: UserContext):
     text += "• Послушать сказку — для глубокой работы\n"
     
     # Проверяем, есть ли профиль
-    user_id = message.chat.id
     user_data_dict = user_data.get(user_id, {})
     has_profile = False
     
