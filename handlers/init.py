@@ -17,11 +17,12 @@ from . import profile
 from . import goals
 from . import context
 from . import questions
+from . import smart_questions  # 👈 ДОБАВИТЬ ЭТУ СТРОКУ
 from . import admin
 from . import help
 from . import reality
 from . import routes
-from . import voice  # 👈 ДОБАВЛЕНО
+from . import voice
 
 logger.info("✅ Все обработчики загружены")
 
@@ -34,9 +35,10 @@ __all__ = [
     'goals',
     'context',
     'questions',
+    'smart_questions',  # 👈 ДОБАВИТЬ
     'admin',
     'help',
     'reality',
     'routes',
-    'voice'  # 👈 ДОБАВЛЕНО
+    'voice'
 ]
