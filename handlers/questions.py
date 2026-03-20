@@ -61,7 +61,7 @@ from question_analyzer import create_analyzer_from_user_data
 from handlers.voice import send_voice_to_max
 
 # ✅ ИМПОРТ УМНЫХ ВОПРОСОВ (вынесено в отдельный файл)
-from smart_questions import generate_smart_questions, show_smart_questions, handle_smart_question
+from .smart_questions import generate_smart_questions, show_smart_questions, handle_smart_question
 
 logger = logging.getLogger(__name__)
 
