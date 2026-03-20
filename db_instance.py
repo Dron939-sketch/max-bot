@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ ДЛЯ PYTHON 3.11 - С ГЛОБАЛЬНЫМ ЦИКЛОМ
+ВЕРСИЯ ДЛЯ PYTHON 3.11 - БЕЗ ГЛОБАЛЬНОГО ЦИКЛА
 """
 
 import os
@@ -17,50 +17,6 @@ from concurrent.futures import ThreadPoolExecutor
 from database import BotDatabase
 
 logger = logging.getLogger(__name__)
-
-# ============================================
-# ГЛОБАЛЬНЫЙ ЦИКЛ СОБЫТИЙ ДЛЯ БАЗЫ ДАННЫХ
-# ============================================
-_db_loop = None
-_db_loop_thread = None
-_db_executor = ThreadPoolExecutor(max_workers=2)
-_db_lock = threading.Lock()
-
-def get_db_loop():
-    """Возвращает глобальный цикл событий для БД"""
-    global _db_loop, _db_loop_thread
-    
-    with _db_lock:
-        if _db_loop is None or (_db_loop_thread and not _db_loop_thread.is_alive()):
-            _db_loop = asyncio.new_event_loop()
-            _db_loop_thread = threading.Thread(target=_run_db_loop, daemon=True, name="DB-Loop")
-            _db_loop_thread.start()
-            logger.info("✅ Создан новый глобальный цикл для БД")
-    
-    return _db_loop
-
-def _run_db_loop():
-    """Запускает цикл событий БД в отдельном потоке"""
-    global _db_loop
-    asyncio.set_event_loop(_db_loop)
-    try:
-        _db_loop.run_forever()
-    except Exception as e:
-        logger.error(f"❌ Ошибка в цикле БД: {e}")
-    finally:
-        logger.info("🔚 Цикл БД завершен")
-
-def run_db_coro(coro_func, *args, **kwargs):
-    """
-    Безопасно запускает корутину в глобальном цикле БД
-    Принимает функцию и её аргументы отдельно
-    """
-    loop = get_db_loop()
-    
-    async def _wrapper():
-        return await coro_func(*args, **kwargs)
-    
-    return asyncio.run_coroutine_threadsafe(_wrapper(), loop)
 
 # ============================================
 # URL базы данных
@@ -95,14 +51,9 @@ async def init_db():
 
 async def close_db():
     """Закрытие подключения к БД"""
-    global _db_loop
     try:
         await db.disconnect()
         logger.info("🔒 Подключение к PostgreSQL закрыто")
-        
-        if _db_loop:
-            _db_loop.call_soon_threadsafe(_db_loop.stop)
-            logger.info("🛑 Цикл БД остановлен")
     except Exception as e:
         logger.error(f"❌ Ошибка при закрытии подключения: {e}")
 
@@ -122,6 +73,7 @@ async def ensure_db_connection():
                 await db.connect()
                 return True
             
+            # Простая проверка, что пул жив
             async with db.get_connection() as conn:
                 await conn.execute("SELECT 1")
             logger.debug("✅ Соединение с БД работает")
@@ -129,6 +81,14 @@ async def ensure_db_connection():
             
         except Exception as e:
             logger.error(f"❌ Ошибка при проверке соединения (попытка {attempt+1}/{max_retries}): {e}")
+            
+            # Если пул умер, пробуем пересоздать
+            if "connection was closed" in str(e) or "another operation" in str(e):
+                try:
+                    await db.disconnect()
+                except:
+                    pass
+                db.pool = None
             
             if attempt < max_retries - 1:
                 logger.info(f"⏳ Повтор через {retry_delay}с...")
@@ -152,6 +112,16 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
     
     for attempt in range(max_retries):
         try:
+            # Проверяем соединение перед выполнением
+            if not await ensure_db_connection():
+                logger.warning(f"⚠️ Нет соединения с БД (попытка {attempt+1})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1 * (attempt + 1))
+                    continue
+                else:
+                    logger.error(f"❌ Все попытки подключения исчерпаны")
+                    return None
+            
             if asyncio.iscoroutinefunction(coro_func):
                 result = await coro_func(*args, **kwargs)
             else:
@@ -171,7 +141,7 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
     return None
 
 # ============================================
-# СОХРАНЕНИЕ ДАННЫХ
+# СОХРАНЕНИЕ ДАННЫХ - УПРОЩЕННЫЕ ВЕРСИИ
 # ============================================
 
 async def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None):
@@ -179,8 +149,10 @@ async def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None,
     Сохраняет данные пользователя в БД
     """
     try:
-        if db.pool is None:
-            await db.connect()
+        # Проверяем соединение
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения {user_id}")
+            return False
         
         # Сохраняем пользователя
         if user_id in user_data_dict:
@@ -225,6 +197,11 @@ async def save_test_result_to_db(user_id, test_type, user_data_dict):
     Сохраняет результаты теста в БД
     """
     try:
+        # Проверяем соединение
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения результатов {user_id}")
+            return None
+        
         data = user_data_dict.get(user_id, {})
         
         profile_code = None
@@ -279,7 +256,5 @@ __all__ = [
     'save_user_to_db',
     'save_test_result_to_db',
     'ensure_db_connection',
-    'execute_with_retry',
-    'run_db_coro',
-    'get_db_loop'
+    'execute_with_retry'
 ]
