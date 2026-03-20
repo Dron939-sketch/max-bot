@@ -2095,40 +2095,6 @@ async def get_goals(user_id: int, mode: str = "coach"):
         # Определяем слабый вектор
         weakest = min(scores.items(), key=lambda x: x[1])[0] if scores else "СБ"
         
-        # База целей
-        goals_db = {
-            "coach":
-
-            # ============================================
-# ДОПОЛНИТЕЛЬНЫЕ API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
-# Добавьте этот блок в ваш main.py после всех существующих @api_app,
-# но перед if __name__ == "__main__":
-# ============================================
-
-@api_app.get("/api/goals")
-async def get_goals(user_id: int, mode: str = "coach"):
-    """
-    Получает динамически подобранные цели для пользователя
-    """
-    try:
-        user_id = int(user_id)
-        
-        # Получаем данные пользователя
-        data = user_data.get(user_id, {})
-        profile_data = data.get("profile_data", {})
-        profile_code = profile_data.get("display_name", "СБ-4_ТФ-4_УБ-4_ЧВ-4")
-        
-        # Получаем scores из профиля
-        scores = {
-            "СБ": profile_data.get("sb_level", 4),
-            "ТФ": profile_data.get("tf_level", 4),
-            "УБ": profile_data.get("ub_level", 4),
-            "ЧВ": profile_data.get("chv_level", 4)
-        }
-        
-        # Определяем слабый вектор
-        weakest = min(scores.items(), key=lambda x: x[1])[0] if scores else "СБ"
-        
         # База целей для разных режимов
         goals_db = {
             "coach": {
