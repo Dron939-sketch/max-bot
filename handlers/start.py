@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики команды /start и начальных экранов для MAX
-ВЕРСИЯ 2.6 - ИСПРАВЛЕНО: безопасная работа с атрибутами message.from_user
+ВЕРСИЯ 2.7 - ИСПРАВЛЕНО: корректное имя пользователя через get_user_name
 """
 import logging
 import time
 import threading
 import asyncio
+import re
 from typing import Optional, Dict, Any
 
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
@@ -70,6 +71,13 @@ def get_profile_code(user_id: int) -> str:
     code = profile_data.get('display_name')
     if code:
         return code
+    
+    # Пробуем из ai_generated_profile
+    ai_profile = data.get("ai_generated_profile", "")
+    if ai_profile:
+        match = re.search(r'СБ-\d+_ТФ-\d+_УБ-\d+_ЧВ-\d+', ai_profile)
+        if match:
+            return match.group(0)
     
     # Если нет, генерируем из векторов
     scores = {}
@@ -352,13 +360,16 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
     
     # Если контекст уже заполнен, показываем меню
     try:
+        # ✅ ИСПРАВЛЕНО: используем правильное имя из context
+        user_display_name = context.name if context.name else user_name
+        
         context.update_weather()
         day_context = context.get_day_context()
         mode_config = COMMUNICATION_MODES.get(context.communication_mode, COMMUNICATION_MODES["coach"])
         
         mode_display_name = mode_config["display_name"]
         text = f"{mode_config['emoji']} {bold(f'РЕЖИМ {mode_display_name}')}\n\n"
-        text += context.get_greeting(context.name) + "\n"
+        text += context.get_greeting(user_display_name) + "\n"
         text += f"📅 Сегодня {day_context['weekday']}, {day_context['day']} {day_context['month']}, {day_context['time_str']}\n"
         
         if context.weather_cache:
@@ -626,7 +637,10 @@ def show_main_menu(message: Message, context: UserContext):
     
     day_context = context.get_day_context()
     
-    welcome_text = f"{context.get_greeting(context.name)}\n\n"
+    # ✅ ИСПРАВЛЕНО: используем имя из контекста
+    user_display_name = context.name if context.name else get_user_name_local(message.from_user.id)
+    
+    welcome_text = f"{context.get_greeting(user_display_name)}\n\n"
     
     # Безопасная проверка погоды
     if context.weather_cache and isinstance(context.weather_cache, dict):
