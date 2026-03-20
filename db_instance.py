@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ ДЛЯ PYTHON 3.11 - ИСПРАВЛЕНО: обработка None параметров
+ВЕРСИЯ ДЛЯ PYTHON 3.11 - ИСПРАВЛЕНО: единый цикл событий
 """
 
 import os
@@ -11,8 +11,11 @@ import pickle
 import logging
 import asyncio
 import threading
-from typing import Dict, Any, Optional
-from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Any, Optional, Callable, Awaitable
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from functools import wraps
+import signal
+import sys
 
 from database import BotDatabase
 
@@ -29,11 +32,191 @@ DATABASE_URL = os.environ.get(
     )
 )
 
+# Маскируем пароль в логах
 url_parts = DATABASE_URL.split('@')
 safe_url = f"postgresql://{url_parts[1]}" if len(url_parts) > 1 else DATABASE_URL[:50] + "..."
 logger.info(f"🔗 Используем URL базы данных: {safe_url}")
 
+# ============================================
+# ГЛОБАЛЬНЫЙ МЕНЕДЖЕР ЦИКЛА БД
+# ============================================
+
+class DBLoopManager:
+    """
+    Единый менеджер для работы с циклом событий БД.
+    Все асинхронные операции с БД должны выполняться через этот менеджер.
+    """
+    
+    def __init__(self):
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+        self._tasks = set()
+        self._running = False
+        self._db_instance: Optional[BotDatabase] = None
+    
+    def init(self, db_instance: BotDatabase):
+        """Инициализирует цикл событий в отдельном потоке"""
+        with self._lock:
+            if self.loop is not None:
+                logger.warning("⚠️ Цикл БД уже инициализирован")
+                return
+            
+            self._db_instance = db_instance
+            
+            # Создаем новый цикл
+            self.loop = asyncio.new_event_loop()
+            
+            # Запускаем поток с циклом
+            self.thread = threading.Thread(
+                target=self._run_loop,
+                daemon=True,
+                name="DB-Loop"
+            )
+            self.thread.start()
+            
+            # Ждем, пока цикл запустится
+            future = asyncio.run_coroutine_threadsafe(
+                self._init_db_in_loop(),
+                self.loop
+            )
+            try:
+                future.result(timeout=30)
+                logger.info("✅ Глобальный цикл БД инициализирован")
+            except TimeoutError:
+                logger.error("❌ Таймаут инициализации цикла БД")
+                raise
+            except Exception as e:
+                logger.error(f"❌ Ошибка инициализации цикла БД: {e}")
+                raise
+    
+    def _run_loop(self):
+        """Запускает цикл событий в потоке"""
+        asyncio.set_event_loop(self.loop)
+        self._running = True
+        try:
+            self.loop.run_forever()
+        finally:
+            self._running = False
+            # Закрываем все незавершенные задачи
+            pending = asyncio.all_tasks(self.loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            self.loop.close()
+            logger.info("🔒 Цикл БД остановлен")
+    
+    async def _init_db_in_loop(self):
+        """Инициализирует БД внутри правильного цикла"""
+        if self._db_instance:
+            await self._db_instance.connect()
+            logger.info("✅ Подключение к БД установлено в цикле")
+    
+    def run_coro(self, coro_func: Callable[..., Awaitable], *args, timeout: int = 30, **kwargs):
+        """
+        Запускает корутину в цикле БД и возвращает результат.
+        Это основной метод для вызова из любого потока.
+        
+        Args:
+            coro_func: Асинхронная функция
+            *args: Аргументы для функции
+            timeout: Таймаут в секундах
+            **kwargs: Именованные аргументы
+        
+        Returns:
+            Результат выполнения корутины
+        
+        Raises:
+            TimeoutError: При превышении таймаута
+            Exception: Любое исключение из корутины
+        """
+        if self.loop is None:
+            raise RuntimeError("Цикл БД не инициализирован. Вызовите init()")
+        
+        # Проверяем, не вызваны ли мы уже из правильного цикла
+        try:
+            current_loop = asyncio.get_event_loop()
+            if current_loop is self.loop:
+                # Уже в правильном цикле - выполняем напрямую
+                future = asyncio.ensure_future(coro_func(*args, **kwargs), loop=self.loop)
+                return self.loop.run_until_complete(
+                    asyncio.wait_for(future, timeout=timeout)
+                )
+        except RuntimeError:
+            # Нет текущего цикла
+            pass
+        
+        # Создаем Future в цикле БД
+        future = asyncio.run_coroutine_threadsafe(
+            coro_func(*args, **kwargs),
+            self.loop
+        )
+        
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            future.cancel()
+            logger.error(f"❌ Таймаут {timeout}с при выполнении {coro_func.__name__}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Ошибка при выполнении {coro_func.__name__}: {e}")
+            raise
+    
+    def run_task(self, coro_func: Callable[..., Awaitable], *args, **kwargs):
+        """
+        Запускает корутину как фоновую задачу (fire-and-forget)
+        
+        Args:
+            coro_func: Асинхронная функция
+            *args: Аргументы
+            **kwargs: Именованные аргументы
+        
+        Returns:
+            asyncio.Task: Задача (можно отменить при необходимости)
+        """
+        if self.loop is None:
+            raise RuntimeError("Цикл БД не инициализирован")
+        
+        async def _wrapped():
+            try:
+                return await coro_func(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"❌ Ошибка в фоновой задаче {coro_func.__name__}: {e}")
+                return None
+        
+        task = asyncio.run_coroutine_threadsafe(_wrapped(), self.loop)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+    
+    def shutdown(self):
+        """Корректное завершение работы"""
+        if self.loop and self.loop.is_running():
+            logger.info("🛑 Останавливаем цикл БД...")
+            
+            # Отменяем все задачи
+            for task in list(self._tasks):
+                task.cancel()
+            
+            # Останавливаем цикл
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            
+            # Ждем завершения потока
+            if self.thread and self.thread.is_alive():
+                self.thread.join(timeout=10)
+            
+            logger.info("✅ Цикл БД остановлен")
+
+# ============================================
+# ГЛОБАЛЬНЫЕ ЭКЗЕМПЛЯРЫ
+# ============================================
+
+# Создаем экземпляр БД
 db = BotDatabase(DATABASE_URL)
+
+# Создаем менеджер цикла
+db_loop_manager = DBLoopManager()
 
 # ============================================
 # ИНИЦИАЛИЗАЦИЯ
@@ -42,7 +225,8 @@ db = BotDatabase(DATABASE_URL)
 async def init_db():
     """Инициализация подключения к БД"""
     try:
-        await db.connect()
+        # Инициализируем менеджер цикла (он сам создаст подключение)
+        db_loop_manager.init(db)
         logger.info("✅ Подключение к PostgreSQL установлено")
         return True
     except Exception as e:
@@ -52,8 +236,14 @@ async def init_db():
 async def close_db():
     """Закрытие подключения к БД"""
     try:
-        await db.disconnect()
-        logger.info("🔒 Подключение к PostgreSQL закрыто")
+        if db and db.pool:
+            # Закрываем через менеджер
+            db_loop_manager.run_coro(db.disconnect, timeout=10)
+            logger.info("🔒 Подключение к PostgreSQL закрыто")
+        
+        # Останавливаем менеджер
+        db_loop_manager.shutdown()
+        
     except Exception as e:
         logger.error(f"❌ Ошибка при закрытии подключения: {e}")
 
@@ -62,43 +252,33 @@ async def close_db():
 # ============================================
 
 async def ensure_db_connection():
-    """Проверяет соединение с БД"""
-    max_retries = 3
-    retry_delay = 0.5
-    
-    for attempt in range(max_retries):
-        try:
-            if db.pool is None:
-                logger.info("🔄 Пул соединений не инициализирован, подключаемся...")
-                await db.connect()
-                return True
-            
-            # Простая проверка, что пул жив
-            async with db.get_connection() as conn:
-                await conn.execute("SELECT 1")
-            logger.debug("✅ Соединение с БД работает")
+    """Проверяет соединение с БД через менеджер"""
+    try:
+        if db.pool is None:
+            logger.info("🔄 Пул соединений не инициализирован, подключаемся...")
+            await db.connect()
             return True
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка при проверке соединения (попытка {attempt+1}/{max_retries}): {e}")
-            
-            # Если пул умер, пробуем пересоздать
-            if "connection was closed" in str(e) or "another operation" in str(e):
-                try:
-                    await db.disconnect()
-                except:
-                    pass
-                db.pool = None
-            
-            if attempt < max_retries - 1:
-                logger.info(f"⏳ Повтор через {retry_delay}с...")
-                await asyncio.sleep(retry_delay)
-                retry_delay *= 2
-            else:
-                logger.warning(f"⚠️ Не удалось восстановить соединение")
-                return False
-    
-    return False
+        
+        # Проверяем соединение
+        async with db.get_connection() as conn:
+            await conn.execute("SELECT 1")
+        
+        logger.debug("✅ Соединение с БД работает")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при проверке соединения: {e}")
+        
+        # Пробуем переподключиться
+        try:
+            if db.pool:
+                await db.disconnect()
+            await db.connect()
+            logger.info("✅ Соединение восстановлено")
+            return True
+        except Exception as e2:
+            logger.error(f"❌ Не удалось восстановить соединение: {e2}")
+            return False
 
 # ============================================
 # ВЫПОЛНЕНИЕ С ПОВТОРАМИ
@@ -106,47 +286,57 @@ async def ensure_db_connection():
 
 async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
     """
-    Выполняет функцию с повторными попытками
+    Выполняет функцию с повторными попытками через менеджер цикла
     """
     last_error = None
     
     for attempt in range(max_retries):
         try:
-            # Проверяем соединение перед выполнением
-            if not await ensure_db_connection():
-                logger.warning(f"⚠️ Нет соединения с БД (попытка {attempt+1})")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(1 * (attempt + 1))
-                    continue
-                else:
-                    logger.error(f"❌ Все попытки подключения исчерпаны")
-                    return None
-            
-            if asyncio.iscoroutinefunction(coro_func):
-                result = await coro_func(*args, **kwargs)
-            else:
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(None, lambda: coro_func(*args, **kwargs))
+            # Используем менеджер для выполнения
+            result = db_loop_manager.run_coro(
+                coro_func, *args, timeout=30, **kwargs
+            )
             return result
+            
+        except TimeoutError as e:
+            last_error = e
+            logger.warning(f"⚠️ Таймаут (попытка {attempt+1}/{max_retries})")
             
         except Exception as e:
             last_error = e
             logger.warning(f"⚠️ Ошибка (попытка {attempt+1}/{max_retries}): {e}")
-            
-            if attempt < max_retries - 1:
-                await asyncio.sleep(1 * (attempt + 1))
-            else:
-                logger.error(f"❌ Все попытки исчерпаны: {last_error}")
+        
+        if attempt < max_retries - 1:
+            await asyncio.sleep(1 * (attempt + 1))
     
+    logger.error(f"❌ Все попытки исчерпаны: {last_error}")
     return None
+
+# ============================================
+# ОБЕРТКА ДЛЯ СИНХРОННЫХ ВЫЗОВОВ
+# ============================================
+
+def sync_db_call(coro_func):
+    """
+    Декоратор для синхронных функций, которые нужно выполнить в цикле БД
+    
+    Пример:
+        @sync_db_call
+        def save_user(user_id):
+            return db_loop_manager.run_coro(save_user_to_db, user_id)
+    """
+    @wraps(coro_func)
+    def wrapper(*args, **kwargs):
+        return db_loop_manager.run_coro(coro_func, *args, **kwargs)
+    return wrapper
 
 # ============================================
 # СОХРАНЕНИЕ ДАННЫХ - ИСПРАВЛЕННАЯ ВЕРСИЯ
 # ============================================
 
-async def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None):
+async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None):
     """
-    Сохраняет данные пользователя в БД
+    Асинхронная версия сохранения (для вызова через менеджер)
     """
     try:
         # Проверяем соединение
@@ -154,24 +344,20 @@ async def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None,
             logger.error(f"❌ Нет соединения с БД для сохранения {user_id}")
             return False
         
-        # ✅ ИСПРАВЛЕНО: импортируем глобальные словари, если параметры не переданы
+        # Импортируем глобальные словари, если параметры не переданы
         if user_data_dict is None:
             from state import user_data as global_user_data
             user_data_dict = global_user_data
-            logger.debug(f"📦 Используем глобальный user_data для {user_id}")
         
         if user_contexts_dict is None:
             from state import user_contexts as global_user_contexts
             user_contexts_dict = global_user_contexts
-            logger.debug(f"📦 Используем глобальный user_contexts для {user_id}")
         
         if user_routes_dict is None:
             from state import user_routes as global_user_routes
             user_routes_dict = global_user_routes
-            logger.debug(f"📦 Используем глобальный user_routes для {user_id}")
         
-        # ✅ ИСПРАВЛЕНО: проверяем наличие user_id в словарях
-        # Сохраняем пользователя в таблицу fredi_users
+        # Сохраняем пользователя
         if user_id in user_data_dict:
             user_info = user_data_dict[user_id]
             first_name = user_info.get('first_name') or user_info.get('name')
@@ -182,20 +368,16 @@ async def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None,
                 username=username,
                 first_name=first_name
             )
-            logger.debug(f"👤 Пользователь {user_id} сохранен в fredi_users")
         
-        # Сохраняем user_data (результаты тестов, профиль)
+        # Сохраняем user_data
         if user_id in user_data_dict:
             await db.save_user_data(user_id, user_data_dict[user_id])
-            logger.debug(f"📊 Данные пользователя {user_id} сохранены в fredi_user_data")
         
-        # Сохраняем контекст (UserContext объект)
+        # Сохраняем контекст
         if user_id in user_contexts_dict:
             context = user_contexts_dict[user_id]
             await db.save_user_context(user_id, context)
-            # Также сохраняем pickled версию как резерв
             await db.save_pickled_context(user_id, context)
-            logger.debug(f"📍 Контекст пользователя {user_id} сохранен в БД")
         
         # Сохраняем маршрут
         if user_id in user_routes_dict:
@@ -206,7 +388,6 @@ async def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None,
                 current_step=route.get('current_step', 1),
                 progress=route.get('progress', [])
             )
-            logger.debug(f"🗺 Маршрут пользователя {user_id} сохранен в БД")
         
         logger.info(f"💾 Пользователь {user_id} успешно сохранен в БД")
         return True
@@ -218,9 +399,23 @@ async def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None,
         return False
 
 
-async def save_test_result_to_db(user_id, test_type, user_data_dict=None):
+def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None):
     """
-    Сохраняет результаты теста в БД
+    Синхронная обертка для сохранения (вызывается из любого потока)
+    """
+    return db_loop_manager.run_coro(
+        save_user_to_db_async,
+        user_id,
+        user_data_dict,
+        user_contexts_dict,
+        user_routes_dict,
+        timeout=30
+    )
+
+
+async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
+    """
+    Асинхронная версия сохранения результатов теста
     """
     try:
         # Проверяем соединение
@@ -228,11 +423,9 @@ async def save_test_result_to_db(user_id, test_type, user_data_dict=None):
             logger.error(f"❌ Нет соединения с БД для сохранения результатов {user_id}")
             return None
         
-        # ✅ ИСПРАВЛЕНО: используем глобальный словарь, если не передан
         if user_data_dict is None:
             from state import user_data as global_user_data
             user_data_dict = global_user_data
-            logger.debug(f"📦 Используем глобальный user_data для {user_id}")
         
         data = user_data_dict.get(user_id, {})
         
@@ -245,7 +438,6 @@ async def save_test_result_to_db(user_id, test_type, user_data_dict=None):
         if data.get("profile_data"):
             profile_code = data["profile_data"].get("display_name")
         elif data.get("ai_generated_profile"):
-            # Пытаемся извлечь код из AI профиля
             import re
             match = re.search(r'СБ-\d+_ТФ-\d+_УБ-\d+_ЧВ-\d+', data.get("ai_generated_profile", ""))
             if match:
@@ -264,7 +456,7 @@ async def save_test_result_to_db(user_id, test_type, user_data_dict=None):
             confinement_model=data.get("confinement_model")
         )
         
-        # Сохраняем все ответы, если есть
+        # Сохраняем все ответы
         all_answers = data.get("all_answers", [])
         if all_answers and test_id:
             for answer in all_answers:
@@ -293,16 +485,31 @@ async def save_test_result_to_db(user_id, test_type, user_data_dict=None):
         traceback.print_exc()
         return None
 
+
+def save_test_result_to_db(user_id, test_type, user_data_dict=None):
+    """
+    Синхронная обертка для сохранения результатов теста
+    """
+    return db_loop_manager.run_coro(
+        save_test_result_to_db_async,
+        user_id,
+        test_type,
+        user_data_dict,
+        timeout=30
+    )
+
 # ============================================
 # ЭКСПОРТ
 # ============================================
 
 __all__ = [
     'db',
+    'db_loop_manager',
     'init_db',
     'close_db',
     'save_user_to_db',
     'save_test_result_to_db',
     'ensure_db_connection',
-    'execute_with_retry'
+    'execute_with_retry',
+    'sync_db_call'
 ]
