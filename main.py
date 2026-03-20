@@ -30,8 +30,8 @@ import uvicorn
 # =========================================
 
 # ========== ИМПОРТЫ ДЛЯ БАЗЫ ДАННЫХ ==========
-from db_instance import db, init_db, close_db, save_user_to_db, save_test_result_to_db
-from db_instance import ensure_db_connection, execute_with_retry
+from db_instance import db, init_db, close_db, ensure_db_connection, execute_with_retry
+from db_sync import sync_db
 import asyncpg
 # =============================================
 
@@ -40,10 +40,6 @@ PID_FILE = '/tmp/max-bot.pid'
 LOCK_FILE = '/tmp/max-bot.lock'
 
 def check_single_instance():
-    """
-    Проверяет, не запущен ли уже экземпляр бота
-    """
-    # Проверяем, запущены ли мы на Render
     is_render = os.environ.get('RENDER') is not None
     
     try:
@@ -151,28 +147,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============================================
-# ГЛОБАЛЬНЫЙ ЦИКЛ СОБЫТИЙ ДЛЯ БАЗЫ ДАННЫХ
-# ============================================
-# ⚠️ ВЕСЬ ЭТОТ БЛОК УДАЛЕН - теперь используется db_loop_manager из db_instance.py
-# db_loop = None
-# db_loop_thread = None
-# db_executor = ThreadPoolExecutor(max_workers=4)
-# _db_loop_init_lock = threading.Lock()
-#
-# def init_db_loop():
-#     ...
-#
-# def run_db_coro(coro, timeout: int = 30):
-#     ...
-#
-# def run_db_task(coro):
-#     ...
-#
-# def with_db_loop(func):
-#     ...
-# ============================================
-
-# ============================================
 # ЭКЗЕМПЛЯР БОТА
 # ============================================
 
@@ -198,10 +172,7 @@ anchoring = Anchoring()
 weekend_planner = WeekendPlanner()
 scheduler = TaskScheduler()
 
-# Устанавливаем morning_manager для profile.py (чтобы избежать циклического импорта)
 set_morning_manager(morning_manager)
-
-# Привязываем morning_manager к боту и контекстам
 morning_manager.set_bot(bot)
 morning_manager.set_contexts(user_contexts, user_data)
 
@@ -209,37 +180,21 @@ morning_manager.set_contexts(user_contexts, user_data)
 # ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ
 # ============================================
 
-# Инициализируем глобальный цикл БД
-# init_db_loop()  # ⚠️ УДАЛЕНО - теперь инициализация происходит через db_loop_manager
-
-# ⚠️ ДЕКОРАТОР @with_db_loop УДАЛЕН
 async def init_database():
     """Инициализация базы данных"""
     try:
-        # Подключаемся к базе
         await init_db()
         logger.info("✅ Подключение к PostgreSQL установлено")
-        
-        # Проверяем соединение с защитой от ошибок
         await ensure_db_connection()
-        
-        # Загружаем всех пользователей из БД в память
         await load_all_users_from_db()
-        
-        # ✅ ЗАПУСКАЕМ АВТОСОХРАНЕНИЕ
-        setup_auto_save(interval_seconds=300)  # Каждые 5 минут
-        
-        # Запускаем фоновые задачи
+        setup_auto_save(interval_seconds=300)
         asyncio.create_task(periodic_save_to_db())
         asyncio.create_task(periodic_cleanup_db())
-        
         logger.info("✅ База данных инициализирована")
-        
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации БД: {e}")
-        raise  # Пробрасываем исключение дальше
+        raise
 
-# ⚠️ ДЕКОРАТОР @with_db_loop УДАЛЕН
 async def load_all_users_from_db():
     """Загружает всех пользователей из БД в словари памяти"""
     global user_data, user_names, user_contexts, user_routes
@@ -247,22 +202,16 @@ async def load_all_users_from_db():
     logger.info("🔄 Загрузка данных из PostgreSQL...")
     
     try:
-        # Загружаем пользователей из таблицы fredi_users
         async with db.get_connection() as conn:
             rows = await conn.fetch("SELECT user_id, first_name, username FROM fredi_users")
             for row in rows:
                 user_names[row['user_id']] = row['first_name'] or row['username'] or f"user_{row['user_id']}"
         
-        # Загружаем контексты из полей таблицы
         async with db.get_connection() as conn:
             rows = await conn.fetch("SELECT * FROM fredi_user_contexts")
             for row in rows:
                 user_id = row['user_id']
-                
-                # Восстанавливаем объект UserContext
                 context = UserContext(user_id)
-                
-                # Заполняем поля из строки БД
                 context.name = row.get('name')
                 context.age = row.get('age')
                 context.gender = row.get('gender')
@@ -272,13 +221,9 @@ async def load_all_users_from_db():
                 context.timezone_offset = row.get('timezone_offset', 3)
                 context.communication_mode = row.get('communication_mode', 'coach')
                 context.last_context_update = row.get('last_context_update')
-                
-                # Погода (JSON)
                 if row.get('weather_cache'):
                     context.weather_cache = json.loads(row['weather_cache'])
                 context.weather_cache_time = row.get('weather_cache_time')
-                
-                # Жизненный контекст
                 context.family_status = row.get('family_status')
                 context.has_children = row.get('has_children', False)
                 context.children_ages = row.get('children_ages')
@@ -292,13 +237,9 @@ async def load_all_users_from_db():
                 context.resistance_people = row.get('resistance_people')
                 context.energy_level = row.get('energy_level')
                 context.life_context_complete = row.get('life_context_complete', False)
-                
-                # Состояние сбора
                 context.awaiting_context = row.get('awaiting_context')
-                
                 user_contexts[user_id] = context
         
-        # Загружаем user_data
         async with db.get_connection() as conn:
             rows = await conn.fetch("SELECT user_id, data FROM fredi_user_data")
             for row in rows:
@@ -307,7 +248,6 @@ async def load_all_users_from_db():
                     data = json.loads(data)
                 user_data[row['user_id']] = data
         
-        # Загружаем активные маршруты
         async with db.get_connection() as conn:
             rows = await conn.fetch("""
                 SELECT user_id, route_data, current_step, progress 
@@ -318,23 +258,19 @@ async def load_all_users_from_db():
                 route_data = row['route_data']
                 if isinstance(route_data, str):
                     route_data = json.loads(route_data)
-                
                 progress = row['progress']
                 if isinstance(progress, str):
                     progress = json.loads(progress)
-                
                 user_routes[row['user_id']] = {
                     'route_data': route_data,
                     'current_step': row['current_step'],
                     'progress': progress
                 }
         
-        # Также пробуем загрузить из pickled контекстов (резерв)
         async with db.get_connection() as conn:
             rows = await conn.fetch("SELECT user_id, context_data FROM fredi_context_objects")
             for row in rows:
                 user_id = row['user_id']
-                # Если контекст еще не загружен из основной таблицы
                 if user_id not in user_contexts:
                     try:
                         import pickle
@@ -353,32 +289,24 @@ async def load_all_users_from_db():
         import traceback
         traceback.print_exc()
 
-# ⚠️ ДЕКОРАТОР @with_db_loop УДАЛЕН
 async def periodic_save_to_db():
     """Периодически сохраняет всех пользователей в БД"""
     while True:
-        await asyncio.sleep(300)  # Каждые 5 минут
-        
+        await asyncio.sleep(300)
         logger.info("🔄 Периодическое сохранение данных в БД...")
-        
         saved_count = 0
         for user_id in list(user_data.keys()):
             try:
-                # ⚠️ УБРАЛИ execute_with_retry - save_user_to_db теперь синхронная
-                result = save_user_to_db(user_id, user_data, user_contexts, user_routes)
-                if result:
+                if sync_db.save_user_to_db(user_id):
                     saved_count += 1
             except Exception as e:
                 logger.error(f"❌ Ошибка сохранения {user_id}: {e}")
-        
         logger.info(f"✅ Сохранено {saved_count} пользователей")
 
-# ⚠️ ДЕКОРАТОР @with_db_loop УДАЛЕН
 async def periodic_cleanup_db():
     """Периодическая очистка старых данных"""
     while True:
-        await asyncio.sleep(86400)  # 24 часа
-        
+        await asyncio.sleep(86400)
         try:
             await db.cleanup_old_data(days=30)
             logger.info("🧹 Очистка старых данных выполнена")
@@ -389,10 +317,8 @@ async def periodic_cleanup_db():
 # FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
 # ============================================
 
-# Создаем FastAPI приложение
 api_app = FastAPI(title="Фреди - Мини-приложение")
 
-# Настройка CORS
 api_app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -400,50 +326,33 @@ api_app.add_middleware(
         "https://max-bot-1-ywpz.onrender.com",
         "https://max-bot-2-ogve.onrender.com",
         "http://localhost:3000",
-        "*"  # Временно разрешаем все для отладки
+        "*"
     ],
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
 )
 
-# ============================================
-# ПОДКЛЮЧЕНИЕ СТАТИЧЕСКИХ ФАЙЛОВ МИНИ-ПРИЛОЖЕНИЯ
-# ============================================
-
-# Путь к папке с мини-приложением
 MINIAPP_PATH = os.path.join(os.path.dirname(__file__), 'miniapp')
-
-# Создаем папку, если её нет
 os.makedirs(MINIAPP_PATH, exist_ok=True)
 
-# Обслуживаем статические файлы из папки miniapp
 if os.path.exists(MINIAPP_PATH) and os.path.isdir(MINIAPP_PATH):
     try:
-        # Монтируем на /static, чтобы не конфликтовать с корневым маршрутом
         api_app.mount("/static", StaticFiles(directory=MINIAPP_PATH), name="static")
-        logger.info(f"✅ Статические файлы подключены из {MINIAPP_PATH} (путь /static)")
+        logger.info(f"✅ Статические файлы подключены из {MINIAPP_PATH}")
     except Exception as e:
         logger.error(f"❌ Ошибка при монтировании статических файлов: {e}")
 else:
     logger.warning(f"⚠️ Папка {MINIAPP_PATH} не найдена")
 
-# ============================================
-# КОРНЕВОЙ МАРШРУТ
-# ============================================
-
 @api_app.get("/")
 async def root():
-    """Главная страница API"""
     try:
-        # Пробуем вернуть index.html если есть
         index_path = os.path.join(MINIAPP_PATH, "index.html")
         if os.path.exists(index_path):
             return FileResponse(index_path)
     except Exception as e:
         logger.warning(f"⚠️ Не удалось вернуть index.html: {e}")
-    
-    # Возвращаем JSON в случае ошибки
     return {
         "name": "MAX Bot",
         "version": "9.6",
@@ -463,7 +372,6 @@ async def root():
 
 @api_app.post("/api/save-context")
 async def save_context(request: Request):
-    """Сохраняет контекст пользователя (город, пол, возраст)"""
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -472,13 +380,11 @@ async def save_context(request: Request):
         if not user_id:
             raise HTTPException(status_code=400, detail="user_id required")
         
-        # Получаем или создаем контекст
         if user_id not in user_contexts:
             user_contexts[user_id] = UserContext(user_id)
         
         context = user_contexts[user_id]
         
-        # Обновляем поля
         if 'city' in context_data:
             context.city = context_data['city']
         if 'gender' in context_data:
@@ -488,8 +394,7 @@ async def save_context(request: Request):
         
         logger.info(f"📝 Контекст сохранен для пользователя {user_id}: {context_data}")
         
-        # ⚠️ run_db_task УДАЛЕН - save_user_to_db теперь синхронная
-        save_user_to_db(user_id, user_data, user_contexts, user_routes)
+        sync_db.save_user_to_db(user_id)
         
         return JSONResponse({"success": True})
     except Exception as e:
@@ -501,7 +406,6 @@ async def save_context(request: Request):
 
 @api_app.post("/api/save-profile")
 async def save_profile(request: Request):
-    """Сохраняет профиль из мини-приложения"""
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -510,15 +414,13 @@ async def save_profile(request: Request):
         if not user_id or not profile:
             raise HTTPException(status_code=400, detail="user_id and profile required")
         
-        # Сохраняем в user_data
         if user_id not in user_data:
             user_data[user_id] = {}
         
         user_data[user_id]['ai_generated_profile'] = profile
         user_data[user_id]['profile_data'] = profile.get('profile_data', {})
         
-        # ⚠️ run_db_task УДАЛЕН - save_user_to_db теперь синхронная
-        save_user_to_db(user_id, user_data, user_contexts, user_routes)
+        sync_db.save_user_to_db(user_id)
         
         return JSONResponse({
             "success": True,
@@ -533,7 +435,6 @@ async def save_profile(request: Request):
 
 @api_app.post("/api/save-test-progress")
 async def save_test_progress(request: Request):
-    """Сохраняет прогресс теста из мини-приложения"""
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -543,15 +444,12 @@ async def save_test_progress(request: Request):
         if not user_id or stage is None:
             raise HTTPException(status_code=400, detail="user_id and stage required")
         
-        # Сохраняем в user_data
         if user_id not in user_data:
             user_data[user_id] = {}
         
-        # Инициализируем хранилище ответов
         if 'all_answers' not in user_data[user_id]:
             user_data[user_id]['all_answers'] = []
         
-        # Добавляем новые ответы
         stage_key = f'stage{stage}_answers'
         if stage_key not in user_data[user_id]:
             user_data[user_id][stage_key] = []
@@ -566,12 +464,34 @@ async def save_test_progress(request: Request):
             })
             user_data[user_id][stage_key].append(answer)
         
-        # ⚠️ run_db_task УДАЛЕН - save_user_to_db теперь синхронная
-        save_user_to_db(user_id, user_data, user_contexts, user_routes)
+        sync_db.save_user_to_db(user_id)
+        
+        stage_questions_count = {1: 4, 2: 6, 3: 24, 4: 12, 5: 8}
+        total = stage_questions_count.get(stage, 4)
+        stage_answers = [a for a in user_data[user_id].get('all_answers', []) 
+                        if a.get('stage') == stage]
+        stage_complete = len(stage_answers) >= total
+        
+        if stage_complete:
+            if stage == 1 and 'perception_type' not in user_data[user_id]:
+                user_data[user_id]['perception_type'] = 'visual'
+            elif stage == 2 and 'thinking_level' not in user_data[user_id]:
+                user_data[user_id]['thinking_level'] = 5
+            elif stage == 3 and 'behavioral_levels' not in user_data[user_id]:
+                user_data[user_id]['behavioral_levels'] = {
+                    'extraversion': [3,4,3,4,3,4],
+                    'neuroticism': [3,3,3,3,3,3],
+                    'agreeableness': [4,4,4,4,4,4],
+                    'conscientiousness': [4,4,4,4,4,4]
+                }
+            if stage < 5:
+                user_data[user_id]['current_stage'] = stage + 1
+            else:
+                user_data[user_id]['current_stage'] = 5
         
         return JSONResponse({
             "success": True,
-            "message": f"Stage {stage} progress saved"
+            "stageComplete": stage_complete
         })
     except Exception as e:
         logger.error(f"❌ Error in save_test_progress: {e}")
@@ -582,7 +502,6 @@ async def save_test_progress(request: Request):
 
 @api_app.post("/api/save-mode")
 async def save_mode(request: Request):
-    """Сохраняет режим общения из мини-приложения"""
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -591,17 +510,14 @@ async def save_mode(request: Request):
         if not user_id or not mode:
             raise HTTPException(status_code=400, detail="user_id and mode required")
         
-        # Сохраняем в контексте
         if user_id in user_contexts:
             user_contexts[user_id].communication_mode = mode
         
-        # Сохраняем в user_data
         if user_id not in user_data:
             user_data[user_id] = {}
         user_data[user_id]['communication_mode'] = mode
         
-        # ⚠️ run_db_task УДАЛЕН - save_user_to_db теперь синхронная
-        save_user_to_db(user_id, user_data, user_contexts, user_routes)
+        sync_db.save_user_to_db(user_id)
         
         return JSONResponse({
             "success": True,
@@ -616,7 +532,6 @@ async def save_mode(request: Request):
 
 @api_app.post("/api/sync")
 async def sync_data(request: Request):
-    """Синхронизирует данные с мини-приложения"""
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -625,26 +540,21 @@ async def sync_data(request: Request):
         if not user_id:
             raise HTTPException(status_code=400, detail="user_id required")
         
-        # Инициализируем данные пользователя
         if user_id not in user_data:
             user_data[user_id] = {}
         
-        # Синхронизируем ответы
         if 'answers' in sync_data:
             if 'all_answers' not in user_data[user_id]:
                 user_data[user_id]['all_answers'] = []
             user_data[user_id]['all_answers'].extend(sync_data['answers'])
         
-        # Синхронизируем профиль
         if 'profile' in sync_data:
             user_data[user_id]['ai_generated_profile'] = sync_data['profile']
         
-        # Синхронизируем режим
         if 'mode' in sync_data and user_id in user_contexts:
             user_contexts[user_id].communication_mode = sync_data['mode']
         
-        # ⚠️ run_db_coro УДАЛЕН - save_user_to_db теперь синхронная и возвращает результат
-        save_user_to_db(user_id, user_data, user_contexts, user_routes)
+        sync_db.save_user_to_db(user_id)
         
         return JSONResponse({
             "success": True,
@@ -659,11 +569,9 @@ async def sync_data(request: Request):
 
 @api_app.get("/api/get-profile")
 async def get_profile_miniapp(user_id: int):
-    """Возвращает профиль для мини-приложения"""
     try:
         user_id = int(user_id)
         data = user_data.get(user_id, {})
-        
         profile = {
             "ai_generated_profile": data.get("ai_generated_profile"),
             "profile_data": data.get("profile_data"),
@@ -672,7 +580,6 @@ async def get_profile_miniapp(user_id: int):
             "behavioral_levels": data.get("behavioral_levels"),
             "deep_patterns": data.get("deep_patterns")
         }
-        
         return JSONResponse(profile)
     except Exception as e:
         logger.error(f"❌ Error in get_profile_miniapp: {e}")
@@ -683,11 +590,9 @@ async def get_profile_miniapp(user_id: int):
 
 @api_app.get("/api/get-test-progress")
 async def get_test_progress(user_id: int):
-    """Возвращает прогресс теста для мини-приложения"""
     try:
         user_id = int(user_id)
         data = user_data.get(user_id, {})
-        
         progress = {
             "stage1_complete": 'perception_type' in data,
             "stage2_complete": 'thinking_level' in data,
@@ -697,7 +602,6 @@ async def get_test_progress(user_id: int):
             "answers_count": len(data.get('all_answers', [])),
             "current_stage": data.get('current_stage', 1)
         }
-        
         return JSONResponse(progress)
     except Exception as e:
         logger.error(f"❌ Error in get_test_progress: {e}")
@@ -706,22 +610,128 @@ async def get_test_progress(user_id: int):
             content={"error": str(e)}
         )
 
-# ========== ДОБАВЛЕННЫЙ ЭНДПОИНТ ДЛЯ ПРОВЕРКИ БД ==========
+# ============================================
+# ДОБАВЛЕННЫЕ ЭНДПОИНТЫ ДЛЯ ТЕСТА
+# ============================================
+
+@api_app.post("/api/save-test-results")
+async def save_test_results(request: Request):
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        results = data.get('results', {})
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id required")
+        
+        user_id = int(user_id)
+        
+        if user_id not in user_data:
+            user_data[user_id] = {}
+        
+        user_data[user_id]['perception_type'] = results.get('perception_type')
+        user_data[user_id]['thinking_level'] = results.get('thinking_level')
+        user_data[user_id]['behavioral_levels'] = results.get('behavioral_levels')
+        user_data[user_id]['dilts_counts'] = results.get('dilts_counts')
+        user_data[user_id]['deep_patterns'] = results.get('deep_patterns')
+        user_data[user_id]['profile_data'] = results.get('profile_data')
+        user_data[user_id]['all_answers'] = results.get('all_answers')
+        user_data[user_id]['test_completed'] = True
+        user_data[user_id]['test_completed_at'] = datetime.now().isoformat()
+        
+        sync_db.save_user_to_db(user_id)
+        
+        def run_generation():
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(generate_profile_interpretation_async(user_id))
+                finally:
+                    loop.close()
+            except Exception as e:
+                logger.error(f"❌ Ошибка в потоке генерации: {e}")
+        
+        threading.Thread(target=run_generation, daemon=True).start()
+        
+        logger.info(f"✅ Результаты теста для пользователя {user_id} сохранены")
+        
+        return JSONResponse({
+            "success": True,
+            "message": "Результаты сохранены, интерпретация формируется"
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения результатов: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+@api_app.get("/api/get-test-interpretation")
+async def get_test_interpretation(user_id: int):
+    try:
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        if user_info.get("ai_generated_profile"):
+            return JSONResponse({
+                "success": True,
+                "interpretation": user_info["ai_generated_profile"],
+                "ready": True
+            })
+        
+        if user_info.get("profile_data") and user_info.get("test_completed"):
+            return JSONResponse({
+                "success": True,
+                "interpretation": None,
+                "ready": False,
+                "message": "Интерпретация формируется..."
+            })
+        
+        return JSONResponse({
+            "success": False,
+            "ready": False,
+            "message": "Тест еще не завершен"
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения интерпретации: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+@api_app.get("/api/user-status")
+async def get_user_status(user_id: int):
+    try:
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        return JSONResponse({
+            "success": True,
+            "has_profile": bool(user_info.get('profile_data')),
+            "has_interpretation": bool(user_info.get('ai_generated_profile')),
+            "test_completed": user_info.get('test_completed', False),
+            "interpretation_ready": bool(user_info.get('ai_generated_profile')),
+            "profile_code": user_info.get('profile_data', {}).get('display_name')
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
 @api_app.get("/api/check-db")
 async def check_db():
-    """Проверяет работу базы данных"""
     try:
-        from db_instance import db, ensure_db_connection
-        
-        # Проверяем соединение
         await ensure_db_connection()
-        
-        # Получаем статистику
         async with db.get_connection() as conn:
             users = await conn.fetchval("SELECT COUNT(*) FROM fredi_users")
             tests = await conn.fetchval("SELECT COUNT(*) FROM fredi_test_results")
             contexts = await conn.fetchval("SELECT COUNT(*) FROM fredi_user_contexts")
-            
             return {
                 "status": "ok",
                 "users": users or 0,
@@ -736,20 +746,13 @@ async def check_db():
             "error": str(e),
             "message": "❌ База данных НЕ работает"
         }
-# ============================================================
 
-# ========== ДОБАВЛЕННЫЙ ЭНДПОИНТ ДЛЯ ПРОСМОТРА ЛОГОВ ==========
 @api_app.get("/api/logs/{user_id}")
 async def get_user_logs(user_id: int):
-    """Показывает последние логи по пользователю"""
     try:
-        from db_instance import db, ensure_db_connection
         await ensure_db_connection()
-        
         result = {}
-        
         async with db.get_connection() as conn:
-            # Последние события
             events = await conn.fetch("""
                 SELECT event_type, event_data, created_at 
                 FROM fredi_events 
@@ -757,7 +760,6 @@ async def get_user_logs(user_id: int):
                 ORDER BY created_at DESC 
                 LIMIT 20
             """, user_id)
-            
             if events:
                 result['events'] = [
                     {
@@ -767,15 +769,12 @@ async def get_user_logs(user_id: int):
                     }
                     for e in events
                 ]
-            
-            # Результаты тестов
             tests = await conn.fetch("""
                 SELECT id, test_type, created_at 
                 FROM fredi_test_results 
                 WHERE user_id = $1 
                 ORDER BY created_at DESC
             """, user_id)
-            
             if tests:
                 result['tests'] = [
                     {
@@ -785,60 +784,18 @@ async def get_user_logs(user_id: int):
                     }
                     for t in tests
                 ]
-        
         return JSONResponse(result)
     except Exception as e:
         return JSONResponse(
             status_code=500,
             content={"error": str(e)}
         )
-# ============================================================
-
-# ============================================
-# СТАРЫЕ ЭНДПОИНТЫ (ОСТАВЛЯЕМ ДЛЯ СОВМЕСТИМОСТИ)
-# ============================================
-
-# Вспомогательные функции для API
-def determine_dominant_dilts(dilts_counts: dict) -> str:
-    """Определяет доминирующий уровень Дилтса"""
-    if not dilts_counts:
-        return "BEHAVIOR"
-    dominant = max(dilts_counts.items(), key=lambda x: x[1])
-    return dominant[0]
-
-def get_human_readable_profile(scores: dict, perception_type="не определен", thinking_level=5, dominant_dilts="BEHAVIOR") -> str:
-    """Возвращает портрет пользователя понятным языком"""
-    lines = []
-    
-    lines.append(f"🧠 ВАШ ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ")
-    lines.append("")
-    lines.append(f"🔍 Тип восприятия: {perception_type}")
-    lines.append(f"🧠 Уровень мышления: {thinking_level}/9")
-    lines.append("")
-    lines.append(f"🔑 КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА")
-    lines.append("Информация уточняется")
-    lines.append("")
-    lines.append(f"💪 СИЛЬНЫЕ СТОРОНЫ")
-    lines.append("• Высокоразвитые социальные навыки")
-    lines.append("• Системное мышление")
-    lines.append("• Устойчивость к стрессу")
-    lines.append("• Прагматизм")
-    lines.append("")
-    lines.append(f"🎯 ЗОНЫ РОСТА")
-    lines.append("• Информация уточняется")
-    lines.append("")
-    lines.append(f"⚠️ ГЛАВНАЯ ЛОВУШКА")
-    lines.append("⚡ Поведение")
-    
-    return "\n".join(lines)
 
 @api_app.get("/api/user-data")
 async def get_user_data_api(user_id: int):
-    """Возвращает базовую информацию о пользователе"""
     try:
         user_id = int(user_id)
         context = user_contexts.get(user_id)
-        
         return {
             "user_id": user_id,
             "user_name": context.name if context else user_names.get(user_id, "друг"),
@@ -854,31 +811,25 @@ async def get_user_data_api(user_id: int):
 
 @api_app.get("/api/profile")
 async def get_profile(user_id: int):
-    """Возвращает психологический портрет"""
     try:
         user_id = int(user_id)
         data = user_data.get(user_id, {})
-        
         profile = data.get("ai_generated_profile")
         if not profile:
-            # Если нет AI профиля, генерируем стандартный
             scores = {}
             for k in VECTORS:
                 levels = data.get("behavioral_levels", {}).get(k, [])
                 scores[k] = sum(levels) / len(levels) if levels else 3.0
-            
             perception_type = data.get("perception_type", "не определен")
             thinking_level = data.get("thinking_level", 5)
             dilts_counts = data.get("dilts_counts", {})
             dominant_dilts = determine_dominant_dilts(dilts_counts)
-            
             profile = get_human_readable_profile(
                 scores,
                 perception_type=perception_type,
                 thinking_level=thinking_level,
                 dominant_dilts=dominant_dilts
             )
-        
         return {"profile": profile}
     except Exception as e:
         logger.error(f"API error in get_profile: {e}")
@@ -889,24 +840,19 @@ async def get_profile(user_id: int):
 
 @api_app.get("/api/thought")
 async def get_thought(user_id: int):
-    """Возвращает мысли психолога"""
     try:
         user_id = int(user_id)
         data = user_data.get(user_id, {})
-        
         thought = data.get("psychologist_thought")
         if not thought:
-            # Генерируем мысль, если её нет
             thought = await generate_psychologist_thought(user_id, data)
             if thought:
                 if user_id not in user_data:
                     user_data[user_id] = {}
                 user_data[user_id]["psychologist_thought"] = thought
-                # ⚠️ run_db_task УДАЛЕН - save_user_to_db теперь синхронная
-                save_user_to_db(user_id, user_data, user_contexts, user_routes)
+                sync_db.save_user_to_db(user_id)
             else:
                 thought = "Мысли психолога еще не сгенерированы."
-        
         return {"thought": thought}
     except Exception as e:
         logger.error(f"API error in get_thought: {e}")
@@ -917,14 +863,12 @@ async def get_thought(user_id: int):
 
 @api_app.get("/api/ideas")
 async def get_ideas(user_id: int):
-    """Возвращает идеи на выходные"""
     try:
         user_id = int(user_id)
         data = user_data.get(user_id, {})
         context = user_contexts.get(user_id)
         user_name = context.name if context else user_names.get(user_id, "друг")
         
-        # Проверяем кэш в БД - напрямую вызываем db
         cached_ideas = await db.get_cached_weekend_ideas(user_id)
         if cached_ideas:
             return {"ideas": [{"title": "Идеи на выходные", "description": cached_ideas}]}
@@ -944,13 +888,11 @@ async def get_ideas(user_id: int):
             context=context
         )
         
-        # Сохраняем в кэш БД - напрямую вызываем db
         if scores:
             main_vector = max(scores.items(), key=lambda x: x[1])[0]
             main_level = int(scores.get(main_vector, 3))
             await db.cache_weekend_ideas(user_id, ideas_text, main_vector, main_level)
         
-        # Преобразуем текст в структурированные идеи
         ideas = []
         paragraphs = ideas_text.split('\n\n')
         for p in paragraphs:
@@ -960,7 +902,7 @@ async def get_ideas(user_id: int):
                     "description": p
                 })
         
-        return {"ideas": ideas[:5]}  # Возвращаем первые 5 идей
+        return {"ideas": ideas[:5]}
     except Exception as e:
         logger.error(f"API error in get_ideas: {e}")
         return JSONResponse(
@@ -970,21 +912,12 @@ async def get_ideas(user_id: int):
 
 @api_app.get("/health")
 async def health_check():
-    """Health check для Render (FastAPI)"""
     return {"status": "ok"}
-
-# ============================================
-# НОВЫЕ ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ (ЧАТ И ТЕСТЫ)
-# ============================================
 
 @api_app.get("/api/chat/history")
 async def get_chat_history(user_id: int, limit: int = 50):
-    """Возвращает историю чата пользователя"""
     try:
         user_id = int(user_id)
-        
-        # Здесь можно получать из БД, если сохраняете историю
-        # Пока возвращаем пустую историю - приветствие покажет script.js
         return JSONResponse({
             "success": True,
             "history": []
@@ -998,7 +931,6 @@ async def get_chat_history(user_id: int, limit: int = 50):
 
 @api_app.post("/api/chat/message")
 async def chat_message(request: Request):
-    """Отправляет сообщение боту и получает ответ"""
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -1010,28 +942,22 @@ async def chat_message(request: Request):
         
         user_id = int(user_id)
         
-        # Получаем контекст пользователя
         if user_id not in user_contexts:
             user_contexts[user_id] = UserContext(user_id)
         
         context = user_contexts[user_id]
         
-        # Устанавливаем режим, если передан
         if mode and mode in COMMUNICATION_MODES:
             context.communication_mode = mode
         
-        # Получаем данные пользователя
         user_info = user_data.get(user_id, {})
         
-        # Анализируем вопрос (если это вопрос)
         from question_analyzer import QuestionAnalyzer
         analyzer = QuestionAnalyzer(user_id, user_info)
         analysis = await analyzer.analyze_question_async(message_text)
         
-        # Генерируем ответ через DeepSeek
         from services import call_deepseek_with_context
         
-        # Формируем промпт с учетом контекста и профиля
         system_prompt = f"Ты психолог Фреди. Режим: {context.communication_mode}. "
         
         if context.name:
@@ -1046,7 +972,6 @@ async def chat_message(request: Request):
         if analysis:
             system_prompt += f"Анализ вопроса: {analysis.get('analysis', '')}. "
         
-        # Вызываем DeepSeek
         response = await call_deepseek_with_context(
             user_id=user_id,
             user_message=message_text,
@@ -1058,7 +983,6 @@ async def chat_message(request: Request):
         if not response:
             response = "Я понял ваш запрос. Дайте подумать..."
         
-        # Определяем, нужно ли показать кнопки
         buttons = None
         text_lower = response.lower()
         
@@ -1101,7 +1025,6 @@ async def chat_message(request: Request):
 
 @api_app.post("/api/chat/action")
 async def chat_action(request: Request):
-    """Обрабатывает нажатия на кнопки"""
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -1113,7 +1036,6 @@ async def chat_action(request: Request):
         
         user_id = int(user_id)
         
-        # Обрабатываем различные действия
         if action == "start_test":
             return JSONResponse({
                 "success": True,
@@ -1124,7 +1046,6 @@ async def chat_action(request: Request):
                     "message": "Начинаем тест. Этап 1: Тип восприятия"
                 }
             })
-            
         elif action == "show_profile":
             profile_data = await get_profile(user_id)
             return JSONResponse({
@@ -1132,7 +1053,6 @@ async def chat_action(request: Request):
                 "action": action,
                 "data": profile_data
             })
-            
         elif action == "show_thoughts":
             thoughts = await get_thought(user_id)
             return JSONResponse({
@@ -1140,7 +1060,6 @@ async def chat_action(request: Request):
                 "action": action,
                 "data": thoughts
             })
-            
         elif action == "show_weekend":
             ideas = await get_ideas(user_id)
             return JSONResponse({
@@ -1148,7 +1067,6 @@ async def chat_action(request: Request):
                 "action": action,
                 "data": ideas
             })
-            
         elif action == "ask_question":
             return JSONResponse({
                 "success": True,
@@ -1165,136 +1083,206 @@ async def chat_action(request: Request):
             content={"success": False, "error": str(e)}
         )
 
+# ============================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ API
+# ============================================
+
+def determine_dominant_dilts(dilts_counts: dict) -> str:
+    if not dilts_counts:
+        return "BEHAVIOR"
+    dominant = max(dilts_counts.items(), key=lambda x: x[1])
+    return dominant[0]
+
+def get_human_readable_profile(scores: dict, perception_type="не определен", thinking_level=5, dominant_dilts="BEHAVIOR") -> str:
+    lines = []
+    lines.append(f"🧠 ВАШ ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ")
+    lines.append("")
+    lines.append(f"🔍 Тип восприятия: {perception_type}")
+    lines.append(f"🧠 Уровень мышления: {thinking_level}/9")
+    lines.append("")
+    lines.append(f"🔑 КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА")
+    lines.append("Информация уточняется")
+    lines.append("")
+    lines.append(f"💪 СИЛЬНЫЕ СТОРОНЫ")
+    lines.append("• Высокоразвитые социальные навыки")
+    lines.append("• Системное мышление")
+    lines.append("• Устойчивость к стрессу")
+    lines.append("• Прагматизм")
+    lines.append("")
+    lines.append(f"🎯 ЗОНЫ РОСТА")
+    lines.append("• Информация уточняется")
+    lines.append("")
+    lines.append(f"⚠️ ГЛАВНАЯ ЛОВУШКА")
+    lines.append("⚡ Поведение")
+    return "\n".join(lines)
+
+# ============================================
+# ФУНКЦИИ ДЛЯ ГЕНЕРАЦИИ ПРОФИЛЯ
+# ============================================
+
+async def generate_profile_interpretation_async(user_id: int):
+    """Фоновая генерация интерпретации профиля"""
+    try:
+        logger.info(f"🧠 Начинаю генерацию интерпретации для пользователя {user_id}")
+        
+        await asyncio.sleep(2)
+        
+        user_info = user_data.get(user_id, {})
+        
+        if not user_info.get('profile_data'):
+            logger.warning(f"⚠️ Нет данных профиля для пользователя {user_id}")
+            return
+        
+        from services import generate_ai_profile
+        ai_profile = await generate_ai_profile(user_id, user_info)
+        
+        if ai_profile:
+            user_data[user_id]['ai_generated_profile'] = ai_profile
+            sync_db.save_user_to_db(user_id)
+            logger.info(f"✅ Интерпретация для пользователя {user_id} сгенерирована")
+            await send_to_telegram(user_id, ai_profile)
+        else:
+            profile = user_info.get('profile_data', {})
+            deep = user_info.get('deep_patterns', {})
+            
+            fallback_profile = f"""🧠 <b>ВАШ ПСИХОЛОГИЧЕСКИЙ ПРОФИЛЬ</b>
+
+<b>Профиль:</b> {profile.get('display_name', 'не определен')}
+<b>Тип восприятия:</b> {user_info.get('perception_type', 'не определен')}
+<b>Уровень мышления:</b> {user_info.get('thinking_level', 5)}/9
+
+<b>Глубинный паттерн:</b> {deep.get('attachment', '🤗 Надежный')}
+
+Хотите получить более подробную интерпретацию? Задайте вопрос в чате."""
+            
+            user_data[user_id]['ai_generated_profile'] = fallback_profile
+            sync_db.save_user_to_db(user_id)
+            await send_to_telegram(user_id, fallback_profile)
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка генерации интерпретации для {user_id}: {e}")
+        import traceback
+        traceback.print_exc()
+
+async def send_to_telegram(user_id: int, text: str):
+    """Отправляет интерпретацию в Telegram"""
+    try:
+        context = user_contexts.get(user_id)
+        user_name = context.name if context else "друг"
+        
+        full_text = f"🧠 {user_name}, {text.lower() if text.startswith('🧠') else text}"
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"),
+                InlineKeyboardButton(text="🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations")
+            ],
+            [InlineKeyboardButton(text="⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection")]
+        ])
+        
+        await bot.send_message(
+            user_id,
+            full_text,
+            parse_mode='HTML',
+            reply_markup=keyboard
+        )
+        
+        logger.info(f"📨 Интерпретация отправлена в Telegram пользователю {user_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки в Telegram: {e}")
+
+# ============================================
+# API ЭНДПОИНТЫ ДЛЯ ТЕСТА (продолжение)
+# ============================================
+
 @api_app.get("/api/test/question")
 async def get_test_question(user_id: int, stage: int, index: int):
-    """Возвращает вопрос теста"""
     try:
         user_id = int(user_id)
         stage = int(stage)
         index = int(index)
         
-        # Определяем общее количество вопросов для этапа
-        stage_questions_count = {
-            1: 4,  # Тип восприятия
-            2: 6,  # Уровень мышления
-            3: 24, # Поведенческие уровни (4 вектора × 6)
-            4: 12, # Уровни Дилтса
-            5: 8   # Глубинные паттерны
-        }
-        
+        stage_questions_count = {1: 4, 2: 6, 3: 24, 4: 12, 5: 8}
         total = stage_questions_count.get(stage, 4)
         
-        # Вопросы для этапа 1 (Тип восприятия)
         stage1_questions = [
-            {
-                "text": "Как вы обычно воспринимаете новую информацию?",
-                "options": [
-                    {"id": "A", "text": "Через визуальные образы и картинки", "value": "visual"},
-                    {"id": "B", "text": "Через ощущения и телесный опыт", "value": "kinesthetic"},
-                    {"id": "C", "text": "Через логические схемы и структуры", "value": "auditory"},
-                    {"id": "D", "text": "Через интуицию и общее впечатление", "value": "digital"}
-                ]
-            },
-            {
-                "text": "Что для вас важнее при принятии решения?",
-                "options": [
-                    {"id": "A", "text": "Как это будет выглядеть", "value": "visual"},
-                    {"id": "B", "text": "Что я чувствую по этому поводу", "value": "kinesthetic"},
-                    {"id": "C", "text": "Логика и факты", "value": "auditory"},
-                    {"id": "D", "text": "Общая картина и смысл", "value": "digital"}
-                ]
-            },
-            {
-                "text": "Как вы лучше запоминаете?",
-                "options": [
-                    {"id": "A", "text": "Когда вижу схему или изображение", "value": "visual"},
-                    {"id": "B", "text": "Когда записываю или проживаю", "value": "kinesthetic"},
-                    {"id": "C", "text": "Когда проговариваю вслух", "value": "auditory"},
-                    {"id": "D", "text": "Когда понимаю суть", "value": "digital"}
-                ]
-            },
-            {
-                "text": "Что вас вдохновляет?",
-                "options": [
-                    {"id": "A", "text": "Красота и гармония", "value": "visual"},
-                    {"id": "B", "text": "Глубокие переживания", "value": "kinesthetic"},
-                    {"id": "C", "text": "Идеи и концепции", "value": "auditory"},
-                    {"id": "D", "text": "Смысл и предназначение", "value": "digital"}
-                ]
-            }
+            {"text": "Как вы обычно воспринимаете новую информацию?", "options": [
+                {"id": "A", "text": "Через визуальные образы и картинки", "value": "visual"},
+                {"id": "B", "text": "Через ощущения и телесный опыт", "value": "kinesthetic"},
+                {"id": "C", "text": "Через логические схемы и структуры", "value": "auditory"},
+                {"id": "D", "text": "Через интуицию и общее впечатление", "value": "digital"}
+            ]},
+            {"text": "Что для вас важнее при принятии решения?", "options": [
+                {"id": "A", "text": "Как это будет выглядеть", "value": "visual"},
+                {"id": "B", "text": "Что я чувствую по этому поводу", "value": "kinesthetic"},
+                {"id": "C", "text": "Логика и факты", "value": "auditory"},
+                {"id": "D", "text": "Общая картина и смысл", "value": "digital"}
+            ]},
+            {"text": "Как вы лучше запоминаете?", "options": [
+                {"id": "A", "text": "Когда вижу схему или изображение", "value": "visual"},
+                {"id": "B", "text": "Когда записываю или проживаю", "value": "kinesthetic"},
+                {"id": "C", "text": "Когда проговариваю вслух", "value": "auditory"},
+                {"id": "D", "text": "Когда понимаю суть", "value": "digital"}
+            ]},
+            {"text": "Что вас вдохновляет?", "options": [
+                {"id": "A", "text": "Красота и гармония", "value": "visual"},
+                {"id": "B", "text": "Глубокие переживания", "value": "kinesthetic"},
+                {"id": "C", "text": "Идеи и концепции", "value": "auditory"},
+                {"id": "D", "text": "Смысл и предназначение", "value": "digital"}
+            ]}
         ]
         
-        # Вопросы для этапа 2 (Уровень мышления)
         stage2_questions = [
-            {
-                "text": "Я часто анализирую свои мысли и чувства",
-                "options": [
-                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
-                    {"id": "B", "text": "Скорее не согласен", "value": 2},
-                    {"id": "C", "text": "Нейтрально", "value": 3},
-                    {"id": "D", "text": "Скорее согласен", "value": 4},
-                    {"id": "E", "text": "Полностью согласен", "value": 5}
-                ]
-            },
-            {
-                "text": "Мне важно понимать причины своих поступков",
-                "options": [
-                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
-                    {"id": "B", "text": "Скорее не согласен", "value": 2},
-                    {"id": "C", "text": "Нейтрально", "value": 3},
-                    {"id": "D", "text": "Скорее согласен", "value": 4},
-                    {"id": "E", "text": "Полностью согласен", "value": 5}
-                ]
-            },
-            {
-                "text": "Я вижу взаимосвязи между разными событиями",
-                "options": [
-                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
-                    {"id": "B", "text": "Скорее не согласен", "value": 2},
-                    {"id": "C", "text": "Нейтрально", "value": 3},
-                    {"id": "D", "text": "Скорее согласен", "value": 4},
-                    {"id": "E", "text": "Полностью согласен", "value": 5}
-                ]
-            },
-            {
-                "text": "Я задумываюсь о смысле жизни",
-                "options": [
-                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
-                    {"id": "B", "text": "Скорее не согласен", "value": 2},
-                    {"id": "C", "text": "Нейтрально", "value": 3},
-                    {"id": "D", "text": "Скорее согласен", "value": 4},
-                    {"id": "E", "text": "Полностью согласен", "value": 5}
-                ]
-            },
-            {
-                "text": "Мне интересно изучать новые концепции",
-                "options": [
-                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
-                    {"id": "B", "text": "Скорее не согласен", "value": 2},
-                    {"id": "C", "text": "Нейтрально", "value": 3},
-                    {"id": "D", "text": "Скорее согласен", "value": 4},
-                    {"id": "E", "text": "Полностью согласен", "value": 5}
-                ]
-            },
-            {
-                "text": "Я замечаю, как меняются мои взгляды со временем",
-                "options": [
-                    {"id": "A", "text": "Совершенно не согласен", "value": 1},
-                    {"id": "B", "text": "Скорее не согласен", "value": 2},
-                    {"id": "C", "text": "Нейтрально", "value": 3},
-                    {"id": "D", "text": "Скорее согласен", "value": 4},
-                    {"id": "E", "text": "Полностью согласен", "value": 5}
-                ]
-            }
+            {"text": "Я часто анализирую свои мысли и чувства", "options": [
+                {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                {"id": "B", "text": "Скорее не согласен", "value": 2},
+                {"id": "C", "text": "Нейтрально", "value": 3},
+                {"id": "D", "text": "Скорее согласен", "value": 4},
+                {"id": "E", "text": "Полностью согласен", "value": 5}
+            ]},
+            {"text": "Мне важно понимать причины своих поступков", "options": [
+                {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                {"id": "B", "text": "Скорее не согласен", "value": 2},
+                {"id": "C", "text": "Нейтрально", "value": 3},
+                {"id": "D", "text": "Скорее согласен", "value": 4},
+                {"id": "E", "text": "Полностью согласен", "value": 5}
+            ]},
+            {"text": "Я вижу взаимосвязи между разными событиями", "options": [
+                {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                {"id": "B", "text": "Скорее не согласен", "value": 2},
+                {"id": "C", "text": "Нейтрально", "value": 3},
+                {"id": "D", "text": "Скорее согласен", "value": 4},
+                {"id": "E", "text": "Полностью согласен", "value": 5}
+            ]},
+            {"text": "Я задумываюсь о смысле жизни", "options": [
+                {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                {"id": "B", "text": "Скорее не согласен", "value": 2},
+                {"id": "C", "text": "Нейтрально", "value": 3},
+                {"id": "D", "text": "Скорее согласен", "value": 4},
+                {"id": "E", "text": "Полностью согласен", "value": 5}
+            ]},
+            {"text": "Мне интересно изучать новые концепции", "options": [
+                {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                {"id": "B", "text": "Скорее не согласен", "value": 2},
+                {"id": "C", "text": "Нейтрально", "value": 3},
+                {"id": "D", "text": "Скорее согласен", "value": 4},
+                {"id": "E", "text": "Полностью согласен", "value": 5}
+            ]},
+            {"text": "Я замечаю, как меняются мои взгляды со временем", "options": [
+                {"id": "A", "text": "Совершенно не согласен", "value": 1},
+                {"id": "B", "text": "Скорее не согласен", "value": 2},
+                {"id": "C", "text": "Нейтрально", "value": 3},
+                {"id": "D", "text": "Скорее согласен", "value": 4},
+                {"id": "E", "text": "Полностью согласен", "value": 5}
+            ]}
         ]
         
-        # Выбираем нужный вопрос
         if stage == 1 and index < len(stage1_questions):
             question = stage1_questions[index]
         elif stage == 2 and index < len(stage2_questions):
             question = stage2_questions[index]
         else:
-            # Заглушка для остальных этапов
             question = {
                 "text": f"Вопрос {index + 1} этапа {stage}",
                 "options": [
@@ -1305,7 +1293,6 @@ async def get_test_question(user_id: int, stage: int, index: int):
                 ]
             }
         
-        # Проверяем, отвечал ли пользователь уже на этот вопрос
         has_answer = False
         if user_id in user_data:
             answers = user_data[user_id].get('all_answers', [])
@@ -1333,7 +1320,6 @@ async def get_test_question(user_id: int, stage: int, index: int):
 
 @api_app.post("/api/test/answer")
 async def submit_test_answer(request: Request):
-    """Сохраняет ответ на вопрос теста"""
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -1347,14 +1333,12 @@ async def submit_test_answer(request: Request):
         
         user_id = int(user_id)
         
-        # Сохраняем ответ в user_data
         if user_id not in user_data:
             user_data[user_id] = {}
         
         if 'all_answers' not in user_data[user_id]:
             user_data[user_id]['all_answers'] = []
         
-        # Добавляем ответ
         answer_record = {
             'stage': stage,
             'question_index': question_index,
@@ -1365,33 +1349,23 @@ async def submit_test_answer(request: Request):
         
         user_data[user_id]['all_answers'].append(answer_record)
         
-        # Сохраняем в специфичное для этапа хранилище
         stage_key = f'stage{stage}_answers'
         if stage_key not in user_data[user_id]:
             user_data[user_id][stage_key] = []
         user_data[user_id][stage_key].append(answer_record)
         
-        # ⚠️ run_db_task УДАЛЕН - save_user_to_db теперь синхронная
-        save_user_to_db(user_id, user_data, user_contexts, user_routes)
+        sync_db.save_user_to_db(user_id)
         
-        # Определяем, завершен ли этап
-        stage_questions_count = {
-            1: 4, 2: 6, 3: 24, 4: 12, 5: 8
-        }
+        stage_questions_count = {1: 4, 2: 6, 3: 24, 4: 12, 5: 8}
         total = stage_questions_count.get(stage, 4)
-        
-        # Считаем количество ответов на этом этапе
         stage_answers = [a for a in user_data[user_id].get('all_answers', []) 
                         if a.get('stage') == stage]
         stage_complete = len(stage_answers) >= total
         
-        # Если этап завершен, обновляем прогресс
         if stage_complete:
             if stage == 1 and 'perception_type' not in user_data[user_id]:
-                # Определяем тип восприятия (заглушка)
                 user_data[user_id]['perception_type'] = 'visual'
             elif stage == 2 and 'thinking_level' not in user_data[user_id]:
-                # Определяем уровень мышления (заглушка)
                 user_data[user_id]['thinking_level'] = 5
             elif stage == 3 and 'behavioral_levels' not in user_data[user_id]:
                 user_data[user_id]['behavioral_levels'] = {
@@ -1400,8 +1374,6 @@ async def submit_test_answer(request: Request):
                     'agreeableness': [4,4,4,4,4,4],
                     'conscientiousness': [4,4,4,4,4,4]
                 }
-            
-            # Обновляем current_stage
             if stage < 5:
                 user_data[user_id]['current_stage'] = stage + 1
             else:
@@ -1421,7 +1393,6 @@ async def submit_test_answer(request: Request):
 
 @api_app.get("/api/test/results")
 async def get_test_stage_results(user_id: int, stage: int):
-    """Возвращает результаты этапа теста"""
     try:
         user_id = int(user_id)
         stage = int(stage)
@@ -1495,7 +1466,6 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 def run_health_server():
     """Запускает HTTP сервер для health check на порту, отличном от основного"""
-    # Начинаем с порта 10001, чтобы не конфликтовать с FastAPI
     ports = [10001, 10002, 10003, 10004, 10005]
     for port in ports:
         try:
@@ -1516,11 +1486,6 @@ health_thread.start()
 
 # ============================================
 # ФУНКЦИИ ДЛЯ РАБОТЫ С ДЛИННЫМИ СООБЩЕНИЯМИ
-# ============================================
-# Функция split_long_message теперь импортируется из formatters.py
-
-# ============================================
-# ФУНКЦИЯ ДЛЯ ГЕНЕРАЦИИ УНИКАЛЬНЫХ CALLBACK'ОВ
 # ============================================
 
 def generate_unique_callback(prefix: str, user_id: int, question: int, option: str, extra: str = "") -> str:
@@ -1555,354 +1520,6 @@ def check_consistency(scores_list: list) -> bool:
     variance = sum((x - avg) ** 2 for x in scores_list) / len(scores_list)
     std_dev = variance ** 0.5
     return std_dev <= 1.3
-
-# ============================================
-# ФУНКЦИЯ ПРОВЕРКИ API ПРИ СТАРТЕ
-# ============================================
-
-async def check_api_on_startup():
-    """Проверяет работу API при запуске"""
-    logger.info("🔍 Проверка API при запуске...")
-    
-    results = {
-        "deepseek": False,
-        "deepgram": False,
-        "yandex": False,
-        "openweather": False
-    }
-    
-    # Проверка DeepSeek
-    if DEEPSEEK_API_KEY:
-        try:
-            test_response = await call_deepseek("Ответь 'OK' одним словом", max_tokens=10)
-            results["deepseek"] = test_response is not None
-            logger.info(f"✅ DeepSeek API: {'работает' if results['deepseek'] else 'ошибка'}")
-        except Exception as e:
-            logger.error(f"❌ DeepSeek API ошибка: {e}")
-    
-    # Проверка Deepgram (по наличию ключа)
-    if DEEPGRAM_API_KEY:
-        results["deepgram"] = True
-        logger.info("✅ Deepgram API ключ найден")
-    
-    # Проверка Yandex (по наличию ключа)
-    if YANDEX_API_KEY:
-        results["yandex"] = True
-        logger.info("✅ Yandex TTS ключ найден")
-    
-    # Проверка OpenWeather
-    if OPENWEATHER_API_KEY:
-        results["openweather"] = True
-        logger.info("✅ OpenWeather API ключ найден")
-    
-    return results
-
-# ============================================
-# ОБРАБОТЧИКИ КОМАНД
-# ============================================
-
-@bot.message_handler(commands=['start'])
-def cmd_start(message: types.Message):
-    from handlers.start import cmd_start
-    cmd_start(message)
-
-@bot.message_handler(commands=['menu'])
-def cmd_menu(message: types.Message):
-    from handlers.start import cmd_menu
-    cmd_menu(message)
-
-@bot.message_handler(commands=['mode'])
-def cmd_mode(message: types.Message):
-    user_id = message.from_user.id
-    if user_id not in user_contexts:
-        user_contexts[user_id] = UserContext(user_id)
-    show_mode_selection(message)
-
-@bot.message_handler(commands=['stats'])
-def cmd_stats(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        safe_send_message(message, "⛔ Доступ запрещен")
-        return
-    safe_send_message(message, stats.get_stats_text())
-
-@bot.message_handler(commands=['apistatus'])
-def cmd_apistatus(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        safe_send_message(message, "⛔ Доступ запрещен")
-        return
-    
-    text = f"📊 Статус API:\n\n"
-    text += f"• DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}\n"
-    text += f"• Deepgram: {'✅' if DEEPGRAM_API_KEY else '❌'}\n"
-    text += f"• Yandex TTS: {'✅' if YANDEX_API_KEY else '❌'}\n"
-    text += f"• OpenWeather: {'✅' if OPENWEATHER_API_KEY else '❌'}\n\n"
-    safe_send_message(message, text)
-
-@bot.message_handler(commands=['context'])
-def cmd_context(message: types.Message):
-    user_id = message.from_user.id
-    if user_id not in user_contexts:
-        user_contexts[user_id] = UserContext(user_id)
-    
-    context = user_contexts[user_id]
-    context.city = None
-    context.gender = None
-    context.age = None
-    context.weather_cache = {}
-    
-    safe_send_message(message, "🔄 Давайте обновим ваш контекст")
-    start_context(message)
-
-# 👇 КОМАНДЫ ДЛЯ АДМИНИСТРАТОРОВ
-@bot.message_handler(commands=['test_yandex'])
-def cmd_test_yandex(message: types.Message):
-    """Тестирование Yandex TTS"""
-    if message.from_user.id not in ADMIN_IDS:
-        safe_send_message(message, "⛔ Доступ запрещен")
-        return
-    
-    def run_async():
-        asyncio.run(test_yandex_async(message))
-    
-    threading.Thread(target=run_async, daemon=True).start()
-
-@bot.message_handler(commands=['test_weather'])
-def cmd_test_weather(message: types.Message):
-    """Тестирование OpenWeather API"""
-    if message.from_user.id not in ADMIN_IDS:
-        safe_send_message(message, "⛔ Доступ запрещен")
-        return
-    
-    def run_async():
-        asyncio.run(test_weather_async(message))
-    
-    threading.Thread(target=run_async, daemon=True).start()
-
-@bot.message_handler(commands=['test_voices'])
-def cmd_test_voices(message: types.Message):
-    """Тестирование голосов"""
-    if message.from_user.id not in ADMIN_IDS:
-        safe_send_message(message, "⛔ Доступ запрещен")
-        return
-    
-    def run_async():
-        asyncio.run(test_voices_async(message))
-    
-    threading.Thread(target=run_async, daemon=True).start()
-
-@bot.message_handler(commands=['test_voice_send'])
-def cmd_test_voice_send(message: types.Message):
-    """Тест отправки голосового сообщения"""
-    if message.from_user.id not in ADMIN_IDS:
-        safe_send_message(message, "⛔ Доступ запрещен")
-        return
-    
-    def run_async():
-        asyncio.run(test_voice_send_async(message))
-    
-    threading.Thread(target=run_async, daemon=True).start()
-
-@bot.message_handler(commands=['weekend'])
-def cmd_weekend(message: types.Message):
-    """Команда /weekend - идеи на выходные"""
-    user_id = message.from_user.id
-    data = user_data.get(user_id, {})
-    
-    if not data.get("profile_data") and not data.get("ai_generated_profile"):
-        safe_send_message(
-            message,
-            "❓ Сначала нужно пройти тест, чтобы я понимал твой профиль. Используй /start",
-            delete_previous=True
-        )
-        return
-    
-    def run_async():
-        asyncio.run(show_weekend_ideas(message, user_id))
-    
-    threading.Thread(target=run_async, daemon=True).start()
-
-@bot.message_handler(commands=['dbstats'])
-def cmd_dbstats(message: types.Message):
-    """Статистика базы данных (только для админов)"""
-    if message.from_user.id not in ADMIN_IDS:
-        safe_send_message(message, "⛔ Доступ запрещен")
-        return
-    
-    from state import get_stats
-    stats_data = get_stats()
-    
-    text = "📊 **Статистика БД в памяти:**\n\n"
-    text += f"👤 Пользователей с данными: {stats_data['users_in_data']}\n"
-    text += f"📍 Контекстов: {stats_data['users_in_contexts']}\n"
-    text += f"🗺 Маршрутов: {stats_data['users_in_routes']}\n"
-    text += f"🔄 В состояниях: {stats_data['users_in_states']}\n"
-    text += f"📛 С именами: {stats_data['users_with_names']}\n"
-    text += f"✨ Всего уникальных: {stats_data['total_unique']}"
-    
-    safe_send_message(message, text, parse_mode='Markdown')
-
-# ============================================
-# АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ ТЕСТИРОВАНИЯ
-# ============================================
-
-async def test_yandex_async(message: types.Message):
-    """Асинхронное тестирование Yandex TTS"""
-    status_msg = await safe_send_message(
-        message,
-        "🎧 Тестирую Yandex TTS...",
-        delete_previous=True
-    )
-    
-    test_text = "Привет! Это тестовое голосовое сообщение."
-    results = []
-    
-    for mode in ["coach", "psychologist", "trainer"]:
-        audio = await text_to_speech(test_text, mode)
-        if audio:
-            results.append(f"✅ {COMMUNICATION_MODES[mode]['display_name']}")
-        else:
-            results.append(f"❌ {COMMUNICATION_MODES[mode]['display_name']}")
-        await asyncio.sleep(0.5)
-    
-    await safe_delete_message(message.chat.id, status_msg.message_id)
-    await safe_send_message(
-        message,
-        "📊 Результаты тестирования Yandex TTS:\n" + "\n".join(results),
-        delete_previous=True
-    )
-
-async def test_weather_async(message: types.Message):
-    """Асинхронное тестирование OpenWeather с использованием httpx"""
-    if not OPENWEATHER_API_KEY:
-        await safe_send_message(message, "❌ OPENWEATHER_API_KEY не настроен", delete_previous=True)
-        return
-    
-    test_city = "Москва"
-    status_msg = await safe_send_message(
-        message,
-        f"🌍 Тестирую погоду для города {test_city}...",
-        delete_previous=True
-    )
-    
-    try:
-        from services import get_http_client
-        url = f"http://api.openweathermap.org/data/2.5/weather?q={test_city}&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
-        
-        client = await get_http_client()
-        response = await client.get(url)
-        
-        if response.status_code == 200:
-            data = response.json()
-            temp = data['main']['temp']
-            feels_like = data['main']['feels_like']
-            desc = data['weather'][0]['description']
-            humidity = data['main']['humidity']
-            wind = data['wind']['speed']
-            
-            text = f"✅ Погода работает!\n\n"
-            text += f"📍 Город: {test_city}\n"
-            text += f"🌡 Температура: {temp}°C (ощущается как {feels_like}°C)\n"
-            text += f"☁️ Описание: {desc}\n"
-            text += f"💧 Влажность: {humidity}%\n"
-            text += f"💨 Ветер: {wind} м/с"
-            
-            await safe_delete_message(message.chat.id, status_msg.message_id)
-            await safe_send_message(message, text, delete_previous=True)
-        else:
-            error_text = response.text
-            await safe_delete_message(message.chat.id, status_msg.message_id)
-            await safe_send_message(message, f"❌ Ошибка {response.status_code}: {error_text[:200]}", delete_previous=True)
-            
-    except Exception as e:
-        await safe_delete_message(message.chat.id, status_msg.message_id)
-        await safe_send_message(message, f"❌ Ошибка: {e}", delete_previous=True)
-
-async def test_voices_async(message: types.Message):
-    """Тестирование всех голосов"""
-    await safe_send_message(
-        message,
-        "🎙 Функция тестирования голосов в разработке",
-        delete_previous=True
-    )
-
-async def test_voice_send_async(message: types.Message):
-    """Асинхронное тестирование отправки голоса"""
-    status_msg = await safe_send_message(
-        message,
-        "🎧 Тестирую отправку голоса...",
-        delete_previous=True
-    )
-    
-    test_text = "Привет! Это тестовое голосовое сообщение."
-    results = []
-    
-    for mode in ["coach", "psychologist", "trainer"]:
-        audio = await text_to_speech(test_text, mode)
-        if audio:
-            success = await send_voice_to_max(message.chat.id, audio, f"Тест режима {mode}")
-            if success:
-                results.append(f"✅ {COMMUNICATION_MODES[mode]['display_name']} (отправлен)")
-            else:
-                results.append(f"⚠️ {COMMUNICATION_MODES[mode]['display_name']} (ошибка отправки)")
-        else:
-            results.append(f"❌ {COMMUNICATION_MODES[mode]['display_name']} (не сгенерирован)")
-        await asyncio.sleep(1)
-    
-    await safe_delete_message(message.chat.id, status_msg.message_id)
-    await safe_send_message(
-        message,
-        "📊 Результаты тестирования отправки голоса:\n" + "\n".join(results),
-        delete_previous=True
-    )
-
-async def show_weekend_ideas(message: types.Message, user_id: int):
-    """Показывает идеи на выходные"""
-    data = user_data.get(user_id, {})
-    context = user_contexts.get(user_id)
-    user_name = user_names.get(user_id, "друг")
-    
-    # Получаем scores из данных
-    scores = {}
-    for k in VECTORS:
-        levels = data.get("behavioral_levels", {}).get(k, [])
-        scores[k] = sum(levels) / len(levels) if levels else 3.0
-    
-    profile_data = data.get("profile_data", {})
-    
-    # Отправляем статусное сообщение
-    status_msg = await safe_send_message(
-        message,
-        "🎨 Генерирую идеи специально для тебя...\n\nЭто займёт несколько секунд.",
-        delete_previous=True
-    )
-    
-    try:
-        ideas_text = await weekend_planner.get_weekend_ideas(
-            user_id=user_id,
-            user_name=user_name,
-            scores=scores,
-            profile_data=profile_data,
-            context=context
-        )
-        
-        await safe_delete_message(message.chat.id, status_msg.message_id)
-        
-        keyboard = get_weekend_ideas_keyboard()
-        
-        await safe_send_message(
-            message,
-            ideas_text,
-            reply_markup=keyboard,
-            delete_previous=True
-        )
-    except Exception as e:
-        logger.error(f"Ошибка генерации идей: {e}")
-        await safe_delete_message(message.chat.id, status_msg.message_id)
-        await safe_send_message(
-            message,
-            "😔 Что-то пошло не так. Попробуй позже.",
-            delete_previous=True
-        )
 
 # ============================================
 # ФУНКЦИЯ show_context_complete (вынесена из stages.py)
@@ -2004,6 +1621,216 @@ def show_main_menu_after_mode(message: types.Message, context: UserContext):
     safe_send_message(message, text, reply_markup=keyboard, delete_previous=True, keep_last=1)
 
 # ============================================
+# ОБРАБОТЧИКИ КОМАНД
+# ============================================
+
+@bot.message_handler(commands=['start'])
+def cmd_start(message: types.Message):
+    from handlers.start import cmd_start
+    cmd_start(message)
+
+@bot.message_handler(commands=['menu'])
+def cmd_menu(message: types.Message):
+    from handlers.start import cmd_menu
+    cmd_menu(message)
+
+@bot.message_handler(commands=['mode'])
+def cmd_mode(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in user_contexts:
+        user_contexts[user_id] = UserContext(user_id)
+    show_mode_selection(message)
+
+@bot.message_handler(commands=['stats'])
+def cmd_stats(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        safe_send_message(message, "⛔ Доступ запрещен")
+        return
+    safe_send_message(message, stats.get_stats_text())
+
+@bot.message_handler(commands=['apistatus'])
+def cmd_apistatus(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        safe_send_message(message, "⛔ Доступ запрещен")
+        return
+    text = f"📊 Статус API:\n\n"
+    text += f"• DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}\n"
+    text += f"• Deepgram: {'✅' if DEEPGRAM_API_KEY else '❌'}\n"
+    text += f"• Yandex TTS: {'✅' if YANDEX_API_KEY else '❌'}\n"
+    text += f"• OpenWeather: {'✅' if OPENWEATHER_API_KEY else '❌'}\n\n"
+    safe_send_message(message, text)
+
+@bot.message_handler(commands=['context'])
+def cmd_context(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in user_contexts:
+        user_contexts[user_id] = UserContext(user_id)
+    context = user_contexts[user_id]
+    context.city = None
+    context.gender = None
+    context.age = None
+    context.weather_cache = {}
+    safe_send_message(message, "🔄 Давайте обновим ваш контекст")
+    start_context(message)
+
+@bot.message_handler(commands=['test_yandex'])
+def cmd_test_yandex(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        safe_send_message(message, "⛔ Доступ запрещен")
+        return
+    def run_async():
+        asyncio.run(test_yandex_async(message))
+    threading.Thread(target=run_async, daemon=True).start()
+
+@bot.message_handler(commands=['test_weather'])
+def cmd_test_weather(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        safe_send_message(message, "⛔ Доступ запрещен")
+        return
+    def run_async():
+        asyncio.run(test_weather_async(message))
+    threading.Thread(target=run_async, daemon=True).start()
+
+@bot.message_handler(commands=['test_voices'])
+def cmd_test_voices(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        safe_send_message(message, "⛔ Доступ запрещен")
+        return
+    def run_async():
+        asyncio.run(test_voices_async(message))
+    threading.Thread(target=run_async, daemon=True).start()
+
+@bot.message_handler(commands=['test_voice_send'])
+def cmd_test_voice_send(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        safe_send_message(message, "⛔ Доступ запрещен")
+        return
+    def run_async():
+        asyncio.run(test_voice_send_async(message))
+    threading.Thread(target=run_async, daemon=True).start()
+
+@bot.message_handler(commands=['weekend'])
+def cmd_weekend(message: types.Message):
+    user_id = message.from_user.id
+    data = user_data.get(user_id, {})
+    if not data.get("profile_data") and not data.get("ai_generated_profile"):
+        safe_send_message(message, "❓ Сначала нужно пройти тест, чтобы я понимал твой профиль. Используй /start", delete_previous=True)
+        return
+    def run_async():
+        asyncio.run(show_weekend_ideas(message, user_id))
+    threading.Thread(target=run_async, daemon=True).start()
+
+@bot.message_handler(commands=['dbstats'])
+def cmd_dbstats(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        safe_send_message(message, "⛔ Доступ запрещен")
+        return
+    from state import get_stats
+    stats_data = get_stats()
+    text = "📊 **Статистика БД в памяти:**\n\n"
+    text += f"👤 Пользователей с данными: {stats_data['users_in_data']}\n"
+    text += f"📍 Контекстов: {stats_data['users_in_contexts']}\n"
+    text += f"🗺 Маршрутов: {stats_data['users_in_routes']}\n"
+    text += f"🔄 В состояниях: {stats_data['users_in_states']}\n"
+    text += f"📛 С именами: {stats_data['users_with_names']}\n"
+    text += f"✨ Всего уникальных: {stats_data['total_unique']}"
+    safe_send_message(message, text, parse_mode='Markdown')
+
+# ============================================
+# АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ ТЕСТИРОВАНИЯ
+# ============================================
+
+async def test_yandex_async(message: types.Message):
+    status_msg = await safe_send_message(message, "🎧 Тестирую Yandex TTS...", delete_previous=True)
+    test_text = "Привет! Это тестовое голосовое сообщение."
+    results = []
+    for mode in ["coach", "psychologist", "trainer"]:
+        audio = await text_to_speech(test_text, mode)
+        if audio:
+            results.append(f"✅ {COMMUNICATION_MODES[mode]['display_name']}")
+        else:
+            results.append(f"❌ {COMMUNICATION_MODES[mode]['display_name']}")
+        await asyncio.sleep(0.5)
+    await safe_delete_message(message.chat.id, status_msg.message_id)
+    await safe_send_message(message, "📊 Результаты тестирования Yandex TTS:\n" + "\n".join(results), delete_previous=True)
+
+async def test_weather_async(message: types.Message):
+    if not OPENWEATHER_API_KEY:
+        await safe_send_message(message, "❌ OPENWEATHER_API_KEY не настроен", delete_previous=True)
+        return
+    test_city = "Москва"
+    status_msg = await safe_send_message(message, f"🌍 Тестирую погоду для города {test_city}...", delete_previous=True)
+    try:
+        from services import get_http_client
+        url = f"http://api.openweathermap.org/data/2.5/weather?q={test_city}&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
+        client = await get_http_client()
+        response = await client.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            temp = data['main']['temp']
+            feels_like = data['main']['feels_like']
+            desc = data['weather'][0]['description']
+            humidity = data['main']['humidity']
+            wind = data['wind']['speed']
+            text = f"✅ Погода работает!\n\n📍 Город: {test_city}\n🌡 Температура: {temp}°C (ощущается как {feels_like}°C)\n☁️ Описание: {desc}\n💧 Влажность: {humidity}%\n💨 Ветер: {wind} м/с"
+            await safe_delete_message(message.chat.id, status_msg.message_id)
+            await safe_send_message(message, text, delete_previous=True)
+        else:
+            error_text = response.text
+            await safe_delete_message(message.chat.id, status_msg.message_id)
+            await safe_send_message(message, f"❌ Ошибка {response.status_code}: {error_text[:200]}", delete_previous=True)
+    except Exception as e:
+        await safe_delete_message(message.chat.id, status_msg.message_id)
+        await safe_send_message(message, f"❌ Ошибка: {e}", delete_previous=True)
+
+async def test_voices_async(message: types.Message):
+    await safe_send_message(message, "🎙 Функция тестирования голосов в разработке", delete_previous=True)
+
+async def test_voice_send_async(message: types.Message):
+    status_msg = await safe_send_message(message, "🎧 Тестирую отправку голоса...", delete_previous=True)
+    test_text = "Привет! Это тестовое голосовое сообщение."
+    results = []
+    for mode in ["coach", "psychologist", "trainer"]:
+        audio = await text_to_speech(test_text, mode)
+        if audio:
+            success = await send_voice_to_max(message.chat.id, audio, f"Тест режима {mode}")
+            if success:
+                results.append(f"✅ {COMMUNICATION_MODES[mode]['display_name']} (отправлен)")
+            else:
+                results.append(f"⚠️ {COMMUNICATION_MODES[mode]['display_name']} (ошибка отправки)")
+        else:
+            results.append(f"❌ {COMMUNICATION_MODES[mode]['display_name']} (не сгенерирован)")
+        await asyncio.sleep(1)
+    await safe_delete_message(message.chat.id, status_msg.message_id)
+    await safe_send_message(message, "📊 Результаты тестирования отправки голоса:\n" + "\n".join(results), delete_previous=True)
+
+async def show_weekend_ideas(message: types.Message, user_id: int):
+    data = user_data.get(user_id, {})
+    context = user_contexts.get(user_id)
+    user_name = user_names.get(user_id, "друг")
+    scores = {}
+    for k in VECTORS:
+        levels = data.get("behavioral_levels", {}).get(k, [])
+        scores[k] = sum(levels) / len(levels) if levels else 3.0
+    profile_data = data.get("profile_data", {})
+    status_msg = await safe_send_message(message, "🎨 Генерирую идеи специально для тебя...\n\nЭто займёт несколько секунд.", delete_previous=True)
+    try:
+        ideas_text = await weekend_planner.get_weekend_ideas(
+            user_id=user_id,
+            user_name=user_name,
+            scores=scores,
+            profile_data=profile_data,
+            context=context
+        )
+        await safe_delete_message(message.chat.id, status_msg.message_id)
+        keyboard = get_weekend_ideas_keyboard()
+        await safe_send_message(message, ideas_text, reply_markup=keyboard, delete_previous=True)
+    except Exception as e:
+        logger.error(f"Ошибка генерации идей: {e}")
+        await safe_delete_message(message.chat.id, status_msg.message_id)
+        await safe_send_message(message, "😔 Что-то пошло не так. Попробуй позже.", delete_previous=True)
+
+# ============================================
 # CALLBACK-ОБРАБОТЧИК
 # ============================================
 
@@ -2027,107 +1854,60 @@ def handle_goal_context_wrapper(message: types.Message):
 def handle_context_message_wrapper(message: types.Message):
     handled = handle_context_message(message)
     if not handled:
-        safe_send_message(
-            message,
-            "Пожалуйста, ответьте на вопрос или используйте кнопки",
-            delete_previous=True,
-            keep_last=1
-        )
-
-# ============================================
-# ОБРАБОТЧИКИ ТЕКСТОВЫХ СООБЩЕНИЙ ПО СОСТОЯНИЯМ
-# ============================================
+        safe_send_message(message, "Пожалуйста, ответьте на вопрос или используйте кнопки", delete_previous=True, keep_last=1)
 
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_question)
 def handle_question_message(message: types.Message):
-    """Обрабатывает текстовые сообщения в состоянии ожидания вопроса"""
     user_id = message.from_user.id
     text = message.text
-    
     logger.info(f"❓ Получен вопрос от пользователя {user_id} в состоянии awaiting_question: {text[:50]}...")
-    
     def run_sync():
-        # Импортируем синхронную функцию из questions.py
         from handlers.questions import process_text_question_sync
         process_text_question_sync(message, user_id, text)
-    
-    # Запускаем в отдельном потоке (без asyncio.run)
     threading.Thread(target=run_sync, daemon=True).start()
-
 
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_custom_goal)
 def handle_custom_goal_message(message: types.Message):
-    """Обрабатывает пользовательскую цель"""
     user_id = message.from_user.id
     text = message.text
-    
     logger.info(f"🎯 Получена пользовательская цель от пользователя {user_id}: {text[:50]}...")
-    
     def run_async():
         asyncio.run(process_custom_goal_async(message, user_id, text))
-    
     threading.Thread(target=run_async, daemon=True).start()
-
 
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.pretest_question)
 def handle_pretest_question(message: types.Message):
-    """Обрабатывает вопросы до теста"""
     user_id = message.from_user.id
     text = message.text
-    
     logger.info(f"❓ Получен вопрос до теста от пользователя {user_id}")
-    
-    safe_send_message(
-        message,
-        "Спасибо за вопрос. Чтобы ответить точнее, мне нужно знать ваш профиль. "
-        "Пройдите тест — это займёт 15 минут.",
-        delete_previous=True
-    )
+    safe_send_message(message, "Спасибо за вопрос. Чтобы ответить точнее, мне нужно знать ваш профиль. Пройдите тест — это займёт 15 минут.", delete_previous=True)
     clear_state(user_id)
-
-
-# ============================================
-# ОБРАБОТЧИК ГОЛОСОВЫХ СООБЩЕНИЙ
-# ============================================
 
 @bot.message_handler(content_types=['voice'])
 def handle_voice_wrapper(message: types.Message):
-    """Обработчик голосовых сообщений"""
     def run_async():
         asyncio.run(handle_voice_message(message))
-    
     threading.Thread(target=run_async, daemon=True).start()
-
 
 @bot.message_handler(func=lambda message: True)
 def handle_unknown_message(message: types.Message):
     user_id = message.from_user.id
     state = get_state(user_id)
-    
     if state == TestStates.awaiting_context:
         return
-    
     keyboard = InlineKeyboardMarkup()
     keyboard.row(
         InlineKeyboardButton("🧠 К ПОРТРЕТУ", callback_data="show_results"),
         InlineKeyboardButton("🎯 ЧЕМ ПОМОЧЬ", callback_data="show_help")
     )
     keyboard.row(InlineKeyboardButton("❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions"))
-    
-    safe_send_message(
-        message,
-        "Используйте кнопки для навигации:",
-        reply_markup=keyboard,
-        keep_last=1
-    )
-
+    safe_send_message(message, "Используйте кнопки для навигации:", reply_markup=keyboard, keep_last=1)
 
 # ============================================
 # АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ ОБРАБОТКИ СООБЩЕНИЙ
 # ============================================
 
 async def process_custom_goal_async(message: types.Message, user_id: int, text: str):
-    """Асинхронная обработка пользовательской цели"""
     try:
         from handlers.goals import process_custom_goal_async as process_goal
         await process_goal(message, user_id, text)
@@ -2135,35 +1915,46 @@ async def process_custom_goal_async(message: types.Message, user_id: int, text: 
         logger.error(f"❌ Ошибка при обработке пользовательской цели: {e}")
         import traceback
         traceback.print_exc()
-        await safe_send_message(
-            message,
-            "❌ Произошла ошибка при обработке цели. Пожалуйста, попробуйте еще раз.",
-            delete_previous=True
-        )
+        await safe_send_message(message, "❌ Произошла ошибка при обработке цели. Пожалуйста, попробуйте еще раз.", delete_previous=True)
 
+# ============================================
+# ФУНКЦИЯ ПРОВЕРКИ API ПРИ СТАРТЕ
+# ============================================
+
+async def check_api_on_startup():
+    logger.info("🔍 Проверка API при запуске...")
+    results = {"deepseek": False, "deepgram": False, "yandex": False, "openweather": False}
+    
+    if DEEPSEEK_API_KEY:
+        try:
+            test_response = await call_deepseek("Ответь 'OK' одним словом", max_tokens=10)
+            results["deepseek"] = test_response is not None
+            logger.info(f"✅ DeepSeek API: {'работает' if results['deepseek'] else 'ошибка'}")
+        except Exception as e:
+            logger.error(f"❌ DeepSeek API ошибка: {e}")
+    
+    if DEEPGRAM_API_KEY:
+        results["deepgram"] = True
+        logger.info("✅ Deepgram API ключ найден")
+    if YANDEX_API_KEY:
+        results["yandex"] = True
+        logger.info("✅ Yandex TTS ключ найден")
+    if OPENWEATHER_API_KEY:
+        results["openweather"] = True
+        logger.info("✅ OpenWeather API ключ найден")
+    
+    return results
 
 # ============================================
 # ФУНКЦИЯ ЗАПУСКА FASTAPI
 # ============================================
 
 def run_fastapi():
-    """Запускает FastAPI сервер в отдельном потоке"""
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск FastAPI на порту {port}")
-    
-    uvicorn.run(
-        api_app, 
-        host="0.0.0.0", 
-        port=port,
-        log_level="info"
-    )
-
-# ============================================
-# ФУНКЦИЯ ЗАПУСКА АСИНХРОННЫХ ЗАДАЧ
-# ============================================
+    uvicorn.run(api_app, host="0.0.0.0", port=port, log_level="info")
 
 def run_async_tasks():
-    """Запускает асинхронные задачи в отдельном потоке"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -2171,24 +1962,18 @@ def run_async_tasks():
     finally:
         loop.close()
 
-# ============================================
-# ЗАПУСК БОТА
-# ============================================
-
 def cleanup_resources():
     is_render = os.environ.get('RENDER') is not None
     try:
         if not is_render and os.path.exists(PID_FILE):
             os.remove(PID_FILE)
             logger.info(f"🗑️ Удален PID файл {PID_FILE}")
-        
         if hasattr(check_single_instance, 'lock_fp'):
             try:
                 check_single_instance.lock_fp.close()
                 logger.info("🔒 Закрыт файл блокировки")
             except:
                 pass
-        
         if not is_render and os.path.exists(LOCK_FILE):
             os.remove(LOCK_FILE)
             logger.info(f"🗑️ Удален файл блокировки {LOCK_FILE}")
@@ -2196,29 +1981,18 @@ def cleanup_resources():
         logger.error(f"❌ Ошибка при очистке ресурсов: {e}")
 
 async def shutdown_handler():
-    """Обработчик завершения работы - сохраняет все данные в БД"""
     logger.info("🛑 Завершение работы, сохраняем данные в БД...")
-    
     try:
         from state import save_all_users_to_db
-        # ⚠️ ИСПРАВЛЕНО: убрали аргумент db
-        saved_count = save_all_users_to_db()  # ← без аргумента!
+        saved_count = save_all_users_to_db()
         logger.info(f"✅ Сохранено {saved_count} пользователей")
     except Exception as e:
         logger.error(f"❌ Ошибка при сохранении: {e}")
-    
     try:
-        # Закрываем БД - напрямую
         await close_db()
         logger.info("✅ База данных закрыта")
     except Exception as e:
         logger.error(f"❌ Ошибка при закрытии БД: {e}")
-    
-    # Останавливаем цикл БД - теперь это делает db_loop_manager
-    # global db_loop
-    # if db_loop:
-    #     db_loop.call_soon_threadsafe(db_loop.stop)
-    #     logger.info("🔒 Цикл событий БД остановлен")
 
 def main():
     print("\n" + "="*80)
@@ -2242,41 +2016,27 @@ def main():
     
     logger.info("🚀 Бот для MAX запущен!")
     
-    # ⚠️ init_db_loop() УДАЛЕН - теперь инициализация происходит через db_loop_manager в db_instance.py
-    # init_db_loop()
-    
-    # Создаем новый event loop для основного потока
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
-    # Инициализируем БД - напрямую, без run_db_coro
     try:
-        # ⚠️ run_db_coro УДАЛЕН
         loop.run_until_complete(init_database())
         logger.info("✅ База данных инициализирована")
     except Exception as e:
         logger.error(f"❌ Ошибка при инициализации БД: {e}")
         logger.warning("⚠️ Продолжаем работу БЕЗ PostgreSQL (только память)")
     
-    # Запускаем планировщик
     scheduler.start()
-    
-    # Запускаем асинхронные задачи в отдельном потоке
     async_thread = threading.Thread(target=run_async_tasks, daemon=True)
     async_thread.start()
-    
-    # Запускаем FastAPI в отдельном потоке
     api_thread = threading.Thread(target=run_fastapi, daemon=True)
     api_thread.start()
     logger.info("✅ FastAPI сервер запущен")
     
-    # Добавляем обработчик сигналов
     try:
         import signal
-        
         def signal_handler():
             asyncio.create_task(shutdown_handler())
-        
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, signal_handler)
     except Exception as e:
@@ -2297,7 +2057,6 @@ def main():
             except Exception as e:
                 retry_count += 1
                 logger.error(f"❌ Ошибка: {e}")
-                
                 if retry_count < max_retries:
                     delay = random.randint(3, 7)
                     logger.info(f"🔄 Перезапуск {retry_count}/{max_retries} через {delay}с...")
