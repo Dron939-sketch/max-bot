@@ -2,15 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики профиля пользователя для MAX
-Версия 2.7 - ИСПРАВЛЕНЫ ВЫЗОВЫ safe_send_message
-ПОЛНАЯ ВЕРСИЯ СО ВСЕМИ ФУНКЦИЯМИ
+Версия 2.8 - ИСПРАВЛЕНО: синхронные вызовы БД через sync_db
 """
 
 import logging
 import asyncio
 import time
 import traceback
-import threading  # ✅ ДОБАВЛЕНО
 from typing import Optional, List, Dict, Any
 
 from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -25,8 +23,8 @@ from formatters import (
     clean_text_for_safe_display, ensure_full_width
 )
 
-# ✅ ИМПОРТ ДЛЯ БАЗЫ ДАННЫХ
-from db_instance import save_user_to_db, save_test_result_to_db, ensure_db_connection
+# ✅ ИСПРАВЛЕНО: импорт из db_sync
+from db_sync import sync_db
 
 # Убираем прямой импорт из main, создаем глобальную переменную
 morning_manager = None
@@ -43,28 +41,8 @@ logger = logging.getLogger(__name__)
 _profile_generation_in_progress = {}
 
 # ============================================
-# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# УДАЛЕНО: run_async_task - больше не нужна
 # ============================================
-
-def run_async_task(coro_func, *args, **kwargs):
-    """
-    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
-    """
-    def _wrapper():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # Проверяем соединение с БД перед выполнением
-            if 'db' in str(coro_func) or 'save' in str(coro_func) or 'log' in str(coro_func):
-                loop.run_until_complete(ensure_db_connection())
-            coro = coro_func(*args, **kwargs)
-            loop.run_until_complete(coro)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
-        finally:
-            loop.close()
-    
-    threading.Thread(target=_wrapper, daemon=True).start()
 
 # ============================================
 # ФУНКЦИЯ ДЛЯ РАЗБИВКИ ДЛИННЫХ СООБЩЕНИЙ
@@ -415,26 +393,72 @@ def show_preliminary_profile(message: Message, user_id: int):
     set_state(user_id, TestStates.profile_confirmation)
 
 # ============================================
-# ✅ ДОБАВЛЕНО: ФУНКЦИЯ СОХРАНЕНИЯ ПРОФИЛЯ В БД
+# ✅ ИСПРАВЛЕНО: СИНХРОННАЯ ФУНКЦИЯ СОХРАНЕНИЯ ПРОФИЛЯ В БД
 # ============================================
 
-async def save_profile_to_db(user_id: int):
-    """Сохраняет профиль пользователя в БД"""
+def save_profile_to_db_sync(user_id: int):
+    """Синхронное сохранение профиля пользователя в БД"""
     try:
-        # Проверяем соединение с БД
-        await ensure_db_connection()
+        data = user_data.get(user_id, {})
         
-        # Сохраняем как результат теста
-        await save_test_result_to_db(user_id, 'full_profile', user_data)
+        if not data:
+            logger.warning(f"⚠️ Нет данных для пользователя {user_id} при сохранении профиля")
+            return False
         
-        # Сохраняем пользователя целиком
-        await save_user_to_db(user_id, user_data, user_contexts, {})
+        # Получаем profile_code
+        profile_code = None
+        if data.get("profile_data"):
+            profile_code = data["profile_data"].get("display_name")
+        elif data.get("ai_generated_profile"):
+            import re
+            match = re.search(r'СБ-\d+_ТФ-\d+_УБ-\d+_ЧВ-\d+', data.get("ai_generated_profile", ""))
+            if match:
+                profile_code = match.group(0)
         
-        logger.info(f"💾 Профиль пользователя {user_id} сохранен в БД")
+        # Сохраняем результат теста
+        test_id = sync_db.save_test_result(
+            user_id=user_id,
+            test_type='full_profile',
+            results=data,
+            profile_code=profile_code,
+            perception_type=data.get("perception_type"),
+            thinking_level=data.get("thinking_level"),
+            vectors=data.get("behavioral_levels"),
+            deep_patterns=data.get("deep_patterns"),
+            confinement_model=data.get("confinement_model")
+        )
+        
+        # Сохраняем все ответы, если есть
+        all_answers = data.get("all_answers", [])
+        if all_answers and test_id:
+            for answer in all_answers:
+                sync_db.save_test_answer(
+                    user_id=user_id,
+                    test_result_id=test_id,
+                    stage=answer.get('stage', 0),
+                    question_index=answer.get('question_index', 0),
+                    question_text=answer.get('question', ''),
+                    answer_text=answer.get('answer', ''),
+                    answer_value=answer.get('option', ''),
+                    scores=answer.get('scores'),
+                    measures=answer.get('measures'),
+                    strategy=answer.get('strategy'),
+                    dilts=answer.get('dilts'),
+                    pattern=answer.get('pattern'),
+                    target=answer.get('target')
+                )
+        
+        # Сохраняем пользователя
+        sync_db.save_user_to_db(user_id)
+        
+        logger.info(f"💾 Профиль пользователя {user_id} сохранен в БД (test_id: {test_id})")
         return True
+        
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения профиля {user_id} в БД: {e}")
+        traceback.print_exc()
         return False
+
 
 # ============================================
 # АСИНХРОННЫЕ ВЕРСИИ ФУНКЦИЙ
@@ -446,7 +470,6 @@ async def show_ai_profile_async(message: Message, user_id: int):
     context = user_contexts.get(user_id)
     user_name = context.name if context and context.name else ""
     
-    # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
     status_msg = safe_send_message(
         message,
         "🧠 Анализирую данные и генерирую ваш психологический портрет...\n\nЭто займёт несколько секунд.",
@@ -468,8 +491,8 @@ async def show_ai_profile_async(message: Message, user_id: int):
                     user_data[user_id] = {}
                 user_data[user_id]["ai_generated_profile"] = ai_profile
                 
-                # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-                run_async_task(save_profile_to_db, user_id)
+                # ✅ ИСПРАВЛЕНО: синхронное сохранение
+                save_profile_to_db_sync(user_id)
         
         if status_msg:
             try:
@@ -531,7 +554,6 @@ async def show_ai_profile_async(message: Message, user_id: int):
                 try:
                     if i == len(merged_parts) - 1:
                         # Последняя часть с кнопками
-                        # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
                         safe_send_message(
                             message if i == 0 else None,
                             part,
@@ -543,7 +565,6 @@ async def show_ai_profile_async(message: Message, user_id: int):
                         logger.info(f"✅ Отправлена последняя часть {i+1} с кнопками")
                     else:
                         # Промежуточные части без кнопок
-                        # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
                         safe_send_message(
                             None,
                             part,
@@ -642,7 +663,6 @@ async def show_ai_profile_async(message: Message, user_id: int):
     )
     keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
     
-    # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
     safe_send_message(
         message,
         text,
@@ -658,7 +678,6 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
     context = user_contexts.get(user_id)
     user_name = context.name if context and context.name else ""
     
-    # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
     status_msg = safe_send_message(
         message,
         "🧠 Анализирую ваш профиль и формирую мысли психолога...\n\nЭто займёт несколько секунд.",
@@ -730,7 +749,6 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                 try:
                     if i == len(merged_parts) - 1:
                         # Последняя часть с кнопками
-                        # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
                         safe_send_message(
                             message if i == 0 else None,
                             part,
@@ -742,7 +760,6 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                         logger.info(f"✅ Отправлена последняя часть мысли {i+1} с кнопками")
                     else:
                         # Промежуточные части
-                        # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
                         safe_send_message(
                             None,
                             part,
@@ -758,11 +775,11 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                     logger.error(f"❌ Ошибка при отправке части мысли {i+1}: {e}")
                     continue
             
-            # ✅ ИСПРАВЛЕНО: Сохраняем мысль в БД через run_async_task
+            # ✅ ИСПРАВЛЕНО: синхронное сохранение
             if user_id not in user_data:
                 user_data[user_id] = {}
             user_data[user_id]["psychologist_thought"] = thought
-            run_async_task(save_user_to_db, user_id, user_data, user_contexts, {})
+            sync_db.save_user_to_db(user_id)
             
             logger.info(f"🎉 Все {len(merged_parts)} частей мысли успешно отправлены")
             return
@@ -807,7 +824,6 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
     keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
     
-    # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
     safe_send_message(
         message,
         text,
@@ -823,7 +839,6 @@ async def show_final_profile_async(message: Message, user_id: int):
     
     if user_id in _profile_generation_in_progress and _profile_generation_in_progress[user_id]:
         logger.info(f"⏳ Генерация профиля уже выполняется для пользователя {user_id}")
-        # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
         safe_send_message(
             message,
             "⏳ Ваш профиль уже генерируется, пожалуйста, подождите...",
@@ -838,7 +853,6 @@ async def show_final_profile_async(message: Message, user_id: int):
         await show_ai_profile_async(message, user_id)
         return
     
-    # ✅ ИСПРАВЛЕНО: убран await перед safe_send_message
     status_msg = safe_send_message(
         message,
         "🧠 Анализирую данные...\n\n"
@@ -873,8 +887,8 @@ async def show_final_profile_async(message: Message, user_id: int):
             user_data[user_id] = {}
         user_data[user_id]["ai_generated_profile"] = ai_profile
         
-        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-        run_async_task(save_profile_to_db, user_id)
+        # ✅ ИСПРАВЛЕНО: синхронное сохранение
+        save_profile_to_db_sync(user_id)
         
         if status_msg:
             try:
@@ -1034,5 +1048,5 @@ __all__ = [
     'show_old_final_profile',
     'show_preliminary_profile',
     'set_morning_manager',
-    'save_profile_to_db'
+    'save_profile_to_db_sync'
 ]
