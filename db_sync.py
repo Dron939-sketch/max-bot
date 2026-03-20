@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Синхронные обертки для работы с БД - для вызовов из любого потока
-ВЕРСИЯ 2.1 - ИСПРАВЛЕНО: add_reminder, get_user_test_results
+ВЕРСИЯ 2.1 - ИСПРАВЛЕНО: add_reminder, get_user_test_results, get_pending_reminders
 """
 
 import logging
@@ -14,12 +14,6 @@ from typing import Optional, Dict, Any, List
 from db_instance import db_loop_manager, db, save_user_to_db as db_save_user
 
 logger = logging.getLogger(__name__)
-
-# Включаем детальное логирование для отладки
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 
 
 class SyncDB:
@@ -73,23 +67,15 @@ class SyncDB:
     def save_user_to_db(user_id: int) -> bool:
         """
         Синхронное сохранение пользователя в БД.
-        С ДЕТАЛЬНЫМ ЛОГИРОВАНИЕМ
+        Напрямую вызываем синхронную функцию из db_instance
         """
         try:
-            logger.debug(f"🔍 save_user_to_db вызван для user {user_id}")
-            
             # db_save_user уже синхронная функция из db_instance
             result = db_save_user(user_id)
-            
-            if result is True:
-                logger.debug(f"✅ save_user_to_db: user {user_id} сохранен")
-            else:
-                logger.warning(f"⚠️ save_user_to_db: user {user_id} не сохранен, result={result}")
-            
             return result if result is not None else False
-            
         except Exception as e:
             logger.error(f"❌ Ошибка save_user_to_db: {e}")
+            import traceback
             traceback.print_exc()
             return False
     
@@ -161,6 +147,65 @@ class SyncDB:
             return []
     
     @staticmethod
+    def save_test_result(
+        user_id: int, 
+        test_type: str, 
+        results: Dict,
+        profile_code: str = None,
+        perception_type: str = None,
+        thinking_level: int = None,
+        vectors: Dict = None,
+        behavioral_levels: Dict = None,
+        deep_patterns: Dict = None,
+        confinement_model: Dict = None
+    ) -> Optional[int]:
+        """Синхронное сохранение результата теста"""
+        try:
+            from db_instance import save_test_result_to_db as async_save_test
+            async def _save():
+                return await async_save_test(
+                    user_id, test_type, results, profile_code,
+                    perception_type, thinking_level, vectors,
+                    behavioral_levels, deep_patterns, confinement_model
+                )
+            result = db_loop_manager.run_coro(_save(), timeout=30)
+            return result if result is not None else None
+        except Exception as e:
+            logger.error(f"❌ Ошибка save_test_result: {e}")
+            return None
+    
+    @staticmethod
+    def save_test_answer(
+        user_id: int,
+        test_result_id: Optional[int],
+        stage: int,
+        question_index: int,
+        question_text: str,
+        answer_text: str,
+        answer_value: str,
+        scores: Optional[Dict] = None,
+        measures: Optional[str] = None,
+        strategy: Optional[str] = None,
+        dilts: Optional[str] = None,
+        pattern: Optional[str] = None,
+        target: Optional[str] = None
+    ) -> bool:
+        """Синхронное сохранение ответа на тест"""
+        try:
+            async def _save():
+                await db.save_test_answer(
+                    user_id, test_result_id, stage, question_index,
+                    question_text, answer_text, answer_value,
+                    scores, measures, strategy, dilts, pattern, target
+                )
+                return True
+            result = db_loop_manager.run_coro(_save(), timeout=10)
+            return result if result is not None else False
+        except Exception as e:
+            logger.error(f"❌ Ошибка save_test_answer: {e}")
+            return False
+    
+    @staticmethod
     def get_cached_weekend_ideas(user_id: int) -> Optional[str]:
         """Синхронное получение кэшированных идей"""
         try:
@@ -195,6 +240,42 @@ class SyncDB:
         except Exception as e:
             logger.error(f"❌ Ошибка get_user_reminders: {e}")
             return []
+    
+    @staticmethod
+    def get_user_context(user_id: int) -> Optional[Dict[str, Any]]:
+        """Синхронное получение контекста пользователя"""
+        try:
+            async def _get():
+                return await db.load_user_context(user_id)
+            result = db_loop_manager.run_coro(_get(), timeout=10)
+            return result if result is not None else None
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_user_context: {e}")
+            return None
+    
+    @staticmethod
+    def get_user_data(user_id: int) -> Optional[Dict[str, Any]]:
+        """Синхронное получение данных пользователя"""
+        try:
+            async def _get():
+                return await db.load_user_data(user_id)
+            result = db_loop_manager.run_coro(_get(), timeout=10)
+            return result if result is not None else {}
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_user_data: {e}")
+            return {}
+    
+    @staticmethod
+    def get_telegram_user(user_id: int) -> Optional[Dict[str, Any]]:
+        """Синхронное получение информации о пользователе Telegram"""
+        try:
+            async def _get():
+                return await db.get_telegram_user(user_id)
+            result = db_loop_manager.run_coro(_get(), timeout=10)
+            return result if result is not None else None
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_telegram_user: {e}")
+            return None
 
 
 # Создаем глобальный экземпляр
