@@ -2,13 +2,12 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики выбора и подтверждения режима для MAX
-Версия 2.1 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
-ИСПРАВЛЕНО: все f-строки с кавычками
+Версия 2.2 - ИСПРАВЛЕНО: Добавлены call.answer() во все callback-обработчики
 """
 import logging
 import asyncio
 import time
-import threading  # ✅ ДОБАВЛЕНО
+import threading
 from maxibot import types
 from bot_instance import bot
 from config import COMMUNICATION_MODES
@@ -121,36 +120,66 @@ def cmd_menu(message: types.Message):
 
 
 # ============================================
-# CALLBACK-ОБРАБОТЧИКИ
+# CALLBACK-ОБРАБОТЧИКИ - ИСПРАВЛЕНО: добавлены call.answer()
 # ============================================
 
 @bot.callback_query_handler(func=lambda call: call.data == 'show_modes')
 def callback_show_modes(call: types.CallbackQuery):
     """Показать выбор режимов"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     show_mode_selection(call.message)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'set_mode_coach')
 def callback_set_mode_coach(call: types.CallbackQuery):
     """Установить режим КОУЧ"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     set_mode_coach(call)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'set_mode_psychologist')
 def callback_set_mode_psychologist(call: types.CallbackQuery):
     """Установить режим ПСИХОЛОГ"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     set_mode_psychologist(call)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'set_mode_trainer')
 def callback_set_mode_trainer(call: types.CallbackQuery):
     """Установить режим ТРЕНЕР"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     set_mode_trainer(call)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mode_'))
 def callback_mode_selected(call: types.CallbackQuery):
     """Обработка выбора режима (старый вариант, для совместимости)"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     user_id = call.from_user.id
     mode = call.data.replace('mode_', '')
     
@@ -176,18 +205,36 @@ def callback_mode_selected(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'back_to_modes')
 def callback_back_to_modes(call: types.CallbackQuery):
     """Вернуться к выбору режимов"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     show_mode_selection(call.message)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'back_to_mode_selected')
 def callback_back_to_mode_selected(call: types.CallbackQuery):
     """Возврат к экрану выбранного режима"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     back_to_mode_selected(call)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'start_test')
 def callback_start_test(call: types.CallbackQuery):
     """Начать тест после выбора режима"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     from .stages import show_stage_1_intro
     user_id = call.from_user.id
     state_data = get_state_data(user_id)
@@ -197,6 +244,12 @@ def callback_start_test(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'main_menu')
 def callback_main_menu(call: types.CallbackQuery):
     """Вернуться в главное меню"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     user_id = call.from_user.id
     context = get_user_context(user_id)
     
@@ -209,6 +262,12 @@ def callback_main_menu(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'back_to_main')
 def callback_back_to_main(call: types.CallbackQuery):
     """Вернуться в главное меню до теста"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     user_id = call.from_user.id
     context = get_user_context(user_id)
     
@@ -248,7 +307,7 @@ def set_mode_coach(call: types.CallbackQuery):
     # Показываем подтверждение
     show_mode_selected(call.message, "coach")
     
-    # Отвечаем на callback
+    # Отвечаем на callback (дополнительно)
     try:
         bot.answer_callback_query(call.id, "✅ Режим КОУЧ активирован")
     except:
@@ -277,7 +336,7 @@ def set_mode_psychologist(call: types.CallbackQuery):
     # Показываем подтверждение
     show_mode_selected(call.message, "psychologist")
     
-    # Отвечаем на callback
+    # Отвечаем на callback (дополнительно)
     try:
         bot.answer_callback_query(call.id, "✅ Режим ПСИХОЛОГ активирован")
     except:
@@ -306,7 +365,7 @@ def set_mode_trainer(call: types.CallbackQuery):
     # Показываем подтверждение
     show_mode_selected(call.message, "trainer")
     
-    # Отвечаем на callback
+    # Отвечаем на callback (дополнительно)
     try:
         bot.answer_callback_query(call.id, "✅ Режим ТРЕНЕР активирован")
     except:
