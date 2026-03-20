@@ -2256,5 +2256,87 @@ async def get_modes():
             content={"success": False, "error": str(e)}
         )
 
+# ============================================
+# ЭНДПОИНТ ДЛЯ УМНЫХ ВОПРОСОВ
+# ============================================
+
+@api_app.get("/api/smart-questions")
+async def get_smart_questions(user_id: int):
+    """
+    Получает умные вопросы для пользователя на основе его профиля
+    """
+    try:
+        user_id = int(user_id)
+        data = user_data.get(user_id, {})
+        
+        # Получаем scores из профиля
+        scores = {}
+        for k in ["СБ", "ТФ", "УБ", "ЧВ"]:
+            levels = data.get("behavioral_levels", {}).get(k, [])
+            scores[k] = sum(levels) / len(levels) if levels else 3.0
+        
+        # Генерируем вопросы
+        questions = []
+        
+        tf = scores.get("ТФ", 3)
+        sb = scores.get("СБ", 3)
+        ub = scores.get("УБ", 3)
+        cv = scores.get("ЧВ", 3)
+        
+        # Вопросы про деньги
+        if tf <= 2:
+            questions.append("Как начать зарабатывать, если нет денег?")
+            questions.append("Почему мне не везет с деньгами?")
+        elif tf <= 4:
+            questions.append("Как увеличить доход без новых вложений?")
+            questions.append("Как создать финансовую подушку?")
+        
+        # Вопросы про давление и конфликты
+        if sb <= 2:
+            questions.append("Как перестать бояться конфликтов?")
+            questions.append("Как научиться говорить 'нет'?")
+        elif sb <= 4:
+            questions.append("Почему я злюсь внутри, но молчу?")
+            questions.append("Как защищать границы без агрессии?")
+        
+        # Вопросы про понимание мира
+        if ub <= 2:
+            questions.append("Как понять, что происходит в жизни?")
+        elif ub == 4:
+            questions.append("Как перестать искать заговоры?")
+        
+        # Вопросы про отношения
+        if cv <= 2:
+            questions.append("Как перестать зависеть от других?")
+        elif cv <= 4:
+            questions.append("Почему отношения поверхностные?")
+        
+        # Общие вопросы, если не хватает
+        general = [
+            "С чего начать изменения?",
+            "Что мне делать с этой ситуацией?",
+            "Как не срываться на близких?"
+        ]
+        
+        while len(questions) < 5:
+            for q in general:
+                if q not in questions and len(questions) < 5:
+                    questions.append(q)
+        
+        # Ограничиваем 5 вопросами
+        questions = questions[:5]
+        
+        return JSONResponse({
+            "success": True,
+            "questions": questions
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_smart_questions: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e), "questions": []}
+        )
+
 if __name__ == "__main__":
     main()
