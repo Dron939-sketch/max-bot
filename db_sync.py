@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Синхронные обертки для работы с БД - для вызовов из любого потока
-ВЕРСИЯ 2.2 - ИСПРАВЛЕНО: прямой вызов save_telegram_user
+ВЕРСИЯ 2.3 - ИСПРАВЛЕНО: прямой вызов синхронных функций
 """
 
 import logging
@@ -12,7 +12,7 @@ import traceback
 from typing import Optional, Dict, Any, List
 
 from db_instance import db_loop_manager, db, save_user_to_db as db_save_user
-from db_instance import save_telegram_user as db_save_telegram_user  # 👈 ДОБАВЛЕНО
+from db_instance import save_telegram_user as db_save_telegram_user
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,6 @@ class SyncDB:
     ) -> bool:
         """Синхронное сохранение пользователя"""
         try:
-            # ✅ ПРЯМОЙ ВЫЗОВ СИНХРОННОЙ ФУНКЦИИ
             result = db_save_telegram_user(
                 user_id, username, first_name, last_name, language_code
             )
@@ -65,31 +64,37 @@ class SyncDB:
     
     @staticmethod
     def save_user_to_db(user_id: int) -> bool:
-        """
-        Синхронное сохранение пользователя в БД.
-        Напрямую вызываем синхронную функцию из db_instance
-        """
+        """Синхронное сохранение пользователя в БД"""
         try:
-            # db_save_user уже синхронная функция из db_instance
             result = db_save_user(user_id)
             return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка save_user_to_db: {e}")
-            import traceback
             traceback.print_exc()
             return False
     
     @staticmethod
     def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
-        """Синхронное логирование события"""
+        """
+        Синхронное логирование события
+        Использует прямой вызов синхронной функции
+        """
         try:
+            # Создаем корутину для логирования
             async def _log():
-                await db.log_event(user_id, event_type, event_data)
-                return True
+                try:
+                    await db.log_event(user_id, event_type, event_data)
+                    return True
+                except Exception as e:
+                    logger.error(f"❌ Ошибка в _log: {e}")
+                    return False
+            
+            # Запускаем через менеджер
             result = db_loop_manager.run_coro(_log(), timeout=5)
             return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка log_event: {e}")
+            traceback.print_exc()
             return False
     
     @staticmethod
