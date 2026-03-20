@@ -2,10 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики команды /start и начальных экранов для MAX
-ВЕРСИЯ 2.3 - ИСПРАВЛЕНО: Все parse_mode заменены на Markdown
+ВЕРСИЯ 2.4 - ИСПРАВЛЕНО: Добавлены call.answer() во все callback-обработчики
 ДОБАВЛЕНО: Загрузка пользователей из БД, автосохранение
 ИСПРАВЛЕНО: Все асинхронные вызовы обернуты в отдельные потоки с новым циклом событий
-ДОБАВЛЕНО: Проверка соединения с БД перед загрузкой
 """
 import logging
 import time
@@ -257,7 +256,7 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
                 message.chat.id,
                 text,
                 reply_markup=keyboard,
-                parse_mode='Markdown'  # ✅ ИСПРАВЛЕНО: HTML -> Markdown
+                parse_mode='Markdown'
             )
         except Exception as e:
             logger.error(f"❌ Ошибка отправки сообщения: {e}")
@@ -303,7 +302,7 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
                 message.chat.id,
                 welcome_text,
                 reply_markup=keyboard,
-                parse_mode='Markdown'  # ✅ ИСПРАВЛЕНО: HTML -> Markdown
+                parse_mode='Markdown'
             )
         except Exception as e:
             logger.error(f"❌ Ошибка отправки сообщения: {e}")
@@ -358,7 +357,7 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
             message.chat.id,
             text,
             reply_markup=keyboard,
-            parse_mode='Markdown'  # ✅ ИСПРАВЛЕНО: HTML -> Markdown
+            parse_mode='Markdown'
         )
     except Exception as e:
         logger.error(f"❌ Ошибка при показе меню: {e}")
@@ -416,12 +415,18 @@ def cmd_sync(message: Message):
 
 
 # ============================================
-# CALLBACK-ОБРАБОТЧИКИ
+# CALLBACK-ОБРАБОТЧИКИ - ИСПРАВЛЕНО: добавлены call.answer()
 # ============================================
 
 @bot.callback_query_handler(func=lambda call: call.data == 'start_context')
 def callback_start_context(call: CallbackQuery):
     """Начать заполнение контекста"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     from handlers.context import start_context
     start_context(call.message)
 
@@ -429,12 +434,24 @@ def callback_start_context(call: CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'why_details')
 def callback_why_details(call: CallbackQuery):
     """Показать детальную информацию о боте"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     show_why_details(call)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'restart_test')
 def callback_restart_test(call: CallbackQuery):
     """Перезапустить тест"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     user_id = call.from_user.id
     
     # Очищаем профиль в user_data
@@ -489,7 +506,7 @@ def callback_restart_test(call: CallbackQuery):
         call.message, 
         text, 
         reply_markup=keyboard, 
-        parse_mode='Markdown',  # ✅ ИСПРАВЛЕНО: HTML -> Markdown
+        parse_mode='Markdown',
         delete_previous=True
     )
 
@@ -497,6 +514,12 @@ def callback_restart_test(call: CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'show_profile')
 def callback_show_profile(call: CallbackQuery):
     """Показать профиль"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     from handlers.profile import show_profile
     show_profile(call.message, call.from_user.id)
 
@@ -504,6 +527,12 @@ def callback_show_profile(call: CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'show_modes')
 def callback_show_modes(call: CallbackQuery):
     """Показать выбор режимов"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     from handlers.modes import show_mode_selection
     show_mode_selection(call.message)
 
@@ -511,6 +540,12 @@ def callback_show_modes(call: CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'back_to_start')
 def callback_back_to_start(call: CallbackQuery):
     """Вернуться к начальному экрану"""
+    # ✅ Добавлен ответ на callback
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
+    
     # Создаем фейковое сообщение для cmd_start
     class FakeMessage:
         def __init__(self, user_id, chat_id, text):
@@ -574,7 +609,7 @@ def show_why_details(call: CallbackQuery):
         call.message, 
         text, 
         reply_markup=keyboard, 
-        parse_mode='Markdown',  # ✅ ИСПРАВЛЕНО: HTML -> Markdown
+        parse_mode='Markdown',
         delete_previous=True
     )
 
@@ -610,7 +645,7 @@ def show_intro(message: Message):
         message, 
         text, 
         reply_markup=keyboard, 
-        parse_mode='Markdown',  # ✅ ИСПРАВЛЕНО: HTML -> Markdown
+        parse_mode='Markdown',
         delete_previous=True
     )
 
