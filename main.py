@@ -2201,8 +2201,8 @@ async def shutdown_handler():
     
     try:
         from state import save_all_users_to_db
-        # ⚠️ run_db_coro УДАЛЕН - save_all_users_to_db теперь синхронная
-        saved_count = save_all_users_to_db(db)
+        # ⚠️ ИСПРАВЛЕНО: убрали аргумент db
+        saved_count = save_all_users_to_db()  # ← без аргумента!
         logger.info(f"✅ Сохранено {saved_count} пользователей")
     except Exception as e:
         logger.error(f"❌ Ошибка при сохранении: {e}")
