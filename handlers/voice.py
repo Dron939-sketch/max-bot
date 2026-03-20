@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик голосовых сообщений для MAX
-Версия 3.2 - С ИСПОЛЬЗОВАНИЕМ QUESTION_ANALYZER
+Версия 3.3 - С АЛИАСАМИ ДЛЯ СОВМЕСТИМОСТИ
 """
 
 import logging
@@ -161,6 +161,10 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
         return False
 
 
+# ✅ ДОБАВЛЯЕМ АЛИАС ДЛЯ СОВМЕСТИМОСТИ
+send_voice_to_max = send_voice_message
+
+
 def get_voice_message_url(message_id: int) -> Optional[str]:
     """Получает URL голосового сообщения"""
     try:
@@ -218,17 +222,6 @@ def download_voice_message(voice_url: str) -> Optional[bytes]:
 async def handle_voice_message(message: Message, state):
     """
     Обработка голосового сообщения - С ИСПОЛЬЗОВАНИЕМ QUESTION_ANALYZER
-    
-    Алгоритм:
-    1. Проверяем, пройден ли тест
-    2. Сохраняем голос во временный файл
-    3. Распознаём речь через Deepgram
-    4. Создаём анализатор вопроса (конфайнмент-модель)
-    5. Получаем глубинный анализ вопроса
-    6. Получаем текущий режим пользователя
-    7. Обрабатываем текст через режим (коуч/психолог/тренер) с учётом анализа
-    8. Отправляем текстовый ответ
-    9. Отправляем голосовой ответ
     """
     user_id = message.from_user.id
     
@@ -238,7 +231,6 @@ async def handle_voice_message(message: Message, state):
     
     # Проверяем, пройден ли тест
     def is_test_completed(user_data_dict):
-        """Проверяет, завершен ли тест"""
         if user_data_dict.get("profile_data"):
             return True
         if user_data_dict.get("ai_generated_profile"):
@@ -304,7 +296,7 @@ async def handle_voice_message(message: Message, state):
             "🔍 Использую конфайнтмент-модель..."
         )
         
-        # 🔥 СОЗДАЁМ АНАЛИЗАТОР ВОПРОСА (как в оригинальном коде)
+        # СОЗДАЁМ АНАЛИЗАТОР ВОПРОСА
         analyzer = create_analyzer_from_user_data(data, user_name)
         
         # Получаем глубинный анализ вопроса
@@ -348,18 +340,9 @@ async def handle_voice_message(message: Message, state):
             "🧠 Формирую ответ с учётом твоего профиля..."
         )
         
-        # Создаём режим и обрабатываем вопрос с учётом контекста
+        # Создаём режим и обрабатываем вопрос
         mode = get_mode(mode_name, user_id, data, context)
-        
-        # Если есть анализатор, добавляем рефлексию в историю для контекста
-        if analyzer and reflection:
-            # Временно добавляем анализ в историю для лучшего ответа
-            temp_history = mode.history.copy() if hasattr(mode, 'history') else []
-            # Используем стандартный процесс вопроса
-            result = mode.process_question(recognized_text)
-        else:
-            result = mode.process_question(recognized_text)
-        
+        result = mode.process_question(recognized_text)
         response = result["response"]
         
         # Обновляем данные с новой историей
@@ -388,11 +371,10 @@ async def handle_voice_message(message: Message, state):
         if result.get("suggestions"):
             suggestions_text = "\n\n" + "\n".join(result["suggestions"])
         
-        # Добавляем рефлексию, если есть и не включена в ответ
+        # Добавляем рефлексию, если есть
+        reflection_text = ""
         if reflection and "анализ" not in clean_response.lower() and "вижу" not in clean_response.lower():
             reflection_text = f"\n\n🔍 {reflection}"
-        else:
-            reflection_text = ""
         
         # Отправляем текстовый ответ
         mode_config = COMMUNICATION_MODES.get(mode_name, COMMUNICATION_MODES["coach"])
@@ -406,7 +388,7 @@ async def handle_voice_message(message: Message, state):
             delete_previous=True
         )
         
-        # Отправляем голосовой ответ (без рефлексии, чтобы не перегружать)
+        # Отправляем голосовой ответ
         audio_text = clean_response
         if len(audio_text) > 500:
             audio_text = audio_text[:500] + "..."
@@ -440,11 +422,8 @@ async def handle_voice_message(message: Message, state):
 
 
 async def send_voice_response(message: Message, text: str, mode: str = "coach"):
-    """
-    Отправляет голосовой ответ (синтезирует речь и отправляет)
-    """
+    """Отправляет голосовой ответ"""
     try:
-        # Очищаем текст от HTML и Markdown для синтеза
         import re
         clean_text = text
         clean_text = re.sub(r'<[^>]+>', '', clean_text)
@@ -453,7 +432,6 @@ async def send_voice_response(message: Message, text: str, mode: str = "coach"):
         clean_text = re.sub(r'\*(.*?)\*', r'\1', clean_text)
         clean_text = re.sub(r'_(.*?)_', r'\1', clean_text)
         
-        # Синтезируем речь
         audio_data = await text_to_speech(clean_text, mode)
         
         if audio_data:
@@ -465,9 +443,9 @@ async def send_voice_response(message: Message, text: str, mode: str = "coach"):
                 audio_file,
                 caption=f"🎙 {mode_config['emoji']} {mode_config['name']}"
             )
-            logger.info(f"✅ Голосовой ответ отправлен, режим: {mode}")
+            logger.info(f"✅ Голосовой ответ отправлен")
         else:
-            logger.warning(f"⚠️ Не удалось синтезировать речь для режима {mode}")
+            logger.warning(f"⚠️ Не удалось синтезировать речь")
             
     except Exception as e:
         logger.error(f"❌ Ошибка при отправке голосового ответа: {e}")
@@ -479,7 +457,7 @@ def get_cached_voice(text: str, voice_id: str, emotion: str = "neutral") -> Opti
     
     if cache_key in _voice_cache:
         cache_time = _voice_cache_time.get(cache_key, 0)
-        if time.time() - cache_time < 3600:  # 1 час
+        if time.time() - cache_time < 3600:
             logger.info(f"📦 Используем кэшированный голос")
             return _voice_cache[cache_key]
     
@@ -492,7 +470,6 @@ def cache_voice(text: str, voice_id: str, emotion: str, audio_data: bytes):
     _voice_cache[cache_key] = audio_data
     _voice_cache_time[cache_key] = time.time()
     
-    # Очищаем старый кэш
     if len(_voice_cache) > 100:
         oldest_key = min(_voice_cache_time.items(), key=lambda x: x[1])[0]
         del _voice_cache[oldest_key]
@@ -506,6 +483,7 @@ def cache_voice(text: str, voice_id: str, emotion: str, audio_data: bytes):
 
 __all__ = [
     'send_voice_message',
+    'send_voice_to_max',  # ✅ ДОБАВЛЯЕМ АЛИАС ДЛЯ ЭКСПОРТА
     'handle_voice_message',
     'send_voice_response',
     'get_voice_message_url',
