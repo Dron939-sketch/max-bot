@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Синхронные обертки для работы с БД - для вызовов из любого потока
-ВЕРСИЯ 2.1 - ИСПРАВЛЕНО: add_reminder, get_user_test_results, get_pending_reminders
+ВЕРСИЯ 2.2 - ИСПРАВЛЕНО: прямой вызов save_telegram_user
 """
 
 import logging
@@ -12,6 +12,7 @@ import traceback
 from typing import Optional, Dict, Any, List
 
 from db_instance import db_loop_manager, db, save_user_to_db as db_save_user
+from db_instance import save_telegram_user as db_save_telegram_user  # 👈 ДОБАВЛЕНО
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +41,10 @@ class SyncDB:
     ) -> bool:
         """Синхронное сохранение пользователя"""
         try:
-            async def _save():
-                return await db.save_telegram_user(
-                    user_id, username, first_name, last_name, language_code
-                )
-            result = db_loop_manager.run_coro(_save(), timeout=10)
+            # ✅ ПРЯМОЙ ВЫЗОВ СИНХРОННОЙ ФУНКЦИИ
+            result = db_save_telegram_user(
+                user_id, username, first_name, last_name, language_code
+            )
             return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка save_telegram_user: {e}")
@@ -96,7 +96,6 @@ class SyncDB:
     def add_reminder(user_id: int, reminder_type: str, remind_at, data: Dict = None) -> Optional[int]:
         """Синхронное добавление напоминания"""
         try:
-            # ✅ ИСПРАВЛЕНО: создаем корутину и запускаем через run_coro
             async def _add():
                 return await db.add_reminder(user_id, reminder_type, remind_at, data)
             
