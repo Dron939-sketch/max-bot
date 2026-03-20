@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики этапов тестирования (1-5) для MAX
-Версия 2.2 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
+Версия 2.3 - ИСПРАВЛЕНО: сохранение результатов теста в БД
 """
 
 import time
@@ -78,9 +78,26 @@ def run_async_task(coro_func, *args, **kwargs):
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ БД
 # ============================================
 
-async def save_test_result_to_db(user_id: int, test_type: str):
-    """Сохраняет результаты теста в БД"""
-    data = user_data.get(user_id, {})
+async def save_test_result_to_db(user_id: int, test_type: str, user_data_dict=None):
+    """
+    Сохраняет результаты теста в БД
+    
+    Args:
+        user_id: ID пользователя
+        test_type: тип теста ('full_profile' или другой)
+        user_data_dict: словарь с данными пользователей (если None, используется глобальный)
+    """
+    # ✅ ИСПРАВЛЕНО: используем переданный словарь или глобальный
+    if user_data_dict is None:
+        from state import user_data as global_user_data
+        user_data_dict = global_user_data
+        logger.debug(f"📦 Используем глобальный user_data для сохранения теста {user_id}")
+    
+    data = user_data_dict.get(user_id, {})
+    
+    if not data:
+        logger.warning(f"⚠️ Нет данных для пользователя {user_id} при сохранении теста")
+        return None
     
     # Получаем profile_code
     profile_code = None
@@ -92,40 +109,48 @@ async def save_test_result_to_db(user_id: int, test_type: str):
         if match:
             profile_code = match.group(0)
     
-    # Сохраняем результат теста
-    test_id = await db.save_test_result(
-        user_id=user_id,
-        test_type=test_type,
-        results=data,
-        profile_code=profile_code,
-        perception_type=data.get("perception_type"),
-        thinking_level=data.get("thinking_level"),
-        vectors=data.get("behavioral_levels"),
-        deep_patterns=data.get("deep_patterns"),
-        confinement_model=data.get("confinement_model")
-    )
-    
-    # Сохраняем все ответы, если есть
-    all_answers = data.get("all_answers", [])
-    if all_answers and test_id:
-        for answer in all_answers:
-            await db.save_test_answer(
-                user_id=user_id,
-                test_result_id=test_id,
-                stage=answer.get('stage', 0),
-                question_index=answer.get('question_index', 0),
-                question_text=answer.get('question', ''),
-                answer_text=answer.get('answer', ''),
-                answer_value=answer.get('option', ''),
-                scores=answer.get('scores'),
-                measures=answer.get('measures'),
-                strategy=answer.get('strategy'),
-                dilts=answer.get('dilts'),
-                pattern=answer.get('pattern'),
-                target=answer.get('target')
-            )
-    
-    return test_id
+    try:
+        # Сохраняем результат теста
+        test_id = await db.save_test_result(
+            user_id=user_id,
+            test_type=test_type,
+            results=data,
+            profile_code=profile_code,
+            perception_type=data.get("perception_type"),
+            thinking_level=data.get("thinking_level"),
+            vectors=data.get("behavioral_levels"),
+            deep_patterns=data.get("deep_patterns"),
+            confinement_model=data.get("confinement_model")
+        )
+        
+        # Сохраняем все ответы, если есть
+        all_answers = data.get("all_answers", [])
+        if all_answers and test_id:
+            for answer in all_answers:
+                await db.save_test_answer(
+                    user_id=user_id,
+                    test_result_id=test_id,
+                    stage=answer.get('stage', 0),
+                    question_index=answer.get('question_index', 0),
+                    question_text=answer.get('question', ''),
+                    answer_text=answer.get('answer', ''),
+                    answer_value=answer.get('option', ''),
+                    scores=answer.get('scores'),
+                    measures=answer.get('measures'),
+                    strategy=answer.get('strategy'),
+                    dilts=answer.get('dilts'),
+                    pattern=answer.get('pattern'),
+                    target=answer.get('target')
+                )
+        
+        logger.info(f"✅ Результаты теста для пользователя {user_id} сохранены (ID: {test_id})")
+        return test_id
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения результатов теста для {user_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 # ============================================
 # ДОБАВЛЕНА НЕДОСТАЮЩАЯ ФУНКЦИЯ
@@ -1578,7 +1603,8 @@ def finish_stage_5(message, user_id: int, state_data: dict):
     logger.info(f"✅ User {user_id}: Stage 5 complete")
     
     # ✅ ИСПРАВЛЕНО: Сохраняем в БД полный результат теста через run_async_task
-    run_async_task(save_test_result_to_db, user_id, 'full_profile')
+    # Передаем user_data явно, чтобы функция save_test_result_to_db могла его использовать
+    run_async_task(save_test_result_to_db, user_id, 'full_profile', user_data)
     run_async_task(save_user_to_db, user_id)
     
     try:
