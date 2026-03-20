@@ -9,6 +9,7 @@
 ИСПРАВЛЕНО: Город обрабатывается в отдельном потоке без зависаний
 ИСПРАВЛЕНО: Все parse_mode заменены на 'Markdown'
 ИСПРАВЛЕНО: Добавлено подробное логирование для отладки возраста
+ИСПРАВЛЕНО: Зависание после возраста - вызов show_context_complete в отдельном потоке
 """
 
 import logging
@@ -463,7 +464,7 @@ def handle_context_message(message: Message) -> bool:
         return True
     
     elif context.awaiting_context == "age":
-        # ========== ОБРАБОТКА ВОЗРАСТА С ПОДРОБНЫМ ЛОГИРОВАНИЕМ ==========
+        # ========== ОБРАБОТКА ВОЗРАСТА С ИСПРАВЛЕНИЕМ ЗАВИСАНИЯ ==========
         logger.info(f"📅 [AGE] Начинаем обработку возраста для user {user_id}")
         logger.info(f"📅 [AGE] Получен текст: '{text}'")
         
@@ -508,14 +509,21 @@ def handle_context_message(message: Message) -> bool:
                     logger.info(f"🎉 [AGE] Вопросов больше нет, вызываем show_context_complete")
                     logger.info(f"🎉 [AGE] Параметры: message type={type(message)}, context type={type(context)}")
                     
-                    # 👇 ВАЖНО: добавляем try-except вокруг вызова
-                    try:
-                        show_context_complete(message, context)
-                        logger.info(f"✅ [AGE] show_context_complete выполнена успешно")
-                    except Exception as e:
-                        logger.error(f"❌ [AGE] Ошибка в show_context_complete: {e}")
-                        import traceback
-                        traceback.print_exc()
+                    # 👇 ИСПРАВЛЕНО: Запускаем show_context_complete в отдельном потоке с задержкой
+                    def call_show_complete():
+                        """Вызывает show_context_complete в отдельном потоке"""
+                        try:
+                            logger.info(f"🎉 [AGE] Запускаем show_context_complete в отдельном потоке")
+                            show_context_complete(message, context)
+                            logger.info(f"✅ [AGE] show_context_complete выполнена успешно")
+                        except Exception as e:
+                            logger.error(f"❌ [AGE] Ошибка в show_context_complete: {e}")
+                            import traceback
+                            traceback.print_exc()
+                    
+                    # Запускаем в отдельном потоке с небольшой задержкой
+                    threading.Timer(0.5, call_show_complete).start()
+                    logger.info(f"✅ [AGE] Таймер на show_context_complete запущен")
             else:
                 logger.warning(f"⚠️ [AGE] Возраст вне диапазона: {age}")
                 safe_send_message(
