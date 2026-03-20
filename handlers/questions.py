@@ -1483,59 +1483,45 @@ def handle_smart_question(call: CallbackQuery, question_num: int):
 
 def show_question_input(call: CallbackQuery):
     """
-    Показывает экран ввода вопроса
+    Показывает экран ввода вопроса с новым текстом
     """
     user_id = call.from_user.id
+    user_name = get_user_name(user_id)
     user_data_dict = get_user_data_dict(user_id)
     context = get_user_context_obj(user_id)
-    user_name = get_user_name(user_id)
     
+    # Получаем профиль и режим для отображения
     profile_data = user_data_dict.get("profile_data", {})
-    profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
-    
+    profile_code = profile_data.get('display_name', '')
     mode = user_data_dict.get("communication_mode", "coach")
     mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
     
-    # Примеры вопросов для разных режимов
-    examples = {
-        "coach": [
-            "Как найти своё предназначение?",
-            "Что делать с неопределённостью?",
-            "Как перестать сомневаться?"
-        ],
-        "psychologist": [
-            "Почему реагирую на одни и те же триггеры?",
-            "Откуда этот сценарий в отношениях?",
-            "Как проработать детскую травму?"
-        ],
-        "trainer": [
-            "Как научиться быстро принимать решения?",
-            "Какие навыки нужны для роста дохода?",
-            "Как действовать в конфликте?"
-        ]
-    }
+    # Строим информационную строку (компактно)
+    info_line = ""
+    if profile_code:
+        info_line = f"**Твой профиль:** {profile_code}  |  **Режим:** {mode_config['emoji']} {mode_config['name']}\n\n"
     
-    mode_examples = examples.get(mode, examples["coach"])
-    examples_text = "\n".join([f"• {ex}" for ex in mode_examples])
-    
+    # ✅ НОВЫЙ ТЕКСТ ЭКРАНА
     text = f"""
-🧠 **ФРЕДИ: ЗАДАЙТЕ ВОПРОС**
+✏️ **ЗАДАВАЙТЕ ЛЮБОЙ ВОПРОС**
 
-{user_name}, **задавай вопрос.** Я отвечу с учётом твоего профиля и выбранного режима.
+{info_line}Если мой создатель знает ответ на него — значит и я вам что-то отвечу 😉
 
-**Твой профиль:** {profile_code}
-**Режим:** {mode_config['emoji']} {mode_config['name']}
+🎤 **Можно просто отправить голосовое сообщение** — я внимательно выслушаю.
 
-📝 **Напиши вопрос текстом** или отправь голосовое сообщение.
-
-👇 **Примеры:**
-{examples_text}
+👇 Напишите или нажмите на микрофон:
 """
     
     keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_mode_selected"))
+    keyboard.row(InlineKeyboardButton("◀️ Назад", callback_data="show_results"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
+    safe_send_message(
+        call.message,
+        text,
+        reply_markup=keyboard,
+        parse_mode='Markdown',
+        delete_previous=True
+    )
     
     # Устанавливаем состояние ожидания вопроса
     set_state(user_id, TestStates.awaiting_question)
