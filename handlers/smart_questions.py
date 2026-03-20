@@ -7,7 +7,7 @@
 
 import logging
 import asyncio
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
@@ -18,7 +18,6 @@ from state import get_state_data, update_state_data
 from confinement_model import level
 from profiles import VECTORS
 from services import text_to_speech
-
 from handlers.voice import send_voice_to_max
 from db_sync import sync_db
 
@@ -178,8 +177,7 @@ async def handle_smart_question(
     user_id: int,
     user_data_dict: Dict[str, Any],
     context_obj,
-    get_mode_func,
-    get_user_context_obj_func
+    get_mode_func
 ):
     """
     Обрабатывает выбранный умный вопрос
