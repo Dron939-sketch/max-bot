@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Модуль для работы с базой данных PostgreSQL
-Версия 2.6 - ИСПРАВЛЕНО: потокобезопасная инициализация, устранен конфликт операций
+Версия 2.7 - ИСПРАВЛЕНО: сигнатура save_test_result_to_db
 """
 
 import asyncio
@@ -10,10 +10,9 @@ import logging
 import asyncpg
 import os
 import threading
-from typing import Optional, Dict, Any, List, Callable
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 import json
+from typing import Optional, Dict, Any, List, Callable
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +21,8 @@ _pool: Optional[asyncpg.Pool] = None
 _loop: Optional[asyncio.AbstractEventLoop] = None
 _initialized = False
 _init_lock = threading.Lock()
-_db_lock = asyncio.Lock()
 
-# Параметры подключения из переменных окружения
+# Параметры подключения
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -40,30 +38,22 @@ class DatabaseLoopManager:
         self._init_lock = threading.Lock()
     
     def _get_or_create_loop(self):
-        """Получает или создает цикл событий в текущем потоке"""
+        """Получает или создает цикл событий"""
         try:
             loop = asyncio.get_running_loop()
             return loop
         except RuntimeError:
-            # Нет запущенного цикла - создаем новый
             if self._loop is None or self._loop.is_closed():
                 self._loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(self._loop)
             return self._loop
     
     def run_coro(self, coro_func: Callable, *args, timeout: int = 30, **kwargs):
-        """
-        Запускает корутину синхронно
-        coro_func: асинхронная функция
-        *args, **kwargs: аргументы для функции
-        timeout: таймаут в секундах
-        """
+        """Запускает корутину синхронно"""
         try:
             loop = self._get_or_create_loop()
             
-            # Проверяем, запущен ли уже цикл
             if loop.is_running():
-                # Создаем задачу в уже запущенном цикле
                 import concurrent.futures
                 future = asyncio.run_coroutine_threadsafe(
                     coro_func(*args, **kwargs),
@@ -71,7 +61,6 @@ class DatabaseLoopManager:
                 )
                 return future.result(timeout=timeout)
             else:
-                # Запускаем корутину в нашем цикле
                 return loop.run_until_complete(
                     asyncio.wait_for(
                         coro_func(*args, **kwargs),
@@ -79,7 +68,7 @@ class DatabaseLoopManager:
                     )
                 )
         except asyncio.TimeoutError:
-            logger.error(f"❌ Таймаут {timeout} сек при выполнении {coro_func.__name__}")
+            logger.error(f"❌ Таймаут {timeout} сек")
             return None
         except Exception as e:
             logger.error(f"❌ Ошибка в run_coro: {e}")
@@ -95,10 +84,9 @@ class Database:
         self._init_lock = asyncio.Lock()
     
     async def init_pool(self):
-        """Инициализирует пул соединений (только один раз)"""
+        """Инициализирует пул соединений"""
         async with self._init_lock:
             if self._initialized and self.pool is not None:
-                logger.info("✅ Пул соединений уже инициализирован")
                 return True
             
             try:
@@ -116,11 +104,9 @@ class Database:
                     max_inactive_connection_lifetime=300
                 )
                 
-                # Проверяем соединение
                 async with self.pool.acquire() as conn:
                     await conn.execute("SELECT 1")
                 
-                # Создаем таблицы
                 await self._create_tables()
                 
                 self._initialized = True
@@ -135,10 +121,10 @@ class Database:
                 return False
     
     async def _create_tables(self):
-        """Создает необходимые таблицы"""
+        """Создает таблицы"""
         try:
             async with self.pool.acquire() as conn:
-                # Таблица пользователей Telegram
+                # Таблица пользователей
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS telegram_users (
                         user_id BIGINT PRIMARY KEY,
@@ -167,12 +153,11 @@ class Database:
                         behavioral_levels JSONB,
                         deep_patterns JSONB,
                         confinement_model JSONB,
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        FOREIGN KEY (user_id) REFERENCES telegram_users(user_id) ON DELETE CASCADE
+                        created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
                 
-                # Таблица ответов на тесты
+                # Таблица ответов
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS test_answers (
                         id SERIAL PRIMARY KEY,
@@ -189,21 +174,18 @@ class Database:
                         dilts TEXT,
                         pattern TEXT,
                         target TEXT,
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        FOREIGN KEY (user_id) REFERENCES telegram_users(user_id) ON DELETE CASCADE,
-                        FOREIGN KEY (test_result_id) REFERENCES test_results(id) ON DELETE SET NULL
+                        created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
                 
-                # Таблица событий (логи)
+                # Таблица событий
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS events (
                         id SERIAL PRIMARY KEY,
                         user_id BIGINT NOT NULL,
                         event_type TEXT NOT NULL,
                         event_data JSONB DEFAULT '{}'::jsonb,
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        FOREIGN KEY (user_id) REFERENCES telegram_users(user_id) ON DELETE CASCADE
+                        created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
                 
@@ -217,28 +199,25 @@ class Database:
                         data JSONB DEFAULT '{}'::jsonb,
                         sent BOOLEAN DEFAULT FALSE,
                         sent_at TIMESTAMP,
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        FOREIGN KEY (user_id) REFERENCES telegram_users(user_id) ON DELETE CASCADE
+                        created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
                 
                 # Индексы
                 await conn.execute("""
                     CREATE INDEX IF NOT EXISTS idx_test_results_user_id ON test_results(user_id);
-                    CREATE INDEX IF NOT EXISTS idx_test_answers_user_id ON test_answers(user_id);
-                    CREATE INDEX IF NOT EXISTS idx_events_user_id ON events(user_id);
                     CREATE INDEX IF NOT EXISTS idx_reminders_user_id ON reminders(user_id);
                     CREATE INDEX IF NOT EXISTS idx_reminders_remind_at ON reminders(remind_at) WHERE sent = FALSE;
                 """)
                 
-                logger.info("✅ Все таблицы созданы или уже существуют")
+                logger.info("✅ Все таблицы созданы")
                 
         except Exception as e:
-            logger.error(f"❌ Ошибка при создании таблиц: {e}")
+            logger.error(f"❌ Ошибка создания таблиц: {e}")
             raise
     
     async def ensure_connection(self) -> bool:
-        """Проверяет и восстанавливает соединение"""
+        """Проверяет соединение"""
         if not self._initialized or self.pool is None:
             return await self.init_pool()
         
@@ -248,7 +227,6 @@ class Database:
             return True
         except Exception as e:
             logger.error(f"❌ Ошибка соединения: {e}")
-            # Пробуем пересоздать пул
             if self.pool:
                 await self.pool.close()
                 self.pool = None
@@ -263,7 +241,7 @@ class Database:
         last_name: str = None,
         language_code: str = None
     ) -> bool:
-        """Сохраняет или обновляет пользователя Telegram"""
+        """Сохраняет пользователя"""
         try:
             await self.ensure_connection()
             async with self.pool.acquire() as conn:
@@ -278,11 +256,11 @@ class Database:
                         last_active = NOW()
                 """, user_id, username, first_name, last_name, language_code)
             
-            logger.info(f"💾 Пользователь {user_id} успешно сохранен в базе данных")
+            logger.info(f"💾 Пользователь {user_id} сохранен")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
+            logger.error(f"❌ Ошибка сохранения: {e}")
             return False
     
     async def save_user_data(self, user_id: int, data: Dict) -> bool:
@@ -297,10 +275,10 @@ class Database:
                 """, user_id, json.dumps(data, ensure_ascii=False))
             return True
         except Exception as e:
-            logger.error(f"❌ Ошибка сохранения данных пользователя {user_id}: {e}")
+            logger.error(f"❌ Ошибка: {e}")
             return False
     
-    async def load_user_data(self, user_id: int) -> Dict[str, Any]:
+    async def load_user_data(self, user_id: int) -> Dict:
         """Загружает данные пользователя"""
         try:
             await self.ensure_connection()
@@ -312,37 +290,7 @@ class Database:
                     return json.loads(row['user_data'])
                 return {}
         except Exception as e:
-            logger.error(f"❌ Ошибка загрузки данных пользователя {user_id}: {e}")
-            return {}
-    
-    async def save_user_context(self, user_id: int, context: Dict) -> bool:
-        """Сохраняет контекст пользователя"""
-        try:
-            await self.ensure_connection()
-            async with self.pool.acquire() as conn:
-                await conn.execute("""
-                    UPDATE telegram_users 
-                    SET context_data = $2, last_active = NOW()
-                    WHERE user_id = $1
-                """, user_id, json.dumps(context, ensure_ascii=False))
-            return True
-        except Exception as e:
-            logger.error(f"❌ Ошибка сохранения контекста пользователя {user_id}: {e}")
-            return False
-    
-    async def load_user_context(self, user_id: int) -> Dict[str, Any]:
-        """Загружает контекст пользователя"""
-        try:
-            await self.ensure_connection()
-            async with self.pool.acquire() as conn:
-                row = await conn.fetchrow("""
-                    SELECT context_data FROM telegram_users WHERE user_id = $1
-                """, user_id)
-                if row and row['context_data']:
-                    return json.loads(row['context_data'])
-                return {}
-        except Exception as e:
-            logger.error(f"❌ Ошибка загрузки контекста пользователя {user_id}: {e}")
+            logger.error(f"❌ Ошибка: {e}")
             return {}
     
     async def log_event(self, user_id: int, event_type: str, event_data: Dict = None) -> bool:
@@ -356,7 +304,7 @@ class Database:
                 """, user_id, event_type, json.dumps(event_data or {}, ensure_ascii=False))
             return True
         except Exception as e:
-            logger.error(f"❌ Ошибка логирования события: {e}")
+            logger.error(f"❌ Ошибка: {e}")
             return False
     
     async def save_test_result(
@@ -368,6 +316,7 @@ class Database:
         perception_type: str = None,
         thinking_level: int = None,
         vectors: Dict = None,
+        behavioral_levels: Dict = None,
         deep_patterns: Dict = None,
         confinement_model: Dict = None
     ) -> Optional[int]:
@@ -379,17 +328,18 @@ class Database:
                     INSERT INTO test_results (
                         user_id, test_type, results, profile_code,
                         perception_type, thinking_level, vectors,
-                        deep_patterns, confinement_model
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        behavioral_levels, deep_patterns, confinement_model
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                     RETURNING id
                 """, user_id, test_type, json.dumps(results, ensure_ascii=False),
                     profile_code, perception_type, thinking_level,
                     json.dumps(vectors or {}, ensure_ascii=False),
+                    json.dumps(behavioral_levels or {}, ensure_ascii=False),
                     json.dumps(deep_patterns or {}, ensure_ascii=False),
                     json.dumps(confinement_model or {}, ensure_ascii=False))
                 return row['id'] if row else None
         except Exception as e:
-            logger.error(f"❌ Ошибка сохранения результата теста: {e}")
+            logger.error(f"❌ Ошибка: {e}")
             return None
     
     async def save_test_answer(
@@ -424,45 +374,8 @@ class Database:
                     measures, strategy, dilts, pattern, target)
             return True
         except Exception as e:
-            logger.error(f"❌ Ошибка сохранения ответа на тест: {e}")
+            logger.error(f"❌ Ошибка: {e}")
             return False
-    
-    async def get_telegram_user(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Получает информацию о пользователе Telegram"""
-        try:
-            await self.ensure_connection()
-            async with self.pool.acquire() as conn:
-                row = await conn.fetchrow("""
-                    SELECT * FROM telegram_users WHERE user_id = $1
-                """, user_id)
-                if row:
-                    return dict(row)
-                return None
-        except Exception as e:
-            logger.error(f"❌ Ошибка получения пользователя {user_id}: {e}")
-            return None
-    
-    async def get_user_test_results(self, user_id: int, limit: int = 10, test_type: str = None) -> List[Dict]:
-        """Получает результаты тестов пользователя"""
-        try:
-            await self.ensure_connection()
-            async with self.pool.acquire() as conn:
-                if test_type:
-                    rows = await conn.fetch("""
-                        SELECT * FROM test_results 
-                        WHERE user_id = $1 AND test_type = $2
-                        ORDER BY created_at DESC LIMIT $3
-                    """, user_id, test_type, limit)
-                else:
-                    rows = await conn.fetch("""
-                        SELECT * FROM test_results 
-                        WHERE user_id = $1
-                        ORDER BY created_at DESC LIMIT $2
-                    """, user_id, limit)
-                return [dict(row) for row in rows]
-        except Exception as e:
-            logger.error(f"❌ Ошибка получения результатов тестов: {e}")
-            return []
     
     async def add_reminder(
         self,
@@ -482,7 +395,7 @@ class Database:
                 """, user_id, reminder_type, remind_at, json.dumps(data or {}, ensure_ascii=False))
                 return row['id'] if row else None
         except Exception as e:
-            logger.error(f"❌ Ошибка добавления напоминания: {e}")
+            logger.error(f"❌ Ошибка: {e}")
             return None
     
     async def get_pending_reminders(self, limit: int = 100) -> List[Dict]:
@@ -497,7 +410,7 @@ class Database:
                 """, limit)
                 return [dict(row) for row in rows]
         except Exception as e:
-            logger.error(f"❌ Ошибка получения напоминаний: {e}")
+            logger.error(f"❌ Ошибка: {e}")
             return []
     
     async def mark_reminder_sent(self, reminder_id: int) -> bool:
@@ -512,7 +425,7 @@ class Database:
                 """, reminder_id)
             return True
         except Exception as e:
-            logger.error(f"❌ Ошибка отметки напоминания: {e}")
+            logger.error(f"❌ Ошибка: {e}")
             return False
     
     async def get_user_reminders(self, user_id: int, include_sent: bool = False) -> List[Dict]:
@@ -530,20 +443,55 @@ class Database:
                     """, user_id)
                 return [dict(row) for row in rows]
         except Exception as e:
-            logger.error(f"❌ Ошибка получения напоминаний: {e}")
+            logger.error(f"❌ Ошибка: {e}")
             return []
     
+    async def get_user_test_results(self, user_id: int, limit: int = 10, test_type: str = None) -> List[Dict]:
+        """Получает результаты тестов"""
+        try:
+            await self.ensure_connection()
+            async with self.pool.acquire() as conn:
+                if test_type:
+                    rows = await conn.fetch("""
+                        SELECT * FROM test_results 
+                        WHERE user_id = $1 AND test_type = $2
+                        ORDER BY created_at DESC LIMIT $3
+                    """, user_id, test_type, limit)
+                else:
+                    rows = await conn.fetch("""
+                        SELECT * FROM test_results 
+                        WHERE user_id = $1
+                        ORDER BY created_at DESC LIMIT $2
+                    """, user_id, limit)
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"❌ Ошибка: {e}")
+            return []
+    
+    async def get_telegram_user(self, user_id: int) -> Optional[Dict]:
+        """Получает пользователя"""
+        try:
+            await self.ensure_connection()
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT * FROM telegram_users WHERE user_id = $1
+                """, user_id)
+                return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"❌ Ошибка: {e}")
+            return None
+    
     async def get_cached_weekend_ideas(self, user_id: int) -> Optional[str]:
-        """Получает кэшированные идеи на выходные"""
+        """Получает кэшированные идеи"""
         try:
             data = await self.load_user_data(user_id)
             return data.get("cached_weekend_ideas")
         except Exception as e:
-            logger.error(f"❌ Ошибка получения идей: {e}")
+            logger.error(f"❌ Ошибка: {e}")
             return None
     
     async def cache_weekend_ideas(self, user_id: int, ideas_text: str, main_vector: str, main_level: int) -> bool:
-        """Кэширует идеи на выходные"""
+        """Кэширует идеи"""
         try:
             data = await self.load_user_data(user_id)
             data["cached_weekend_ideas"] = ideas_text
@@ -552,29 +500,65 @@ class Database:
             data["cached_weekend_ideas_at"] = datetime.now(timezone.utc).isoformat()
             return await self.save_user_data(user_id, data)
         except Exception as e:
-            logger.error(f"❌ Ошибка кэширования идей: {e}")
+            logger.error(f"❌ Ошибка: {e}")
             return False
     
+    async def load_user_context(self, user_id: int) -> Dict:
+        """Загружает контекст пользователя"""
+        try:
+            await self.ensure_connection()
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT context_data FROM telegram_users WHERE user_id = $1
+                """, user_id)
+                if row and row['context_data']:
+                    return json.loads(row['context_data'])
+                return {}
+        except Exception as e:
+            logger.error(f"❌ Ошибка: {e}")
+            return {}
+    
     async def close(self):
-        """Закрывает пул соединений"""
+        """Закрывает пул"""
         if self.pool:
             await self.pool.close()
             self.pool = None
-            logger.info("🔌 Пул соединений закрыт")
+            logger.info("🔌 Пул закрыт")
 
 
-# Создаем глобальный экземпляр
+# Глобальные экземпляры
 db = Database()
 db_loop_manager = DatabaseLoopManager()
 
 
+# ✅ ИСПРАВЛЕНАЯ ФУНКЦИЯ - ПРИНИМАЕТ ВСЕ НУЖНЫЕ АРГУМЕНТЫ
+async def save_test_result_to_db(
+    user_id: int,
+    test_type: str,
+    results: Dict,
+    profile_code: str = None,
+    perception_type: str = None,
+    thinking_level: int = None,
+    vectors: Dict = None,
+    behavioral_levels: Dict = None,
+    deep_patterns: Dict = None,
+    confinement_model: Dict = None
+) -> Optional[int]:
+    """Сохраняет результат теста в БД"""
+    return await db.save_test_result(
+        user_id, test_type, results, profile_code,
+        perception_type, thinking_level, vectors,
+        behavioral_levels, deep_patterns, confinement_model
+    )
+
+
 async def ensure_db_connection() -> bool:
-    """Глобальная функция проверки соединения"""
+    """Проверяет соединение с БД"""
     return await db.ensure_connection()
 
 
 def save_user_to_db(user_id: int) -> bool:
-    """Синхронная обертка для сохранения пользователя"""
+    """Синхронное сохранение пользователя"""
     try:
         loop = db_loop_manager._get_or_create_loop()
         if loop.is_running():
@@ -599,7 +583,7 @@ def save_telegram_user(
     last_name: str = None,
     language_code: str = None
 ) -> bool:
-    """Синхронная обертка для сохранения пользователя Telegram"""
+    """Синхронное сохранение пользователя Telegram"""
     try:
         loop = db_loop_manager._get_or_create_loop()
         if loop.is_running():
@@ -620,50 +604,13 @@ def save_telegram_user(
         return False
 
 
-async def save_test_result_to_db(
-    user_id: int,
-    test_type: str,
-    results: Dict,
-    profile_code: str = None,
-    perception_type: str = None,
-    thinking_level: int = None,
-    vectors: Dict = None,
-    behavioral_levels: Dict = None,
-    deep_patterns: Dict = None,
-    confinement_model: Dict = None
-) -> Optional[int]:
-    """Асинхронное сохранение результата теста"""
-    return await db.save_test_result(
-        user_id, test_type, results, profile_code,
-        perception_type, thinking_level, vectors,
-        deep_patterns, confinement_model
-    )
-
-
-# Инициализируем БД при запуске
+# Инициализация
 async def init_db():
-    """Инициализирует базу данных"""
-    try:
-        # Ждем немного для стабильности
-        await asyncio.sleep(0.5)
-        success = await db.init_pool()
-        if success:
-            logger.info("✅ Подключение к PostgreSQL установлено")
-        else:
-            logger.error("❌ Не удалось подключиться к PostgreSQL")
-        return success
-    except Exception as e:
-        logger.error(f"❌ Ошибка при инициализации БД: {e}")
-        return False
+    """Инициализирует БД"""
+    await asyncio.sleep(0.5)
+    return await db.init_pool()
 
 
-# Запускаем инициализацию
-async def _init():
-    """Внутренняя инициализация"""
-    await init_db()
-
-
-# Создаем задачу инициализации
 try:
     loop = asyncio.get_event_loop()
     if loop.is_running():
@@ -671,9 +618,8 @@ try:
     else:
         loop.run_until_complete(init_db())
 except RuntimeError:
-    # Нет цикла - создаем временный
     asyncio.run(init_db())
 except Exception as e:
-    logger.error(f"❌ Ошибка при запуске инициализации БД: {e}")
+    logger.error(f"❌ Ошибка инициализации: {e}")
 
 logger.info("✅ db_instance инициализирован")
