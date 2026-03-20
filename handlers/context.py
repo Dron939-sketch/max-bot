@@ -2,23 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики сбора контекста (город, возраст, пол) для MAX
-Восстановлено из оригинального bot3.py и адаптировано
-ДОБАВЛЕНО: Сохранение контекста в PostgreSQL
-ИСПРАВЛЕНО: Устранен циклический импорт с main.py
-ИСПРАВЛЕНО: Асинхронные вызовы обернуты в threading
-ИСПРАВЛЕНО: Город обрабатывается в отдельном потоке без зависаний
-ИСПРАВЛЕНО: Все parse_mode заменены на 'Markdown'
-ИСПРАВЛЕНО: Добавлено подробное логирование для отладки возраста
-ИСПРАВЛЕНО: Зависание после возраста - вызов show_context_complete в отдельном потоке
+ВЕРСИЯ 2.1 - ИСПРАВЛЕНО: используется sync_db вместо создания новых циклов
 """
 
 import logging
 import re
 import time
 import threading
-import asyncio
 from typing import Dict, Any, Optional, Tuple
-from concurrent.futures import Future
 
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 
@@ -31,60 +22,17 @@ from keyboards import (
 )
 from models import UserContext
 
-# ИСПРАВЛЕННЫЕ ИМПОРТЫ - используем state.py
+# Импорты из state.py
 from state import (
     user_data, user_names, user_contexts, user_states, user_state_data,
     get_user_context, get_user_context_dict,
     get_state, set_state, get_state_data, update_state_data, clear_state, TestStates
 )
 
-# ✅ ИСПРАВЛЕНО: Импортируем базу данных из отдельного модуля, а не из main
-from db_instance import db, save_user_to_db
+# ✅ ИСПРАВЛЕНО: используем sync_db вместо прямых вызовов
+from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
-
-# ============================================
-# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
-# ============================================
-
-def run_async_task(coro_func, *args, **kwargs):
-    """
-    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
-    """
-    def _wrapper():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            coro = coro_func(*args, **kwargs)
-            loop.run_until_complete(coro)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
-        finally:
-            loop.close()
-    
-    threading.Thread(target=_wrapper, daemon=True).start()
-
-def run_async_task_with_result(coro_func, *args, **kwargs):
-    """
-    Запускает асинхронную корутину и возвращает Future для получения результата
-    """
-    future = Future()
-    
-    def _wrapper():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            coro = coro_func(*args, **kwargs)
-            result = loop.run_until_complete(coro)
-            future.set_result(result)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
-            future.set_exception(e)
-        finally:
-            loop.close()
-    
-    threading.Thread(target=_wrapper, daemon=True).start()
-    return future
 
 # ============================================
 # ГЛОБАЛЬНАЯ БЛОКИРОВКА ДЛЯ ПРЕДОТВРАЩЕНИЯ ДВОЙНЫХ ВЫЗОВОВ
@@ -115,11 +63,6 @@ def update_user_state_data(user_id: int, **kwargs):
         user_state_data[user_id] = {}
     user_state_data[user_id].update(kwargs)
 
-# get_user_context уже есть в state.py, но переопределим для единообразия
-def get_user_context(user_id: int) -> Optional[UserContext]:
-    """Получает контекст пользователя"""
-    return user_contexts.get(user_id)
-
 def get_user_names(user_id: int) -> str:
     """Получает имя пользователя"""
     return user_names.get(user_id, "друг")
@@ -128,12 +71,16 @@ def get_user_context_dict() -> Dict[int, UserContext]:
     """Возвращает словарь контекстов пользователей"""
     return user_contexts
 
-async def save_context_to_db(user_id: int):
-    """Сохраняет контекст пользователя в БД"""
+def save_context_to_db(user_id: int):
+    """СИНХРОННО сохраняет контекст пользователя в БД"""
     context = get_user_context(user_id)
     if context:
-        await db.save_user_context(user_id, context)
-        logger.debug(f"💾 Контекст пользователя {user_id} сохранен в БД")
+        try:
+            # Сохраняем пользователя целиком через sync_db
+            sync_db.save_user_to_db(user_id)
+            logger.debug(f"💾 Контекст пользователя {user_id} сохранен в БД")
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения контекста {user_id}: {e}")
 
 # ============================================
 # НАЧАЛО СБОРА КОНТЕКСТА
@@ -247,8 +194,8 @@ def handle_context_callback(call: CallbackQuery):
         context.gender = "male"
         context.awaiting_context = None
         
-        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-        run_async_task(save_context_to_db, user_id)
+        # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
         
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
@@ -273,8 +220,8 @@ def handle_context_callback(call: CallbackQuery):
         context.gender = "female"
         context.awaiting_context = None
         
-        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-        run_async_task(save_context_to_db, user_id)
+        # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
         
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
@@ -299,8 +246,8 @@ def handle_context_callback(call: CallbackQuery):
         context.gender = "other"
         context.awaiting_context = None
         
-        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-        run_async_task(save_context_to_db, user_id)
+        # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
         
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
@@ -325,8 +272,8 @@ def handle_context_callback(call: CallbackQuery):
         logger.info(f"⏭️ Пропускаем сбор контекста")
         context.awaiting_context = None
         
-        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-        run_async_task(save_context_to_db, user_id)
+        # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
         
         safe_send_message(
             call.message,
@@ -338,7 +285,6 @@ def handle_context_callback(call: CallbackQuery):
         )
         
         # Показываем главное меню
-        # ✅ ИСПРАВЛЕНО: Импортируем здесь, чтобы избежать циклического импорта
         from handlers.modes import show_main_menu
         show_main_menu(call.message, context)
         
@@ -363,7 +309,7 @@ def skip_context(call: CallbackQuery):
     handle_context_callback(call)
 
 # ============================================
-# ОБРАБОТКА ТЕКСТОВЫХ ОТВЕТОВ - ИСПРАВЛЕНО!
+# ОБРАБОТКА ТЕКСТОВЫХ ОТВЕТОВ
 # ============================================
 
 def handle_context_message(message: Message) -> bool:
@@ -394,13 +340,13 @@ def handle_context_message(message: Message) -> bool:
     logger.info(f"📝 Обрабатываем текст: '{text}' для поля {context.awaiting_context}")
     
     if context.awaiting_context == "city":
-        # ========== ИСПРАВЛЕННАЯ ОБРАБОТКА ГОРОДА ==========
+        # ========== ОБРАБОТКА ГОРОДА ==========
         logger.info(f"🏙️ Сохраняем город: {text}")
         context.city = text
         context.awaiting_context = None
         
         # Отправляем сообщение о загрузке
-        loading_msg = safe_send_message(
+        safe_send_message(
             message,
             "🔄 Получаю данные о погоде и часовом поясе...\nЭто займёт несколько секунд.",
             parse_mode='Markdown',
@@ -412,7 +358,6 @@ def handle_context_message(message: Message) -> bool:
             """Обновляет погоду и продолжает диалог в отдельном потоке"""
             try:
                 logger.info(f"🌤️ Обновляем погоду для города {text}...")
-                # Синхронный вызов update_weather (но в отдельном потоке)
                 context.update_weather()
                 logger.info(f"✅ Погода обновлена")
                 
@@ -421,8 +366,8 @@ def handle_context_message(message: Message) -> bool:
                 context.detect_timezone_from_city()
                 logger.info(f"✅ Часовой пояс определен")
                 
-                # Сохраняем в БД асинхронно
-                run_async_task(save_context_to_db, user_id)
+                # Сохраняем в БД синхронно
+                save_context_to_db(user_id)
                 
                 # Получаем следующий вопрос
                 question, keyboard = context.ask_for_context()
@@ -464,7 +409,7 @@ def handle_context_message(message: Message) -> bool:
         return True
     
     elif context.awaiting_context == "age":
-        # ========== ОБРАБОТКА ВОЗРАСТА С ИСПРАВЛЕНИЕМ ЗАВИСАНИЯ ==========
+        # ========== ОБРАБОТКА ВОЗРАСТА ==========
         logger.info(f"📅 [AGE] Начинаем обработку возраста для user {user_id}")
         logger.info(f"📅 [AGE] Получен текст: '{text}'")
         
@@ -485,7 +430,7 @@ def handle_context_message(message: Message) -> bool:
                 
                 # Сохраняем в БД
                 logger.info(f"💾 [AGE] Сохраняем в БД...")
-                run_async_task(save_context_to_db, user_id)
+                threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
                 logger.info(f"✅ [AGE] Задача сохранения запущена")
                 
                 # Получаем следующий вопрос
@@ -495,35 +440,26 @@ def handle_context_message(message: Message) -> bool:
                 
                 if question:
                     logger.info(f"📤 [AGE] Есть следующий вопрос, отправляем...")
-                    logger.info(f"📤 [AGE] Текст вопроса: {question[:50]}...")
-                    
-                    sent = safe_send_message(
+                    safe_send_message(
                         message,
                         f"📝 **Давайте познакомимся**\n\n{question}",
                         reply_markup=keyboard,
                         parse_mode='Markdown',
                         delete_previous=True
                     )
-                    logger.info(f"✅ [AGE] Сообщение отправлено, result={sent is not None}")
+                    logger.info(f"✅ [AGE] Вопрос отправлен")
                 else:
                     logger.info(f"🎉 [AGE] Вопросов больше нет, вызываем show_context_complete")
-                    logger.info(f"🎉 [AGE] Параметры: message type={type(message)}, context type={type(context)}")
                     
-                    # 👇 ИСПРАВЛЕНО: Запускаем show_context_complete в отдельном потоке с задержкой
+                    # Запускаем show_context_complete в отдельном потоке
                     def call_show_complete():
-                        """Вызывает show_context_complete в отдельном потоке"""
                         try:
-                            logger.info(f"🎉 [AGE] Запускаем show_context_complete в отдельном потоке")
                             show_context_complete(message, context)
-                            logger.info(f"✅ [AGE] show_context_complete выполнена успешно")
                         except Exception as e:
                             logger.error(f"❌ [AGE] Ошибка в show_context_complete: {e}")
-                            import traceback
-                            traceback.print_exc()
                     
-                    # Запускаем в отдельном потоке с небольшой задержкой
                     threading.Timer(0.5, call_show_complete).start()
-                    logger.info(f"✅ [AGE] Таймер на show_context_complete запущен")
+                    logger.info(f"✅ [AGE] Таймер show_context_complete запущен")
             else:
                 logger.warning(f"⚠️ [AGE] Возраст вне диапазона: {age}")
                 safe_send_message(
@@ -559,8 +495,8 @@ def handle_context_message(message: Message) -> bool:
         
         context.awaiting_context = None
         
-        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-        run_async_task(save_context_to_db, user_id)
+        # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
         
         # Получаем следующий вопрос
         logger.info(f"❓ Получаем следующий вопрос после пола...")
@@ -587,7 +523,7 @@ def handle_context_message(message: Message) -> bool:
     return False
 
 # ============================================
-# ЗАВЕРШЕНИЕ СБОРА КОНТЕКСТА (ИСПРАВЛЕНО)
+# ЗАВЕРШЕНИЕ СБОРА КОНТЕКСТА
 # ============================================
 
 def show_context_complete(message: Message, context: UserContext):
@@ -598,13 +534,12 @@ def show_context_complete(message: Message, context: UserContext):
     logger.info(f"🎉 show_context_complete вызван для user {user_id}")
     
     try:
-        # 👇 СИНХРОННЫЙ ВЫЗОВ
         logger.info(f"🌤️ Обновляем погоду для итогового экрана...")
         context.update_weather()
         logger.info(f"✅ Погода обновлена")
         
-        # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-        run_async_task(save_context_to_db, user_id)
+        # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
         logger.info(f"✅ Задача сохранения в БД запущена")
         
         # Формируем сводку
@@ -627,11 +562,9 @@ def show_context_complete(message: Message, context: UserContext):
         summary += "Он определит ваш психологический профиль по 4 векторам и глубинным паттернам.\n\n"
         summary += f"👇 **Начинаем?**"
         
-        # ✅ ИСПРАВЛЕНО: меняем callback на прямой старт теста
         keyboard = InlineKeyboardMarkup()
         keyboard.row(InlineKeyboardButton("🚀 НАЧАТЬ ТЕСТ", callback_data="start_stage_1_direct"))
         keyboard.row(InlineKeyboardButton("📖 ЧТО ДАЕТ ТЕСТ", callback_data="show_benefits"))
-        # ❌ Кнопка "❓ ЗАДАТЬ ВОПРОС" удалена
         
         logger.info(f"📤 Отправляем итоговый экран...")
         sent = safe_send_message(
@@ -677,8 +610,8 @@ def cmd_context(message: Message):
     context.weather_cache = {}
     context.life_context_complete = False
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем сброс в БД через run_async_task
-    run_async_task(save_context_to_db, user_id)
+    # ✅ ИСПРАВЛЕНО: Сохраняем сброс в БД синхронно
+    threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
     
     safe_send_message(
         message,
@@ -830,8 +763,8 @@ def save_life_context(user_id: int, answers: dict):
     context.energy_level = answers.get('energy_level')
     context.life_context_complete = True
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-    run_async_task(save_context_to_db, user_id)
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+    threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
 
 def parse_life_context_from_text(text: str) -> dict:
     """
