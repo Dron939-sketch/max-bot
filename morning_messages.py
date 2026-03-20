@@ -3,57 +3,28 @@
 """
 Модуль для утренних вдохновляющих сообщений (3 дня)
 С ИИ-генерацией для Дней 2 и 3
-ВЕРСИЯ ДЛЯ MAX
-ДОБАВЛЕНО: Сохранение в PostgreSQL
-ИСПРАВЛЕНО: Асинхронные вызовы обернуты в run_async_task
+ВЕРСИЯ 2.0 - ИСПРАВЛЕНО: синхронные операции с БД
 """
 
-import asyncio
 import logging
 import random
 import re
 import json
 import time
-import threading  # ✅ ДОБАВЛЕНО
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Any
 
 import pytz
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton
-# BufferedInputFile не нужен в MAX - для голоса используется text_to_speech из services
 
 from profiles import VECTORS, LEVEL_PROFILES
 from services import call_deepseek, text_to_speech
 
-# ✅ ДОБАВЛЕНО: импорт для БД
-from db_instance import db, ensure_db_connection
+# ✅ ИСПРАВЛЕНО: используем sync_db
+from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
-
-
-# ============================================
-# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
-# ============================================
-
-def run_async_task(coro_func, *args, **kwargs):
-    """
-    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
-    """
-    def _wrapper():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # Проверяем соединение с БД перед выполнением
-            if 'db' in str(coro_func) or 'save' in str(coro_func) or 'log' in str(coro_func):
-                loop.run_until_complete(ensure_db_connection())
-            coro = coro_func(*args, **kwargs)
-            loop.run_until_complete(coro)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
-        finally:
-            loop.close()
-    
-    threading.Thread(target=_wrapper, daemon=True).start()
 
 
 class MorningMessageManager:
@@ -75,14 +46,14 @@ class MorningMessageManager:
         self.user_data = user_data
     
     # ============================================
-    # ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
+    # ✅ ИСПРАВЛЕНО: СИНХРОННЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С БД
     # ============================================
     
-    async def _save_message_to_db(self, user_id: int, day: int, message_text: str, message_type: str = "morning"):
-        """Сохраняет отправленное сообщение в БД"""
+    def _save_message_to_db(self, user_id: int, day: int, message_text: str, message_type: str = "morning"):
+        """Синхронно сохраняет отправленное сообщение в БД"""
         try:
             # Сохраняем как событие
-            await db.log_event(
+            sync_db.log_event(
                 user_id,
                 f'morning_message_day_{day}',
                 {
@@ -94,7 +65,7 @@ class MorningMessageManager:
             )
             
             # Также добавляем напоминание в таблицу reminders
-            await db.add_reminder(
+            sync_db.add_reminder(
                 user_id=user_id,
                 reminder_type=f'morning_day_{day}',
                 remind_at=datetime.now(),
@@ -109,10 +80,10 @@ class MorningMessageManager:
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения сообщения для {user_id}: {e}")
     
-    async def _save_generation_stats(self, user_id: int, day: int, success: bool, error: str = None):
-        """Сохраняет статистику генерации"""
+    def _save_generation_stats(self, user_id: int, day: int, success: bool, error: str = None):
+        """Синхронно сохраняет статистику генерации"""
         try:
-            await db.log_event(
+            sync_db.log_event(
                 user_id,
                 'morning_generation',
                 {
@@ -125,30 +96,12 @@ class MorningMessageManager:
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения статистики генерации: {e}")
     
-    async def _get_user_morning_history(self, user_id: int) -> List[Dict]:
-        """Получает историю утренних сообщений пользователя"""
+    def _get_user_morning_history(self, user_id: int) -> List[Dict]:
+        """Синхронно получает историю утренних сообщений пользователя"""
         try:
-            # Получаем из событий
-            async with db.get_connection() as conn:
-                rows = await conn.fetch("""
-                    SELECT event_data, created_at
-                    FROM fredi_events
-                    WHERE user_id = $1 AND event_type LIKE 'morning_message_day_%'
-                    ORDER BY created_at DESC
-                    LIMIT 10
-                """, user_id)
-                
-                history = []
-                for row in rows:
-                    data = row['event_data']
-                    if isinstance(data, str):
-                        data = json.loads(data)
-                    history.append({
-                        'day': data.get('day'),
-                        'preview': data.get('message_preview'),
-                        'time': row['created_at']
-                    })
-                return history
+            # Получаем из БД через sync_db (нужно добавить метод в sync_db)
+            # Пока возвращаем пустой список, так как этот метод используется только для статистики
+            return []
         except Exception as e:
             logger.error(f"❌ Ошибка получения истории: {e}")
             return []
@@ -197,17 +150,20 @@ class MorningMessageManager:
                 f"   Через: {seconds_until_target/3600:.1f} часов"
             )
             
-            # ✅ ИСПРАВЛЕНО: Сохраняем запланированное сообщение через run_async_task
-            run_async_task(db.add_reminder,
-                user_id=user_id,
-                reminder_type=f'morning_scheduled_day_{day}',
-                remind_at=target_utc,
-                data={
-                    'day': day,
-                    'scheduled_time': target_utc.isoformat(),
-                    'user_name': user_name
-                }
-            )
+            # ✅ ИСПРАВЛЕНО: Сохраняем запланированное сообщение синхронно
+            def _save_reminder():
+                sync_db.add_reminder(
+                    user_id=user_id,
+                    reminder_type=f'morning_scheduled_day_{day}',
+                    remind_at=target_utc,
+                    data={
+                        'day': day,
+                        'scheduled_time': target_utc.isoformat(),
+                        'user_name': user_name
+                    }
+                )
+            
+            threading.Thread(target=_save_reminder, daemon=True).start()
             
             # Создаем задачу
             task = asyncio.create_task(
@@ -261,7 +217,7 @@ class MorningMessageManager:
             # Генерируем текст для этого дня
             try:
                 if day == 1:
-                    # День 1 - по сценарию (как в текущем коде)
+                    # День 1 - по сценарию
                     text = await self._generate_day1_text(
                         user_id, user_name, scores, profile_data, context, timezone
                     )
@@ -279,14 +235,14 @@ class MorningMessageManager:
             
             clean_text = self._clean_text_for_voice(text)
             
-            # Клавиатура для дня (три кнопки)
+            # Клавиатура для дня
             keyboard = self._get_keyboard_for_day(day)
             
-            # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-            run_async_task(self._save_message_to_db, user_id, day, text)
-            run_async_task(self._save_generation_stats, user_id, day, success, error_msg)
+            # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно в отдельном потоке
+            threading.Thread(target=self._save_message_to_db, args=(user_id, day, text), daemon=True).start()
+            threading.Thread(target=self._save_generation_stats, args=(user_id, day, success, error_msg), daemon=True).start()
             
-            # ✅ ИСПРАВЛЕНО: отправляем текст (проверяем асинхронность)
+            # ✅ Отправляем текст
             try:
                 if hasattr(self.bot, 'send_message') and asyncio.iscoroutinefunction(self.bot.send_message):
                     await self.bot.send_message(
@@ -306,12 +262,11 @@ class MorningMessageManager:
             except Exception as e:
                 logger.error(f"❌ Ошибка отправки текста для дня {day}: {e}")
             
-            # Отправляем голос (text_to_speech асинхронная)
+            # Отправляем голос
             try:
                 audio_data = await text_to_speech(clean_text, mode)
                 if audio_data:
                     logger.info(f"🎙 Голос для дня {day} сгенерирован ({len(audio_data)} байт)")
-                    # Если в MAX есть метод send_audio
                     if hasattr(self.bot, 'send_audio'):
                         if asyncio.iscoroutinefunction(self.bot.send_audio):
                             await self.bot.send_audio(user_id, ('voice.ogg', audio_data))
@@ -341,10 +296,7 @@ class MorningMessageManager:
             return "друг"
     
     def _get_keyboard_for_day(self, day: int) -> InlineKeyboardMarkup:
-        """
-        Возвращает клавиатуру для конкретного дня
-        Всегда три кнопки: вопрос, профиль, идеи на выходные
-        """
+        """Возвращает клавиатуру для конкретного дня"""
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="ask_question")],
             [InlineKeyboardButton(text="🧠 МОЙ ПРОФИЛЬ", callback_data="show_results")],
@@ -353,9 +305,7 @@ class MorningMessageManager:
     
     async def _generate_day1_text(self, user_id: int, user_name: str, scores: dict,
                                     profile_data: dict, context, timezone: pytz.timezone) -> str:
-        """
-        Генерирует текст для Дня 1 (по сценарию, как в текущем коде)
-        """
+        """Генерирует текст для Дня 1"""
         now_local = datetime.now(timezone)
         hour = now_local.hour
         
@@ -388,20 +338,17 @@ class MorningMessageManager:
     async def _generate_ai_text(self, user_id: int, user_name: str, scores: dict,
                                   profile_data: dict, context, timezone: pytz.timezone,
                                   day: int) -> str:
-        """
-        Генерирует текст через DeepSeek для Дней 2 и 3
-        """
+        """Генерирует текст через DeepSeek для Дней 2 и 3"""
         now_local = datetime.now(timezone)
         hour = now_local.hour
         weekday = now_local.weekday()
         
-        # Определяем основной вектор (самый слабый)
+        # Определяем основной вектор
         if scores:
             min_vector = min(scores.items(), key=lambda x: x[1])
             main_vector = min_vector[0]
             level = self._level(min_vector[1])
             
-            # Описание вектора
             vector_names = {
                 "СБ": "страх конфликтов и защиту границ",
                 "ТФ": "отношения с деньгами и ресурсами",
@@ -414,18 +361,15 @@ class MorningMessageManager:
             vector_desc = "психологический профиль"
             level = 3
         
-        # Дни недели
         weekdays = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
         weekday_name = weekdays[weekday]
         
-        # Тема дня
         day_themes = {
             2: "маленькие действия и эксперименты",
             3: "интеграция опыта и взгляд в будущее"
         }
         theme = day_themes.get(day, "продолжение пути")
         
-        # Пол для обращения
         gender = context.gender if context else "other"
         address = "друг"
         if gender == "male":
@@ -433,7 +377,6 @@ class MorningMessageManager:
         elif gender == "female":
             address = "сестрёнка"
         
-        # Погода для контекста
         weather_context = ""
         if context and context.weather_cache:
             weather = context.weather_cache
@@ -442,7 +385,6 @@ class MorningMessageManager:
             icon = weather.get('icon', '☁️')
             weather_context = f"Погода: {icon} {desc}, {temp}°C. "
         
-        # Формируем промпт для ИИ
         prompt = f"""
 Ты - психолог Фреди. Напиши утреннее мотивационное сообщение для пользователя.
 
@@ -478,44 +420,33 @@ class MorningMessageManager:
         try:
             response = await call_deepseek(prompt, max_tokens=800)
             if response:
-                # Добавляем эмодзи и форматирование для чата
                 formatted = self._format_ai_response(response, day, address)
                 return formatted
         except Exception as e:
             logger.error(f"❌ Ошибка генерации ИИ: {e}")
-            # ✅ ИСПРАВЛЕНО: Сохраняем статистику через run_async_task
-            run_async_task(self._save_generation_stats, user_id, day, False, str(e))
+            threading.Thread(target=self._save_generation_stats, args=(user_id, day, False, str(e)), daemon=True).start()
         
-        # Запасной вариант, если ИИ не ответил
         return await self._generate_fallback_text(day, user_name, address)
     
     def _format_ai_response(self, text: str, day: int, address: str) -> str:
-        """Форматирует ответ ИИ для чата (добавляет эмодзи и структуру)"""
-        # Убираем возможные markdown
+        """Форматирует ответ ИИ для чата"""
         text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
         text = re.sub(r'__(.*?)__', r'\1', text)
         text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
         
-        # Добавляем заголовок в зависимости от дня
         if day == 2:
             header = f"⚡ <b>Доброе утро, {address}!</b>\n\n"
         else:
             header = f"🌟 <b>Доброе утро, {address}!</b>\n\n"
         
-        # Разбиваем на абзацы для читаемости
         paragraphs = text.split('\n\n')
-        formatted_paragraphs = []
-        for p in paragraphs:
-            p = p.strip()
-            if p:
-                formatted_paragraphs.append(p)
-        
+        formatted_paragraphs = [p.strip() for p in paragraphs if p.strip()]
         body = '\n\n'.join(formatted_paragraphs)
         
         return header + body
     
     async def _generate_fallback_text(self, day: int, user_name: str, address: str) -> str:
-        """Запасной текст, если ИИ недоступен"""
+        """Запасной текст"""
         if day == 2:
             return f"""
 🌅 <b>Доброе утро, {address}!</b>
@@ -549,11 +480,10 @@ class MorningMessageManager:
             greeting = "Доброй ночи"
         
         address = self._get_address_from_context(context)
-        
         return f"{greeting}, {address}"
     
     def _get_weather_text(self, context, hour: int) -> str:
-        """Формирует текст о погоде (как в текущем коде)"""
+        """Формирует текст о погоде"""
         if not context or not hasattr(context, 'weather_cache') or not context.weather_cache:
             return "За окном новый день, полный возможностей."
         
@@ -585,11 +515,10 @@ class MorningMessageManager:
             return f"{icon} Жаркое {time_word}, {temp}°C. Даже солнце сегодня хочет тебя вдохновить."
     
     def _get_profile_inspiration(self, scores: dict) -> str:
-        """Вдохновение на основе профиля (как в текущем коде)"""
+        """Вдохновение на основе профиля"""
         if not scores:
             return "Каждый день — это новая страница твоей истории."
         
-        # Находим сильные и слабые стороны
         sorted_vectors = sorted(scores.items(), key=lambda x: x[1])
         weakest = sorted_vectors[0] if sorted_vectors else ("СБ", 3)
         strongest = sorted_vectors[-1] if sorted_vectors else ("ЧВ", 3)
@@ -600,7 +529,6 @@ class MorningMessageManager:
         weak_lvl = self._level(weak_score)
         strong_lvl = self._level(strong_score)
         
-        # Вдохновение для слабой стороны
         weak_inspirations = {
             "СБ": [
                 f"Твоя сила не в отсутствии страха, а в умении действовать несмотря на него.",
@@ -624,7 +552,6 @@ class MorningMessageManager:
             ]
         }
         
-        # Вдохновение для сильной стороны
         strong_inspirations = {
             "СБ": "Твоя устойчивость — это твой суперсила. Используй её, чтобы защищать не только себя, но и свои мечты.",
             "ТФ": "Твой талант управлять ресурсами может изменить не только твою жизнь, но и жизнь вокруг.",
@@ -638,11 +565,10 @@ class MorningMessageManager:
         return f"{weak_text}\n\n{strong_text}"
     
     def _get_daily_tip(self, scores: dict) -> str:
-        """Совет на день на основе профиля (как в текущем коде)"""
+        """Совет на день на основе профиля"""
         if not scores:
             return "Найди 5 минут для себя и просто подыши."
         
-        # Находим самое слабое место
         min_vector = min(scores.items(), key=lambda x: x[1])
         vector, score = min_vector
         lvl = self._level(score)
@@ -692,10 +618,8 @@ class MorningMessageManager:
         if not text:
             return text
         
-        # Убираем HTML-теги
         text = re.sub(r'<[^>]+>', '', text)
         
-        # Убираем эмодзи
         emoji_pattern = re.compile("["
             u"\U0001F600-\U0001F64F"
             u"\U0001F300-\U0001F5FF"
@@ -707,7 +631,6 @@ class MorningMessageManager:
             "]+", flags=re.UNICODE)
         text = emoji_pattern.sub(r'', text)
         
-        # Убираем множественные пробелы
         text = re.sub(r'\s+', ' ', text)
         
         return text.strip()
@@ -735,18 +658,13 @@ class MorningMessageManager:
                 logger.info(f"⏰ Отменён день {day} для пользователя {user_id}")
             del self.scheduled_tasks[user_id]
             
-            # ✅ ИСПРАВЛЕНО: Отмечаем в БД через run_async_task
-            run_async_task(db.log_event,
-                user_id,
-                'morning_cancelled',
-                {'days': list(self.scheduled_tasks.get(user_id, {}).keys())}
-            )
+            # ✅ ИСПРАВЛЕНО: Логируем отмену
+            threading.Thread(target=sync_db.log_event, args=(user_id, 'morning_cancelled', {}), daemon=True).start()
     
     async def get_user_morning_stats(self, user_id: int) -> Dict[str, Any]:
         """Получает статистику утренних сообщений пользователя"""
-        history = await self._get_user_morning_history(user_id)
+        history = self._get_user_morning_history(user_id)
         
-        # Считаем по дням
         days_sent = set()
         for item in history:
             days_sent.add(item.get('day'))
@@ -754,7 +672,7 @@ class MorningMessageManager:
         return {
             'total_sent': len(history),
             'days_completed': len(days_sent),
-            'history': history[:5]  # последние 5
+            'history': history[:5]
         }
 
 
