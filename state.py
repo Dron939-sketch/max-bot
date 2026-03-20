@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Модуль состояний и глобальных хранилищ для MAX
-ВЕРСИЯ 2.0: Добавлена поддержка PostgreSQL, автосохранение, user_routes
+ВЕРСИЯ 2.1 - ИСПРАВЛЕНО: синхронное автосохранение
 """
 
 import logging
@@ -202,7 +202,7 @@ def get_user_data(user_id: int) -> Dict[str, Any]:
 
 
 # ============================================
-# ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БАЗОЙ ДАННЫХ
+# ФУНКЦИИ ДЛЯ РАБОТЫ С БАЗОЙ ДАННЫХ
 # ============================================
 
 async def load_user_from_db(user_id: int, db_instance) -> bool:
@@ -264,16 +264,12 @@ def setup_auto_save(interval_seconds: int = 300):
         interval_seconds: Интервал сохранения в секундах (по умолчанию 5 минут)
     """
     def auto_save_worker():
-        """Фоновый поток для автосохранения"""
+        """Фоновый поток для автосохранения - СИНХРОННАЯ ВЕРСИЯ"""
         while True:
             time.sleep(interval_seconds)
             try:
-                # Импортируем здесь, чтобы избежать циклического импорта
-                from db_instance import save_user_to_db
-                
-                # Создаем новый event loop для потока
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                # Используем sync_db вместо прямых вызовов
+                from db_sync import sync_db
                 
                 saved_count = 0
                 # Сохраняем всех пользователей, у которых есть данные
@@ -285,21 +281,13 @@ def setup_auto_save(interval_seconds: int = 300):
                 
                 for uid in all_users:
                     try:
-                        loop.run_until_complete(
-                            save_user_to_db(
-                                uid, 
-                                user_data, 
-                                user_contexts, 
-                                user_routes
-                            )
-                        )
-                        saved_count += 1
+                        if sync_db.save_user_to_db(uid):
+                            saved_count += 1
                     except Exception as e:
                         logger.error(f"❌ Ошибка автосохранения {uid}: {e}")
                 
                 if saved_count > 0:
                     logger.info(f"💾 Автосохранение: сохранено {saved_count} пользователей")
-                loop.close()
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка в автосохранении: {e}")
@@ -310,16 +298,16 @@ def setup_auto_save(interval_seconds: int = 300):
     logger.info(f"✅ Автосохранение запущено (интервал {interval_seconds} сек)")
 
 
-async def save_all_users_to_db(db_instance):
+def save_all_users_to_db() -> int:
     """
-    Сохраняет всех пользователей в БД (при завершении работы)
+    Синхронно сохраняет всех пользователей в БД (при завершении работы)
     
-    Args:
-        db_instance: Экземпляр BotDatabase из db_instance
+    Returns:
+        Количество сохраненных пользователей
     """
     logger.info("💾 Сохраняем всех пользователей перед завершением...")
     
-    from db_instance import save_user_to_db
+    from db_sync import sync_db
     
     saved_count = 0
     all_users = set(
@@ -330,8 +318,8 @@ async def save_all_users_to_db(db_instance):
     
     for uid in all_users:
         try:
-            await save_user_to_db(uid, user_data, user_contexts, user_routes)
-            saved_count += 1
+            if sync_db.save_user_to_db(uid):
+                saved_count += 1
         except Exception as e:
             logger.error(f"❌ Ошибка финального сохранения {uid}: {e}")
     
