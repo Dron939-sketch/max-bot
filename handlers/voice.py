@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик голосовых сообщений для MAX
-Версия 3.1 - АДАПТИРОВАН ПОД ЛОГИКУ ОРИГИНАЛЬНОГО КОДА
+Версия 3.2 - С ИСПОЛЬЗОВАНИЕМ QUESTION_ANALYZER
 """
 
 import logging
@@ -20,6 +20,8 @@ from message_utils import safe_send_message, safe_delete_message
 from services import speech_to_text, text_to_speech
 from state import user_data, user_contexts, get_state, set_state, TestStates, get_user_name
 from modes import get_mode
+from question_analyzer import create_analyzer_from_user_data
+from profiles import VECTORS
 
 logger = logging.getLogger(__name__)
 
@@ -215,22 +217,24 @@ def download_voice_message(voice_url: str) -> Optional[bytes]:
 
 async def handle_voice_message(message: Message, state):
     """
-    Обработка голосового сообщения - АДАПТИРОВАНО ИЗ ОРИГИНАЛЬНОГО КОДА
+    Обработка голосового сообщения - С ИСПОЛЬЗОВАНИЕМ QUESTION_ANALYZER
     
     Алгоритм:
     1. Проверяем, пройден ли тест
     2. Сохраняем голос во временный файл
     3. Распознаём речь через Deepgram
-    4. Получаем текущий режим пользователя
-    5. Обрабатываем текст через режим (коуч/психолог/тренер)
-    6. Отправляем текстовый ответ
-    7. Отправляем голосовой ответ
+    4. Создаём анализатор вопроса (конфайнмент-модель)
+    5. Получаем глубинный анализ вопроса
+    6. Получаем текущий режим пользователя
+    7. Обрабатываем текст через режим (коуч/психолог/тренер) с учётом анализа
+    8. Отправляем текстовый ответ
+    9. Отправляем голосовой ответ
     """
     user_id = message.from_user.id
     
     # Получаем данные пользователя
-    from state import user_data, user_contexts
     data = user_data.get(user_id, {})
+    user_name = get_user_name(user_id) or "друг"
     
     # Проверяем, пройден ли тест
     def is_test_completed(user_data_dict):
@@ -296,21 +300,72 @@ async def handle_voice_message(message: Message, state):
         # Обновляем статусное сообщение
         await status_msg.edit_text(
             f"📝 Распознано: {recognized_text[:100]}...\n\n"
-            "🧠 Думаю над ответом..."
+            "🧠 Анализирую вопрос...\n\n"
+            "🔍 Использую конфайнтмент-модель..."
         )
+        
+        # 🔥 СОЗДАЁМ АНАЛИЗАТОР ВОПРОСА (как в оригинальном коде)
+        analyzer = create_analyzer_from_user_data(data, user_name)
+        
+        # Получаем глубинный анализ вопроса
+        reflection = ""
+        if analyzer:
+            reflection = analyzer.get_reflection_text(recognized_text)
+            logger.info(f"🔍 Глубинный анализ вопроса: {reflection[:200]}...")
         
         # Получаем текущий режим пользователя
         context = user_contexts.get(user_id)
         mode_name = context.communication_mode if context else "coach"
         
-        # Создаём режим и обрабатываем вопрос
+        # Получаем данные профиля для контекста
+        profile_data = data.get("profile_data", {})
+        scores = {}
+        for k in VECTORS:
+            levels = data.get("behavioral_levels", {}).get(k, [])
+            scores[k] = sum(levels) / len(levels) if levels else 3.0
+        
+        # Формируем контекст для ответа
+        context_text = f"Профиль пользователя: {profile_data.get('display_name', 'не определен')}\n"
+        context_text += f"Тип восприятия: {data.get('perception_type', 'не определен')}\n"
+        context_text += f"Уровень мышления: {data.get('thinking_level', 5)}/9\n"
+        
+        if scores:
+            weakest = min(scores.items(), key=lambda x: x[1])
+            strongest = max(scores.items(), key=lambda x: x[1])
+            vector_names = {"СБ": "реакция на давление", "ТФ": "отношение к деньгам", 
+                           "УБ": "понимание мира", "ЧВ": "отношения с людьми"}
+            context_text += f"Зона роста: {vector_names.get(weakest[0], weakest[0])}\n"
+            context_text += f"Сильная сторона: {vector_names.get(strongest[0], strongest[0])}\n"
+        
+        # Добавляем анализ в контекст
+        if reflection:
+            context_text += f"\nГлубинный анализ вопроса:\n{reflection}\n"
+            context_text += "ВАЖНО: В ответе НЕ ДАВАЙ СОВЕТОВ И ИНСТРУКЦИЙ. Просто отрази то, что видишь."
+        
+        # Обновляем статусное сообщение
+        await status_msg.edit_text(
+            f"📝 Распознано: {recognized_text[:100]}...\n\n"
+            "🧠 Формирую ответ с учётом твоего профиля..."
+        )
+        
+        # Создаём режим и обрабатываем вопрос с учётом контекста
         mode = get_mode(mode_name, user_id, data, context)
-        result = mode.process_question(recognized_text)
+        
+        # Если есть анализатор, добавляем рефлексию в историю для контекста
+        if analyzer and reflection:
+            # Временно добавляем анализ в историю для лучшего ответа
+            temp_history = mode.history.copy() if hasattr(mode, 'history') else []
+            # Используем стандартный процесс вопроса
+            result = mode.process_question(recognized_text)
+        else:
+            result = mode.process_question(recognized_text)
+        
         response = result["response"]
         
         # Обновляем данные с новой историей
-        data['history'] = mode.history
-        user_data[user_id] = data
+        if hasattr(mode, 'history'):
+            data['history'] = mode.history
+            user_data[user_id] = data
         
         # Очищаем ответ от форматирования
         clean_response = response
@@ -333,20 +388,30 @@ async def handle_voice_message(message: Message, state):
         if result.get("suggestions"):
             suggestions_text = "\n\n" + "\n".join(result["suggestions"])
         
+        # Добавляем рефлексию, если есть и не включена в ответ
+        if reflection and "анализ" not in clean_response.lower() and "вижу" not in clean_response.lower():
+            reflection_text = f"\n\n🔍 {reflection}"
+        else:
+            reflection_text = ""
+        
         # Отправляем текстовый ответ
         mode_config = COMMUNICATION_MODES.get(mode_name, COMMUNICATION_MODES["coach"])
         
         await safe_send_message(
             message,
             f"📝 <b>Вы сказали:</b>\n{recognized_text}\n\n"
-            f"{mode_config['emoji']} <b>Ответ:</b>\n{clean_response}{suggestions_text}",
+            f"{mode_config['emoji']} <b>Ответ:</b>\n{clean_response}{suggestions_text}{reflection_text}",
             reply_markup=keyboard,
             parse_mode='HTML',
             delete_previous=True
         )
         
-        # Отправляем голосовой ответ
-        audio_data = await text_to_speech(clean_response, mode_name)
+        # Отправляем голосовой ответ (без рефлексии, чтобы не перегружать)
+        audio_text = clean_response
+        if len(audio_text) > 500:
+            audio_text = audio_text[:500] + "..."
+        
+        audio_data = await text_to_speech(audio_text, mode_name)
         if audio_data:
             from maxibot.types import BufferedInputFile
             audio_file = BufferedInputFile(audio_data, filename="response.ogg")
@@ -377,11 +442,6 @@ async def handle_voice_message(message: Message, state):
 async def send_voice_response(message: Message, text: str, mode: str = "coach"):
     """
     Отправляет голосовой ответ (синтезирует речь и отправляет)
-    
-    Args:
-        message: сообщение для ответа
-        text: текст для озвучивания
-        mode: режим (coach, psychologist, trainer)
     """
     try:
         # Очищаем текст от HTML и Markdown для синтеза
