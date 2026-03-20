@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Сервисные функции для работы с API и генерации ответов
-Версия 9.8.0 - ИСПРАВЛЕНО: Замена aiohttp на httpx для Python 3.14
+Версия 9.8.1 - ИСПРАВЛЕНО: добавлен traceback, улучшена обработка ошибок
 """
 
 import os
@@ -11,8 +11,8 @@ import logging
 import asyncio
 import re
 import sys
-import traceback
-import httpx  # <--- ЗАМЕНЯЕМ aiohttp на httpx
+import traceback  # <--- ДОБАВЛЕНО
+import httpx
 from typing import Optional, Dict, List, Any, Tuple
 from datetime import datetime
 
@@ -169,11 +169,15 @@ async def call_deepseek(
             
             # Используем глобальный HTTPX клиент
             client = await get_http_client()
+            if client is None:
+                logger.error("❌ Не удалось получить HTTPX клиент")
+                continue
             
             response = await client.post(
                 DEEPSEEK_API_URL,
                 headers=headers,
-                json=payload
+                json=payload,
+                timeout=60.0  # Явный таймаут
             )
             
             elapsed = (datetime.now() - start_time).total_seconds()
@@ -216,8 +220,10 @@ async def call_deepseek(
             
         except httpx.TimeoutException as e:
             logger.error(f"❌ DeepSeek API timeout (попытка {attempt + 1}): {e}")
+            logger.error(traceback.format_exc())
         except httpx.HTTPStatusError as e:
             logger.error(f"❌ DeepSeek API HTTP error (попытка {attempt + 1}): {e}")
+            logger.error(traceback.format_exc())
         except Exception as e:
             logger.error(f"❌ DeepSeek API exception (попытка {attempt + 1}): {e}")
             logger.error(traceback.format_exc())
@@ -243,6 +249,11 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
         logger.error("❌ DEEPGRAM_API_KEY не настроен")
         return None
     
+    # Проверяем существование файла
+    if not os.path.exists(audio_file_path):
+        logger.error(f"❌ Файл не найден: {audio_file_path}")
+        return None
+    
     logger.info(f"🎤 Распознавание речи из файла: {audio_file_path}")
     
     headers = {
@@ -266,12 +277,16 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
         
         # Используем глобальный HTTPX клиент
         client = await get_http_client()
+        if client is None:
+            logger.error("❌ Не удалось получить HTTPX клиент")
+            return None
         
         response = await client.post(
             DEEPGRAM_API_URL,
             headers=headers,
             params=params,
-            content=audio_data
+            content=audio_data,
+            timeout=30.0
         )
         
         if response.status_code == 200:
@@ -334,11 +349,15 @@ async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
     try:
         # Используем глобальный HTTPX клиент
         client = await get_http_client()
+        if client is None:
+            logger.error("❌ Не удалось получить HTTPX клиент")
+            return None
         
         response = await client.post(
             YANDEX_TTS_API_URL,
             headers=headers,
-            data=data
+            data=data,
+            timeout=30.0
         )
         
         if response.status_code == 200:
@@ -455,10 +474,24 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
     logger.info(f"📊 profile_data keys: {list(profile_data.keys())}")
     
     # Полный промт для генерации профиля
+    try:
+        profile_json = json.dumps(profile_data, ensure_ascii=False, indent=2, default=str)
+    except Exception as e:
+        logger.error(f"❌ Ошибка сериализации profile_data: {e}")
+        # Упрощаем данные при ошибке
+        simplified = {}
+        for k, v in profile_data.items():
+            try:
+                simplified[k] = str(v)[:500] if not isinstance(v, (int, float, bool, str)) else v
+            except:
+                simplified[k] = str(v)[:200]
+        profile_json = json.dumps(simplified, ensure_ascii=False, indent=2)
+        logger.warning("⚠️ Используем упрощенные данные")
+    
     prompt = f"""На основе данных теста создай глубокий, точный психологический портрет человека.
 
 ДАННЫЕ ТЕСТА:
-{json.dumps(profile_data, ensure_ascii=False, indent=2, default=str)}
+{profile_json}
 
 ИНСТРУКЦИИ ПО ФОРМАТУ:
 1. Пиши от первого лица, как будто ты напрямую обращаешься к человеку.
@@ -519,6 +552,7 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
             logger.info("✅ Ответ содержит все необходимые эмодзи")
         else:
             logger.warning("⚠️ В ответе отсутствуют некоторые обязательные эмодзи")
+            logger.info(f"📄 Начало ответа: {response[:200]}...")
         
         return response
     else:
@@ -590,7 +624,7 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
         except Exception as e:
             logger.error(f"❌ Ошибка преобразования: {e}")
     
-    system_prompt = """Ты — Фреди, виртуальный психолог. Твоя задача — давать глубинный анализ через конфайнмент-модель.
+    system_prompt = """Ты — Фреди, виртуальный психолог. Твоя задача — давать глубинный анализ через конфайнтмент-модель.
 
 ТВОЙ СТИЛЬ:
 - Говоришь как опытный психолог, но простым языком
@@ -608,14 +642,23 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
     
     logger.info(f"📊 profile_data подготовлен: {list(profile_data.keys())}")
     
+    # Сериализуем данные
+    try:
+        profile_json = json.dumps(profile_data, ensure_ascii=False, indent=2, default=str)
+        confinement_json = json.dumps(confinement_data, ensure_ascii=False, indent=2, default=str)
+    except Exception as e:
+        logger.error(f"❌ Ошибка сериализации: {e}")
+        profile_json = str(profile_data)[:1000]
+        confinement_json = str(confinement_data)[:1000]
+    
     # Полный промт для мыслей психолога
     prompt = f"""Проанализируй пользователя через конфайнмент-модель и дай 3 глубинные мысли.
 
 ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:
-{json.dumps(profile_data, ensure_ascii=False, indent=2, default=str)}
+{profile_json}
 
 КОНФАЙНМЕНТ-МОДЕЛЬ:
-{json.dumps(confinement_data, ensure_ascii=False, indent=2, default=str)}
+{confinement_json}
 
 Дай 3 мысли, строго соблюдая формат:
 
@@ -1012,5 +1055,5 @@ __all__ = [
     'italic',
     'emoji_text',
     'make_json_serializable',
-    'close_http_client'  # <--- Добавлено для закрытия в shutdown_handler
+    'close_http_client'
 ]
