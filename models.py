@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Классы-менеджеры и модели данных
-Версия 9.6: Добавлены методы для работы с жизненным контекстом и определения часового пояса
+Версия 9.7: ИСПРАВЛЕНА ошибка с часовыми поясами в update_weather
 СИНХРОННАЯ ВЕРСИЯ ДЛЯ MAX
 """
 import os
@@ -301,6 +301,7 @@ class UserContext:
         
         return "\n".join(lines)
     
+    # ========== ИСПРАВЛЕННЫЙ МЕТОД update_weather ==========
     def update_weather(self):
         """Обновляет погоду через OpenWeatherMap API (СИНХРОННАЯ)"""
         logger.info(f"🌤️ update_weather вызван для города {self.city}")
@@ -308,9 +309,18 @@ class UserContext:
             logger.warning(f"⚠️ Нет города или API ключа")
             return False
         
+        # ✅ ИСПРАВЛЕНО: Проверка кэша с учетом часовых поясов
         if self.weather_cache and self.weather_cache_time:
-            if (datetime.now() - self.weather_cache_time).seconds < 3600:
-                logger.info(f"✅ Используем кэш погоды")
+            now = datetime.now()
+            cache_time = self.weather_cache_time
+            
+            # Если cache_time содержит часовой пояс, убираем его
+            if cache_time.tzinfo is not None:
+                cache_time = cache_time.replace(tzinfo=None)
+            
+            # Проверяем, не устарел ли кэш (меньше 1 часа)
+            if (now - cache_time).seconds < 3600:
+                logger.info(f"✅ Используем кэш погоды для {self.city}")
                 return True
         
         url = f"http://api.openweathermap.org/data/2.5/weather?q={self.city}&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
@@ -346,7 +356,8 @@ class UserContext:
                     "icon": icon,
                     "pressure": data['main']['pressure']
                 }
-                self.weather_cache_time = datetime.now()
+                # ✅ ИСПРАВЛЕНО: Сохраняем время без часового пояса
+                self.weather_cache_time = datetime.now().replace(tzinfo=None)
                 logger.info(f"✅ Погода обновлена: {self.weather_cache['temp']}°C, {self.weather_cache['description']}")
                 return True
             else:
@@ -375,7 +386,7 @@ class UserContext:
         else:
             return "возраст мудрости"
     
-    # ========== НОВЫЙ МЕТОД: ОПРЕДЕЛЕНИЕ ЧАСОВОГО ПОЯСА ==========
+    # ========== МЕТОД: ОПРЕДЕЛЕНИЕ ЧАСОВОГО ПОЯСА ==========
     
     def detect_timezone_from_city(self):
         """Определяет часовой пояс по названию города (СИНХРОННАЯ)"""
@@ -483,7 +494,7 @@ class UserContext:
         self.timezone_offset = 3
         logger.info(f"🌍 Для города {self.city} не найден часовой пояс, установлен Europe/Moscow по умолчанию")
     
-    # ========== НОВЫЕ МЕТОДЫ ДЛЯ РАБОТЫ С ЖИЗНЕННЫМ КОНТЕКСТОМ ==========
+    # ========== МЕТОДЫ ДЛЯ РАБОТЫ С ЖИЗНЕННЫМ КОНТЕКСТОМ ==========
     
     def save_life_context(self, answers: dict) -> None:
         """Сохраняет жизненный контекст из ответов пользователя"""
