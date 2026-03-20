@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 Синхронные обертки для работы с БД - для вызовов из любого потока
-ВЕРСИЯ 2.0 - ДОБАВЛЕНО ПОДРОБНОЕ ЛОГИРОВАНИЕ
+ВЕРСИЯ 2.1 - ИСПРАВЛЕНО: add_reminder, get_user_test_results
 """
 
 import logging
 import time
 import asyncio
 import traceback
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from db_instance import db_loop_manager, db, save_user_to_db as db_save_user
 
@@ -30,13 +30,10 @@ class SyncDB:
         """Синхронная проверка соединения с БД"""
         try:
             from db_instance import ensure_db_connection
-            logger.debug(f"🔍 ensure_connection: вызываем run_coro")
             result = db_loop_manager.run_coro(ensure_db_connection(), timeout=10)
-            logger.debug(f"🔍 ensure_connection: результат={result}, тип={type(result)}")
             return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка ensure_connection: {e}")
-            logger.error(f"❌ Стек: {traceback.format_exc()}")
             return False
     
     @staticmethod
@@ -49,41 +46,27 @@ class SyncDB:
     ) -> bool:
         """Синхронное сохранение пользователя"""
         try:
-            logger.debug(f"🔍 save_telegram_user: user={user_id}, first_name={first_name}")
-            
             async def _save():
                 return await db.save_telegram_user(
                     user_id, username, first_name, last_name, language_code
                 )
-            
-            logger.debug(f"🔍 save_telegram_user: вызываем run_coro")
             result = db_loop_manager.run_coro(_save(), timeout=10)
-            logger.debug(f"🔍 save_telegram_user: результат={result}, тип={type(result)}")
             return result if result is not None else False
-            
         except Exception as e:
             logger.error(f"❌ Ошибка save_telegram_user: {e}")
-            logger.error(f"❌ Стек: {traceback.format_exc()}")
             return False
     
     @staticmethod
     def save_user_data(user_id: int, data: Dict) -> bool:
         """Синхронное сохранение данных пользователя"""
         try:
-            logger.debug(f"🔍 save_user_data: user={user_id}, размер данных={len(str(data))}")
-            
             async def _save():
                 await db.save_user_data(user_id, data)
                 return True
-            
-            logger.debug(f"🔍 save_user_data: вызываем run_coro")
             result = db_loop_manager.run_coro(_save(), timeout=10)
-            logger.debug(f"🔍 save_user_data: результат={result}")
             return result if result is not None else False
-            
         except Exception as e:
             logger.error(f"❌ Ошибка save_user_data: {e}")
-            logger.error(f"❌ Стек: {traceback.format_exc()}")
             return False
     
     @staticmethod
@@ -93,115 +76,125 @@ class SyncDB:
         С ДЕТАЛЬНЫМ ЛОГИРОВАНИЕМ
         """
         try:
-            logger.info(f"🔍🔍🔍 save_user_to_db ВЫЗВАН для user {user_id}")
-            logger.info(f"🔍🔍🔍 Стек вызовов:\n{''.join(traceback.format_stack()[-8:])}")
+            logger.debug(f"🔍 save_user_to_db вызван для user {user_id}")
             
-            # Получаем функцию из db_instance
-            from db_instance import save_user_to_db as db_save_user
-            
-            logger.info(f"🔍 Тип db_save_user: {type(db_save_user)}")
-            logger.info(f"🔍 db_save_user: {db_save_user}")
-            
-            # Вызываем функцию
-            logger.info(f"🔍 Вызываем db_save_user({user_id})...")
+            # db_save_user уже синхронная функция из db_instance
             result = db_save_user(user_id)
             
-            logger.info(f"🔍 Результат вызова db_save_user: тип={type(result)}")
-            
-            # Проверяем, что вернулось
-            if asyncio.iscoroutine(result):
-                logger.info(f"🔍 РЕЗУЛЬТАТ - КОРУТИНА! Запускаем через run_coro")
-                result = db_loop_manager.run_coro(result, timeout=30)
-                logger.info(f"🔍 После run_coro: результат={result}, тип={type(result)}")
-            else:
-                logger.info(f"🔍 Результат НЕ корутина: {result}")
-            
-            # Возвращаем результат
             if result is True:
-                logger.info(f"✅ save_user_to_db: УСПЕШНО сохранен user {user_id}")
+                logger.debug(f"✅ save_user_to_db: user {user_id} сохранен")
             else:
-                logger.warning(f"⚠️ save_user_to_db: НЕ УДАЛОСЬ сохранить user {user_id}, result={result}")
+                logger.warning(f"⚠️ save_user_to_db: user {user_id} не сохранен, result={result}")
             
             return result if result is not None else False
             
         except Exception as e:
-            logger.error(f"❌❌❌ КРИТИЧЕСКАЯ ОШИБКА save_user_to_db: {e}")
-            logger.error(f"❌❌❌ Полный стек:\n{traceback.format_exc()}")
+            logger.error(f"❌ Ошибка save_user_to_db: {e}")
+            traceback.print_exc()
             return False
     
     @staticmethod
     def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
         """Синхронное логирование события"""
         try:
-            logger.debug(f"🔍 log_event: user={user_id}, type={event_type}")
-            
             async def _log():
                 await db.log_event(user_id, event_type, event_data)
                 return True
-            
             result = db_loop_manager.run_coro(_log(), timeout=5)
-            logger.debug(f"🔍 log_event: результат={result}")
             return result if result is not None else False
-            
         except Exception as e:
             logger.error(f"❌ Ошибка log_event: {e}")
-            logger.error(f"❌ Стек: {traceback.format_exc()}")
             return False
     
     @staticmethod
     def add_reminder(user_id: int, reminder_type: str, remind_at, data: Dict = None) -> Optional[int]:
         """Синхронное добавление напоминания"""
         try:
-            logger.debug(f"🔍 add_reminder: user={user_id}, type={reminder_type}")
-            
+            # ✅ ИСПРАВЛЕНО: создаем корутину и запускаем через run_coro
             async def _add():
                 return await db.add_reminder(user_id, reminder_type, remind_at, data)
             
             result = db_loop_manager.run_coro(_add(), timeout=10)
-            logger.debug(f"🔍 add_reminder: результат={result}")
+            logger.debug(f"✅ add_reminder: user={user_id}, type={reminder_type}, result={result}")
             return result
             
         except Exception as e:
             logger.error(f"❌ Ошибка add_reminder: {e}")
-            logger.error(f"❌ Стек: {traceback.format_exc()}")
+            traceback.print_exc()
             return None
+    
+    @staticmethod
+    def get_pending_reminders(limit: int = 100) -> List[Dict]:
+        """Синхронное получение неотправленных напоминаний"""
+        try:
+            async def _get():
+                return await db.get_pending_reminders(limit)
+            result = db_loop_manager.run_coro(_get(), timeout=10)
+            return result if result is not None else []
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_pending_reminders: {e}")
+            return []
+    
+    @staticmethod
+    def mark_reminder_sent(reminder_id: int) -> bool:
+        """Синхронная отметка напоминания как отправленного"""
+        try:
+            async def _mark():
+                await db.mark_reminder_sent(reminder_id)
+                return True
+            result = db_loop_manager.run_coro(_mark(), timeout=5)
+            return result if result is not None else False
+        except Exception as e:
+            logger.error(f"❌ Ошибка mark_reminder_sent: {e}")
+            return False
+    
+    @staticmethod
+    def get_user_test_results(user_id: int, limit: int = 10, test_type: str = None) -> List[Dict]:
+        """Синхронное получение результатов тестов пользователя"""
+        try:
+            async def _get():
+                return await db.get_user_test_results(user_id, limit, test_type)
+            result = db_loop_manager.run_coro(_get(), timeout=10)
+            return result if result is not None else []
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_user_test_results: {e}")
+            return []
     
     @staticmethod
     def get_cached_weekend_ideas(user_id: int) -> Optional[str]:
         """Синхронное получение кэшированных идей"""
         try:
-            logger.debug(f"🔍 get_cached_weekend_ideas: user={user_id}")
-            
             async def _get():
                 return await db.get_cached_weekend_ideas(user_id)
-            
-            result = db_loop_manager.run_coro(_get(), timeout=5)
-            logger.debug(f"🔍 get_cached_weekend_ideas: результат={type(result)}")
-            return result
-            
+            return db_loop_manager.run_coro(_get(), timeout=5)
         except Exception as e:
             logger.error(f"❌ Ошибка get_cached_weekend_ideas: {e}")
-            logger.error(f"❌ Стек: {traceback.format_exc()}")
             return None
     
     @staticmethod
     def cache_weekend_ideas(user_id: int, ideas_text: str, main_vector: str, main_level: int) -> bool:
         """Синхронное сохранение идей в кэш"""
         try:
-            logger.debug(f"🔍 cache_weekend_ideas: user={user_id}")
-            
             async def _cache():
                 await db.cache_weekend_ideas(user_id, ideas_text, main_vector, main_level)
                 return True
-            
             result = db_loop_manager.run_coro(_cache(), timeout=10)
-            logger.debug(f"🔍 cache_weekend_ideas: результат={result}")
             return result if result is not None else False
-            
         except Exception as e:
             logger.error(f"❌ Ошибка cache_weekend_ideas: {e}")
-            logger.error(f"❌ Стек: {traceback.format_exc()}")
             return False
+    
+    @staticmethod
+    def get_user_reminders(user_id: int, include_sent: bool = False) -> List[Dict]:
+        """Синхронное получение напоминаний пользователя"""
+        try:
+            async def _get():
+                return await db.get_user_reminders(user_id, include_sent)
+            result = db_loop_manager.run_coro(_get(), timeout=10)
+            return result if result is not None else []
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_user_reminders: {e}")
+            return []
 
 
 # Создаем глобальный экземпляр
@@ -211,4 +204,3 @@ sync_db = SyncDB()
 logger.info("✅ sync_db инициализирован")
 logger.info(f"📌 db_loop_manager: {db_loop_manager}")
 logger.info(f"📌 db: {db}")
-logger.info(f"📌 db_save_user: {db_save_user}")
