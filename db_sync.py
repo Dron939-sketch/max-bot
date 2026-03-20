@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Optional, Dict, Any
 
-from db_instance import db_loop_manager, db
+from db_instance import db_loop_manager, db, save_user_to_db as db_save_user
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,6 @@ class SyncDB:
         """Синхронная проверка соединения с БД"""
         try:
             from db_instance import ensure_db_connection
-            # Вызываем через менеджер и ЖДЕМ результат
             result = db_loop_manager.run_coro(ensure_db_connection(), timeout=10)
             return result if result is not None else False
         except Exception as e:
@@ -37,12 +36,10 @@ class SyncDB:
     ) -> bool:
         """Синхронное сохранение пользователя"""
         try:
-            # Создаем корутину
             async def _save():
                 return await db.save_telegram_user(
                     user_id, username, first_name, last_name, language_code
                 )
-            # Вызываем через менеджер и ЖДЕМ результат
             result = db_loop_manager.run_coro(_save(), timeout=10)
             return result if result is not None else False
         except Exception as e:
@@ -64,15 +61,18 @@ class SyncDB:
     
     @staticmethod
     def save_user_to_db(user_id: int) -> bool:
-        """Синхронное сохранение пользователя в БД"""
+        """
+        Синхронное сохранение пользователя в БД.
+        ✅ ИСПРАВЛЕНО: напрямую вызываем синхронную функцию из db_instance
+        """
         try:
-            from db_instance import save_user_to_db as async_save
-            async def _save():
-                return await async_save(user_id)
-            result = db_loop_manager.run_coro(_save(), timeout=10)
+            # db_save_user уже синхронная функция из db_instance
+            result = db_save_user(user_id)
             return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка save_user_to_db: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     @staticmethod
