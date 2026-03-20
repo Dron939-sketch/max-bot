@@ -14,7 +14,7 @@ import random
 import asyncio
 import tempfile
 import os
-import threading  # ✅ ДОБАВЛЕНО
+import threading
 from typing import Dict, Any, List, Optional
 
 from maxibot import MaxiBot
@@ -32,7 +32,7 @@ from state import (
     get_state, set_state, get_state_data, update_state_data, TestStates
 )
 
-# ✅ ДОБАВЛЕНО: импорт для БД
+# ✅ ИСПРАВЛЕНО: используем sync_db
 from db_sync import sync_db
 
 # Импорты из profiles.py
@@ -62,6 +62,7 @@ from handlers.voice import send_voice_to_max
 
 logger = logging.getLogger(__name__)
 
+
 def save_answer_to_db_sync(user_id: int, answer_data: Dict[str, Any]):
     """Синхронное сохранение отдельного ответа в БД"""
     try:
@@ -87,29 +88,6 @@ def save_answer_to_db_sync(user_id: int, answer_data: Dict[str, Any]):
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения ответа для {user_id}: {e}")
 
-# И вызывать:
-threading.Thread(target=save_answer_to_db_sync, args=(user_id, answer_data), daemon=True).start()
-
-# ============================================
-# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
-# ============================================
-
-def run_async_task(coro_func, *args, **kwargs):
-    """
-    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
-    """
-    def _wrapper():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            coro = coro_func(*args, **kwargs)
-            loop.run_until_complete(coro)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
-        finally:
-            loop.close()
-    
-    threading.Thread(target=_wrapper, daemon=True).start()
 
 # ============================================
 # БЛОКИРОВКА ДЛЯ ПРЕДОТВРАЩЕНИЯ ДВОЙНОЙ ОБРАБОТКИ
@@ -126,48 +104,6 @@ def set_processing(user_id: int, value: bool):
     """Устанавливает флаг обработки"""
     _processing_lock[user_id] = value
 
-# ============================================
-# ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
-# ============================================
-
-async def save_answer_to_db(user_id: int, answer_data: Dict[str, Any]):
-    """Сохраняет отдельный ответ в БД"""
-    try:
-        # Получаем последний результат теста
-        results = await db.get_user_test_results(user_id, limit=1)
-        test_result_id = results[0]['id'] if results else None
-        
-        await db.save_test_answer(
-            user_id=user_id,
-            test_result_id=test_result_id,
-            stage=answer_data.get('stage', 0),
-            question_index=answer_data.get('question_index', 0),
-            question_text=answer_data.get('question', ''),
-            answer_text=answer_data.get('answer', ''),
-            answer_value=answer_data.get('option', ''),
-            scores=answer_data.get('scores'),
-            measures=answer_data.get('measures'),
-            strategy=answer_data.get('strategy'),
-            dilts=answer_data.get('dilts'),
-            pattern=answer_data.get('pattern'),
-            target=answer_data.get('target')
-        )
-        logger.debug(f"💾 Ответ этапа {answer_data.get('stage')} для {user_id} сохранен в БД")
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения ответа для {user_id}: {e}")
-
-async def save_question_analysis_to_db(user_id: int, question: str, answer: str, analysis: Dict[str, Any]):
-    """Сохраняет анализ вопроса в кэш БД"""
-    try:
-        await db.cache_question_analysis(user_id, question, {
-            'question': question,
-            'answer': answer,
-            'analysis': analysis,
-            'timestamp': time.time()
-        })
-        logger.debug(f"💾 Анализ вопроса для {user_id} сохранен в БД")
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения анализа для {user_id}: {e}")
 
 # ============================================
 # ЧАСТЬ 1: ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -1227,14 +1163,14 @@ def handle_clarifying_answer(call: CallbackQuery, user_id: int, state_data: dict
     answers.append(answer_data)
     
     # ✅ Сохраняем в БД
-    run_async_task(save_answer_to_db, user_id, {
-        'stage': 'clarifying',
-        'question_index': current,
-        'question': question['text'],
-        'answer': answer_data['answer_text'],
-        'option': answer_key,
-        'target': answer_data['target']
-    })
+    threading.Thread(target=save_answer_to_db_sync, args=(user_id, {
+    'stage': 'clarifying',
+    'question_index': current,
+    'question': question['text'],
+    'answer': answer_data['answer_text'],
+    'option': answer_key,
+    'target': answer_data['target']
+}), daemon=True).start()
     
     update_state_data(user_id,
         clarifying_answers=answers,
@@ -1856,7 +1792,6 @@ __all__ = [
     'determine_dominant_dilts',
     'calculate_profile_final',
     
-    # ✅ ДОБАВЛЕНО: функции для БД
-    'save_answer_to_db',
-    'save_question_analysis_to_db'
+    # ✅ ДОБАВЛЕНО: синхронная функция сохранения
+    'save_answer_to_db_sync'
 ]
