@@ -2,10 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики выбора и подтверждения режима для MAX
-Версия 2.3 - ИСПРАВЛЕНО: убрано создание циклов, используется db_loop_manager
+Версия 2.4 - ИСПРАВЛЕНО: используется sync_db вместо прямых вызовов db
 """
 import logging
-import asyncio
 import time
 import threading
 from maxibot import types
@@ -34,57 +33,35 @@ from state import (
     TestStates
 )
 
-# ✅ ИСПРАВЛЕНО: импортируем db_loop_manager вместо создания новых циклов
-from db_instance import db, save_user_to_db, db_loop_manager
+# ✅ ИСПРАВЛЕНО: используем sync_db вместо прямых вызовов
+from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
 
 # ============================================
-# ✅ ИСПРАВЛЕНО: функция для асинхронных вызовов через db_loop_manager
-# ============================================
-
-def run_async_task(coro_func, *args, **kwargs):
-    """
-    Запускает асинхронную корутину через глобальный менеджер цикла БД
-    """
-    try:
-        # Запускаем как фоновую задачу через менеджер
-        db_loop_manager.run_task(coro_func, *args, **kwargs)
-    except Exception as e:
-        logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
-
-# ============================================
-# ✅ ИСПРАВЛЕНО: функции для работы с БД (синхронные обертки)
+# ФУНКЦИИ ДЛЯ РАБОТЫ С БД
 # ============================================
 
 def save_mode_to_db(user_id: int, mode: str):
     """Сохраняет выбранный режим в БД (синхронная версия)"""
     try:
-        # Создаем корутину для выполнения
-        async def _save():
-            try:
-                # Логируем событие
-                await db.log_event(
-                    user_id,
-                    'mode_selected',
-                    {
-                        'mode': mode,
-                        'mode_name': COMMUNICATION_MODES.get(mode, {}).get('display_name', mode),
-                        'timestamp': time.time()
-                    }
-                )
-                
-                # Сохраняем пользователя целиком
-                await save_user_to_db(user_id, user_data, user_contexts, {})
-                logger.debug(f"💾 Режим {mode} для пользователя {user_id} сохранен в БД")
-            except Exception as e:
-                logger.error(f"❌ Ошибка сохранения режима для {user_id}: {e}")
+        # Логируем событие через sync_db
+        sync_db.log_event(
+            user_id,
+            'mode_selected',
+            {
+                'mode': mode,
+                'mode_name': COMMUNICATION_MODES.get(mode, {}).get('display_name', mode),
+                'timestamp': time.time()
+            }
+        )
         
-        # Запускаем через менеджер (без ожидания)
-        db_loop_manager.run_task(_save)
+        # Сохраняем пользователя целиком
+        sync_db.save_user_to_db(user_id)
+        logger.debug(f"💾 Режим {mode} для пользователя {user_id} сохранен в БД")
         
     except Exception as e:
-        logger.error(f"❌ Ошибка при запуске сохранения режима: {e}")
+        logger.error(f"❌ Ошибка сохранения режима для {user_id}: {e}")
 
 # ============================================
 # ОБРАБОТЧИКИ КОМАНД
@@ -121,13 +98,12 @@ def cmd_menu(message: types.Message):
 
 
 # ============================================
-# CALLBACK-ОБРАБОТЧИКИ - ИСПРАВЛЕНО: добавлены call.answer()
+# CALLBACK-ОБРАБОТЧИКИ
 # ============================================
 
 @bot.callback_query_handler(func=lambda call: call.data == 'show_modes')
 def callback_show_modes(call: types.CallbackQuery):
     """Показать выбор режимов"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -139,7 +115,6 @@ def callback_show_modes(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'set_mode_coach')
 def callback_set_mode_coach(call: types.CallbackQuery):
     """Установить режим КОУЧ"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -151,7 +126,6 @@ def callback_set_mode_coach(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'set_mode_psychologist')
 def callback_set_mode_psychologist(call: types.CallbackQuery):
     """Установить режим ПСИХОЛОГ"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -163,7 +137,6 @@ def callback_set_mode_psychologist(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'set_mode_trainer')
 def callback_set_mode_trainer(call: types.CallbackQuery):
     """Установить режим ТРЕНЕР"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -175,7 +148,6 @@ def callback_set_mode_trainer(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mode_'))
 def callback_mode_selected(call: types.CallbackQuery):
     """Обработка выбора режима (старый вариант, для совместимости)"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -206,7 +178,6 @@ def callback_mode_selected(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'back_to_modes')
 def callback_back_to_modes(call: types.CallbackQuery):
     """Вернуться к выбору режимов"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -218,7 +189,6 @@ def callback_back_to_modes(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'back_to_mode_selected')
 def callback_back_to_mode_selected(call: types.CallbackQuery):
     """Возврат к экрану выбранного режима"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -230,7 +200,6 @@ def callback_back_to_mode_selected(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'start_test')
 def callback_start_test(call: types.CallbackQuery):
     """Начать тест после выбора режима"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -245,7 +214,6 @@ def callback_start_test(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'main_menu')
 def callback_main_menu(call: types.CallbackQuery):
     """Вернуться в главное меню"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -263,7 +231,6 @@ def callback_main_menu(call: types.CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'back_to_main')
 def callback_back_to_main(call: types.CallbackQuery):
     """Вернуться в главное меню до теста"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -302,7 +269,7 @@ def set_mode_coach(call: types.CallbackQuery):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через db_loop_manager
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через sync_db
     save_mode_to_db(user_id, "coach")
     
     # Показываем подтверждение
@@ -331,7 +298,7 @@ def set_mode_psychologist(call: types.CallbackQuery):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через db_loop_manager
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через sync_db
     save_mode_to_db(user_id, "psychologist")
     
     # Показываем подтверждение
@@ -360,7 +327,7 @@ def set_mode_trainer(call: types.CallbackQuery):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через db_loop_manager
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через sync_db
     save_mode_to_db(user_id, "trainer")
     
     # Показываем подтверждение
@@ -399,12 +366,11 @@ def choose_mode(call: types.CallbackQuery, mode: str):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через db_loop_manager
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через sync_db
     save_mode_to_db(user_id, new_mode)
     
     mode_info = COMMUNICATION_MODES.get(new_mode, COMMUNICATION_MODES["coach"])
     
-    # 👇 ИСПРАВЛЕНО: вынесли значение в отдельную переменную
     mode_display_name = mode_info["display_name"]
     text = f"{mode_info['emoji']} {bold(f'Выбранный режим: {mode_display_name}')}\n\n"
     text += f"{mode_info.get('responsibility', '')}\n\n"
@@ -693,7 +659,6 @@ def show_main_menu_after_mode(message: types.Message, context: UserContext):
     context.update_weather()
     day_context = context.get_day_context()
     
-    # 👇 ИСПРАВЛЕНО: вынесли значение в отдельную переменную
     mode_display_name = mode_config["display_name"]
     text = f"{mode_config['emoji']} {bold(f'РЕЖИМ {mode_display_name}')}\n\n"
     text += context.get_greeting(context.name) + "\n"
@@ -773,6 +738,5 @@ __all__ = [
     'callback_start_test',
     'callback_main_menu',
     'callback_back_to_main',
-    # ✅ ДОБАВЛЕНО: функция для БД
     'save_mode_to_db'
 ]
