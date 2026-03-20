@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ ДЛЯ PYTHON 3.11 - ИСПРАВЛЕНО: единый цикл событий
+ВЕРСИЯ ДЛЯ PYTHON 3.11 - ИСПРАВЛЕНО: единый цикл событий + save_telegram_user
 """
 
 import os
@@ -331,8 +331,60 @@ def sync_db_call(coro_func):
     return wrapper
 
 # ============================================
-# СОХРАНЕНИЕ ДАННЫХ - ИСПРАВЛЕННАЯ ВЕРСИЯ
+# СОХРАНЕНИЕ ДАННЫХ
 # ============================================
+
+async def save_telegram_user_async(
+    user_id: int,
+    username: str = None,
+    first_name: str = None,
+    last_name: str = None,
+    language_code: str = None
+) -> bool:
+    """
+    Асинхронная версия сохранения пользователя Telegram
+    """
+    try:
+        # Проверяем соединение
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения пользователя {user_id}")
+            return False
+        
+        # Сохраняем пользователя
+        result = await db.save_telegram_user(
+            user_id=user_id,
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
+            language_code=language_code
+        )
+        logger.debug(f"💾 Пользователь {user_id} сохранен в БД")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
+        return False
+
+
+def save_telegram_user(
+    user_id: int,
+    username: str = None,
+    first_name: str = None,
+    last_name: str = None,
+    language_code: str = None
+) -> bool:
+    """
+    СИНХРОННАЯ обертка для сохранения пользователя Telegram
+    """
+    return db_loop_manager.run_coro(
+        save_telegram_user_async,
+        user_id,
+        username,
+        first_name,
+        last_name,
+        language_code,
+        timeout=30
+    )
+
 
 async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None):
     """
@@ -498,6 +550,7 @@ def save_test_result_to_db(user_id, test_type, user_data_dict=None):
         timeout=30
     )
 
+
 # ============================================
 # ЭКСПОРТ
 # ============================================
@@ -507,6 +560,7 @@ __all__ = [
     'db_loop_manager',
     'init_db',
     'close_db',
+    'save_telegram_user',
     'save_user_to_db',
     'save_test_result_to_db',
     'ensure_db_connection',
