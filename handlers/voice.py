@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик голосовых сообщений для MAX
-Версия 3.3 - С АЛИАСАМИ ДЛЯ СОВМЕСТИМОСТИ
+Версия 3.4 - С ДОБАВЛЕННОЙ ОТЛАДКОЙ РАСПОЗНАВАНИЯ
 """
 
 import logging
@@ -11,6 +11,7 @@ import os
 import asyncio
 import requests
 import time
+import traceback
 from typing import Optional, Dict, Any, List
 
 from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -225,6 +226,19 @@ async def handle_voice_message(message: Message, state):
     """
     user_id = message.from_user.id
     
+    # 🔍 ОТЛАДКА: проверяем наличие голосового сообщения
+    if not message.voice:
+        logger.error("❌ Нет голосового сообщения в message")
+        await safe_send_message(
+            message,
+            "❌ Не удалось получить голосовое сообщение. Попробуйте еще раз.",
+            delete_previous=True
+        )
+        return
+    
+    logger.info(f"🎤 Получено голосовое сообщение от {user_id}")
+    logger.info(f"📊 Информация о голосе: duration={message.voice.duration}s, file_id={message.voice.file_id[:20]}...")
+    
     # Получаем данные пользователя
     data = user_data.get(user_id, {})
     user_name = get_user_name(user_id) or "друг"
@@ -259,33 +273,59 @@ async def handle_voice_message(message: Message, state):
     temp_file = None
     try:
         # Получаем файл голосового сообщения
+        logger.info("📥 Получаем файл голосового сообщения...")
         file_info = await message.bot.get_file(message.voice.file_id)
+        logger.info(f"📁 file_info: path={file_info.file_path}, size={file_info.file_size}")
         
         # Создаём временный файл
         with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg') as tmp:
             temp_file = tmp.name
+            logger.info(f"💾 Создан временный файл: {temp_file}")
             await message.bot.download_file(file_info.file_path, destination=temp_file)
+            
+            # Проверяем размер скачанного файла
+            file_size = os.path.getsize(temp_file)
+            logger.info(f"📊 Скачано {file_size} байт")
+            
+            if file_size == 0:
+                logger.error("❌ Скачан пустой файл")
+                await status_msg.edit_text(
+                    "❌ Не удалось загрузить голосовое сообщение (пустой файл).\n\n"
+                    "Попробуйте еще раз."
+                )
+                return
         
         # Распознаём речь
         if not DEEPGRAM_API_KEY:
+            logger.error("❌ DEEPGRAM_API_KEY не настроен")
             await status_msg.edit_text(
                 "❌ Сервис распознавания голоса не настроен.\n\n"
                 "Пожалуйста, используйте текст."
             )
             return
         
+        logger.info(f"🎙 Вызов speech_to_text для файла: {temp_file}")
         recognized_text = await speech_to_text(temp_file)
+        
+        # 🔍 ОТЛАДКА: что распозналось
+        logger.info(f"🔍 РАСПОЗНАННЫЙ ТЕКСТ: '{recognized_text}'")
+        logger.info(f"🔍 ДЛИНА ТЕКСТА: {len(recognized_text) if recognized_text else 0}")
         
         # Удаляем временный файл
         try:
             os.unlink(temp_file)
-        except:
-            pass
+            logger.info(f"🗑️ Временный файл удалён: {temp_file}")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось удалить временный файл: {e}")
         
-        if not recognized_text:
+        if not recognized_text or len(recognized_text.strip()) < 2:
+            logger.warning(f"⚠️ Пустой или слишком короткий текст распознавания: '{recognized_text}'")
             await status_msg.edit_text(
                 "❌ Не удалось распознать речь\n\n"
-                "Попробуйте еще раз или напишите текстом."
+                "Возможные причины:\n"
+                "• Говорите чётче и громче\n"
+                "• Убедитесь, что микрофон работает\n"
+                "• Попробуйте написать текстом"
             )
             return
         
@@ -404,7 +444,6 @@ async def handle_voice_message(message: Message, state):
         
     except Exception as e:
         logger.error(f"❌ Ошибка при обработке голосового сообщения: {e}")
-        import traceback
         traceback.print_exc()
         
         if status_msg:
@@ -483,7 +522,7 @@ def cache_voice(text: str, voice_id: str, emotion: str, audio_data: bytes):
 
 __all__ = [
     'send_voice_message',
-    'send_voice_to_max',  # ✅ ДОБАВЛЯЕМ АЛИАС ДЛЯ ЭКСПОРТА
+    'send_voice_to_max',
     'handle_voice_message',
     'send_voice_response',
     'get_voice_message_url',
