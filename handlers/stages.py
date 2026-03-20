@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики этапов тестирования (1-5) для MAX
-Версия 2.3 - ИСПРАВЛЕНО: сохранение результатов теста в БД
+Версия 2.4 - ИСПРАВЛЕНО: синхронные вызовы БД через sync_db
 """
 
 import time
@@ -10,8 +10,6 @@ import logging
 import os
 import json
 import re
-import asyncio
-import threading  # ✅ ДОБАВЛЕНО
 from typing import Dict, Any, Optional, List
 
 from bot_instance import bot
@@ -48,109 +46,14 @@ from state import (
     clear_state, TestStates
 )
 
-# ✅ ИСПРАВЛЕНО: импорт из db_instance
-from db_instance import db, save_user_to_db
+# ✅ ИСПРАВЛЕНО: импорт из db_sync вместо db_instance
+from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
 
 # ============================================
-# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ БД - УДАЛЕНЫ (используем sync_db)
 # ============================================
-
-def run_async_task(coro_func, *args, **kwargs):
-    """
-    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
-    """
-    def _wrapper():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            coro = coro_func(*args, **kwargs)
-            loop.run_until_complete(coro)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
-        finally:
-            loop.close()
-    
-    threading.Thread(target=_wrapper, daemon=True).start()
-
-# ============================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ БД
-# ============================================
-
-async def save_test_result_to_db(user_id: int, test_type: str, user_data_dict=None):
-    """
-    Сохраняет результаты теста в БД
-    
-    Args:
-        user_id: ID пользователя
-        test_type: тип теста ('full_profile' или другой)
-        user_data_dict: словарь с данными пользователей (если None, используется глобальный)
-    """
-    # ✅ ИСПРАВЛЕНО: используем переданный словарь или глобальный
-    if user_data_dict is None:
-        from state import user_data as global_user_data
-        user_data_dict = global_user_data
-        logger.debug(f"📦 Используем глобальный user_data для сохранения теста {user_id}")
-    
-    data = user_data_dict.get(user_id, {})
-    
-    if not data:
-        logger.warning(f"⚠️ Нет данных для пользователя {user_id} при сохранении теста")
-        return None
-    
-    # Получаем profile_code
-    profile_code = None
-    if data.get("profile_data"):
-        profile_code = data["profile_data"].get("display_name")
-    elif data.get("ai_generated_profile"):
-        # Пытаемся извлечь код из AI профиля
-        match = re.search(r'СБ-\d+_ТФ-\d+_УБ-\d+_ЧВ-\d+', data.get("ai_generated_profile", ""))
-        if match:
-            profile_code = match.group(0)
-    
-    try:
-        # Сохраняем результат теста
-        test_id = await db.save_test_result(
-            user_id=user_id,
-            test_type=test_type,
-            results=data,
-            profile_code=profile_code,
-            perception_type=data.get("perception_type"),
-            thinking_level=data.get("thinking_level"),
-            vectors=data.get("behavioral_levels"),
-            deep_patterns=data.get("deep_patterns"),
-            confinement_model=data.get("confinement_model")
-        )
-        
-        # Сохраняем все ответы, если есть
-        all_answers = data.get("all_answers", [])
-        if all_answers and test_id:
-            for answer in all_answers:
-                await db.save_test_answer(
-                    user_id=user_id,
-                    test_result_id=test_id,
-                    stage=answer.get('stage', 0),
-                    question_index=answer.get('question_index', 0),
-                    question_text=answer.get('question', ''),
-                    answer_text=answer.get('answer', ''),
-                    answer_value=answer.get('option', ''),
-                    scores=answer.get('scores'),
-                    measures=answer.get('measures'),
-                    strategy=answer.get('strategy'),
-                    dilts=answer.get('dilts'),
-                    pattern=answer.get('pattern'),
-                    target=answer.get('target')
-                )
-        
-        logger.info(f"✅ Результаты теста для пользователя {user_id} сохранены (ID: {test_id})")
-        return test_id
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения результатов теста для {user_id}: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
 
 # ============================================
 # ДОБАВЛЕНА НЕДОСТАЮЩАЯ ФУНКЦИЯ
@@ -579,8 +482,8 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 1 complete, type={perception_type}")
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-    run_async_task(save_user_to_db, user_id)
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+    sync_db.save_user_to_db(user_id)
     
     result_text = STAGE_1_FEEDBACK.get(perception_type, STAGE_1_FEEDBACK["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"])
     
@@ -775,8 +678,8 @@ def finish_stage_2(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 2 complete, level={thinking_level}")
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-    run_async_task(save_user_to_db, user_id)
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+    sync_db.save_user_to_db(user_id)
     
     result_text = STAGE_2_FEEDBACK.get((perception_type, level_group))
     if not result_text:
@@ -968,8 +871,8 @@ def finish_stage_3(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 3 complete, final_level={final_level}")
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-    run_async_task(save_user_to_db, user_id)
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+    sync_db.save_user_to_db(user_id)
     
     result_text = STAGE_3_FEEDBACK.get(behavior_level, STAGE_3_FEEDBACK[1])
     
@@ -1144,14 +1047,14 @@ def finish_stage_4(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 4 complete, profile={profile_data.get('display_name', 'unknown')}")
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-    run_async_task(save_user_to_db, user_id)
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+    sync_db.save_user_to_db(user_id)
     
     show_preliminary_profile(message, user_id)
 
 
 # ============================================
-# ПРЕДВАРИТЕЛЬНЫЙ ПРОФИЛЬ И ПОДТВЕРЖДЕНИЕ (ИСПРАВЛЕНО)
+# ПРЕДВАРИТЕЛЬНЫЙ ПРОФИЛЬ И ПОДТВЕРЖДЕНИЕ
 # ============================================
 
 def show_preliminary_profile(message, user_id: int):
@@ -1321,7 +1224,7 @@ def ask_whats_wrong(call, current_levels: dict):
 
 
 def handle_discrepancy(call, discrepancy: str):
-    """Обрабатывает выбор расхождения (ИСПРАВЛЕНО)"""
+    """Обрабатывает выбор расхождения"""
     user_id = call.from_user.id
     logger.info(f"🔍 handle_discrepancy: {discrepancy} для пользователя {user_id}")
     
@@ -1331,15 +1234,11 @@ def handle_discrepancy(call, discrepancy: str):
     if discrepancy not in discrepancies:
         discrepancies.append(discrepancy)
         update_state_data(user_id, discrepancies=discrepancies)
-        # ✅ ПОКАЗЫВАЕМ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ
         call.answer(f"✅ Добавлено", show_alert=False)
     else:
         discrepancies.remove(discrepancy)
         update_state_data(user_id, discrepancies=discrepancies)
-        # ✅ ПОКАЗЫВАЕМ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ
         call.answer(f"❌ Убрано", show_alert=False)
-    
-    # НЕ ОТПРАВЛЯЕМ НОВОЕ СООБЩЕНИЕ!
 
 
 def clarify_next(call):
@@ -1400,7 +1299,7 @@ def ask_clarifying_question(message, user_id: int):
 
 
 def handle_clarifying_answer(call):
-    """Обрабатывает ответ на уточняющий вопрос (ИСПРАВЛЕНО)"""
+    """Обрабатывает ответ на уточняющий вопрос"""
     user_id = call.from_user.id
     logger.info(f"❓ handle_clarifying_answer для пользователя {user_id}, data={call.data}")
     
@@ -1435,7 +1334,6 @@ def handle_clarifying_answer(call):
         clarifying_current=current + 1
     )
     
-    # ✅ ПОКАЗЫВАЕМ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ
     call.answer(f"✅ Ответ принят", show_alert=False)
     
     ask_clarifying_question(call.message, user_id)
@@ -1602,10 +1500,49 @@ def finish_stage_5(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 5 complete")
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД полный результат теста через run_async_task
-    # Передаем user_data явно, чтобы функция save_test_result_to_db могла его использовать
-    run_async_task(save_test_result_to_db, user_id, 'full_profile', user_data)
-    run_async_task(save_user_to_db, user_id)
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно через sync_db
+    # Получаем данные пользователя
+    user_data_dict = user_data.get(user_id, {})
+    
+    # Сохраняем результат теста
+    profile_code = None
+    if user_data_dict.get("profile_data"):
+        profile_code = user_data_dict["profile_data"].get("display_name")
+    
+    sync_db.save_test_result(
+        user_id=user_id,
+        test_type='full_profile',
+        results=user_data_dict,
+        profile_code=profile_code,
+        perception_type=user_data_dict.get("perception_type"),
+        thinking_level=user_data_dict.get("thinking_level"),
+        vectors=user_data_dict.get("behavioral_levels"),
+        deep_patterns=deep_patterns,
+        confinement_model=user_data_dict.get("confinement_model")
+    )
+    
+    # Сохраняем пользователя
+    sync_db.save_user_to_db(user_id)
+    
+    # Сохраняем все ответы
+    all_answers = state_data.get("all_answers", [])
+    if all_answers:
+        for answer in all_answers:
+            sync_db.save_test_answer(
+                user_id=user_id,
+                test_result_id=None,
+                stage=answer.get('stage', 0),
+                question_index=answer.get('question_index', 0),
+                question_text=answer.get('question', ''),
+                answer_text=answer.get('answer', ''),
+                answer_value=answer.get('option', ''),
+                scores=answer.get('scores'),
+                measures=answer.get('measures'),
+                strategy=answer.get('strategy'),
+                dilts=answer.get('dilts'),
+                pattern=answer.get('pattern'),
+                target=answer.get('target')
+            )
     
     try:
         from handlers.profile import show_final_profile
