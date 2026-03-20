@@ -2,16 +2,15 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики голосовых сообщений для MAX
-Версия 2.7 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
+Версия 2.8 - ИСПРАВЛЕНО: синхронные операции с БД
 """
 
 import os
 import tempfile
 import logging
 import asyncio
-import aiohttp
 import json
-import threading  # ✅ ДОБАВЛЕНО
+import threading
 from typing import Optional
 
 from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -29,31 +28,11 @@ from modes import get_mode
 from formatters import bold, clean_text_for_safe_display
 from config import COMMUNICATION_MODES, MAX_TOKEN
 
-# ✅ ДОБАВЛЕНО: импорт для БД
-from db_instance import db
+# ✅ ИСПРАВЛЕНО: используем sync_db
+from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
 
-# ============================================
-# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
-# ============================================
-
-def run_async_task(coro_func, *args, **kwargs):
-    """
-    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
-    """
-    def _wrapper():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            coro = coro_func(*args, **kwargs)
-            loop.run_until_complete(coro)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
-        finally:
-            loop.close()
-    
-    threading.Thread(target=_wrapper, daemon=True).start()
 
 # ============================================
 # ФУНКЦИЯ ДЛЯ ОТПРАВКИ ГОЛОСОВЫХ СООБЩЕНИЙ В MAX
@@ -62,14 +41,6 @@ def run_async_task(coro_func, *args, **kwargs):
 async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None) -> bool:
     """
     Отправляет голосовое сообщение в MAX (3-шаговый процесс)
-    
-    Args:
-        chat_id: ID чата (не используется напрямую, но нужен для совместимости)
-        audio_data: Аудиоданные в формате OGG
-        caption: Подпись к сообщению (опционально)
-    
-    Returns:
-        True если успешно, False если ошибка
     """
     if not audio_data:
         logger.error("❌ Нет аудиоданных для отправки")
@@ -82,66 +53,39 @@ async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None
     
     if not MAX_TOKEN:
         logger.error("❌ MAX_TOKEN не настроен в config.py")
-        logger.error("Проверьте переменные окружения на Render")
-        logger.error("В Dashboard Render -> ваш сервис -> Environment -> добавьте MAX_TOKEN")
         return False
     
-    # Проверяем, что токен не равен заглушке
     if MAX_TOKEN == "ВАШ_ТОКЕН_ЗДЕСЬ":
         logger.error("❌ MAX_TOKEN не заменен на реальный токен (стоит заглушка)")
-        logger.error("Получите реальный токен у @MasterBot и добавьте в переменные окружения")
         return False
     
-    # Проверяем длину токена (обычно JWT токены имеют длину > 100 символов)
     logger.info(f"📏 Длина токена: {len(MAX_TOKEN)} символов")
-    if len(MAX_TOKEN) < 50:
-        logger.warning("⚠️ Токен подозрительно короткий. Обычно JWT токены длиннее 50 символов.")
-    
-    # Показываем первые и последние символы для отладки
     token_start = MAX_TOKEN[:15] if len(MAX_TOKEN) > 15 else MAX_TOKEN
     token_end = MAX_TOKEN[-15:] if len(MAX_TOKEN) > 15 else MAX_TOKEN
     logger.info(f"🔑 Начало токена: {token_start}...")
     logger.info(f"🔑 Конец токена: ...{token_end}")
     
-    # Проверяем, есть ли у токена префикс "Bearer " (это ошибка - в токене не должно быть)
     if MAX_TOKEN.startswith("Bearer "):
         logger.error("❌ Токен содержит 'Bearer ' в начале. Это неправильно!")
-        logger.error("Токен должен быть просто строкой, без 'Bearer '")
         return False
     
-    # Проверяем, есть ли у токена пробелы
     if " " in MAX_TOKEN:
         logger.error("❌ Токен содержит пробелы. Токен не должен содержать пробелов.")
         return False
     
-    # Проверяем, является ли токен валидным JWT (опционально)
     parts = MAX_TOKEN.split('.')
     if len(parts) == 3:
         logger.info("✅ Токен имеет структуру JWT (3 части через точки)")
-        try:
-            # Пробуем декодировать первую часть (заголовок) - не проверяем подпись, просто смотрим
-            import base64
-            import json
-            # Добавляем padding если нужно
-            header_part = parts[0]
-            header_part += '=' * (4 - len(header_part) % 4) if len(header_part) % 4 else ''
-            try:
-                header_json = base64.urlsafe_b64decode(header_part).decode('utf-8')
-                header = json.loads(header_json)
-                logger.info(f"📋 JWT заголовок: {header}")
-            except:
-                logger.warning("⚠️ Не удалось декодировать JWT заголовок")
-        except:
-            logger.warning("⚠️ Ошибка при анализе JWT структуры")
     else:
         logger.warning(f"⚠️ Токен имеет {len(parts)} частей (ожидалось 3 для JWT)")
     
     logger.info(f"📤 Отправка голоса в чат {chat_id}")
     logger.info("=" * 50)
-    # ===================================================
     
     temp_path = None
     try:
+        import aiohttp
+        
         # ШАГ 1: Получаем URL для загрузки
         async with aiohttp.ClientSession() as session:
             headers = {
@@ -162,17 +106,10 @@ async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None
                 logger.error(f"❌ Не удалось получить upload URL: {upload_response.status}")
                 logger.error(f"❌ Текст ошибки: {error_text}")
                 
-                # Дополнительная диагностика
                 if upload_response.status == 401:
                     logger.error("🔍 ОШИБКА 401: Проблема с авторизацией")
-                    logger.error("   Возможные причины:")
                     logger.error("   • Токен недействителен или истек")
                     logger.error("   • Токен не имеет прав на отправку голосовых сообщений")
-                    logger.error("   • Неправильный формат токена")
-                elif upload_response.status == 403:
-                    logger.error("🔍 ОШИБКА 403: Доступ запрещен")
-                elif upload_response.status == 429:
-                    logger.error("🔍 ОШИБКА 429: Слишком много запросов")
                 
                 return False
             
@@ -184,24 +121,17 @@ async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None
                 logger.error(f"❌ Нет upload_url в ответе: {upload_data}")
                 return False
             
-            if not token:
-                logger.error(f"❌ Нет token в ответе: {upload_data}")
-                return False
-            
             logger.info(f"✅ Получен upload URL: {upload_url[:50]}...")
-            logger.info(f"✅ Получен token для загрузки: {token[:10]}...")
             
             # ШАГ 2: Загружаем аудиофайл
             logger.info("📡 ШАГ 2: Загружаем аудиофайл...")
             
-            # Создаем временный файл
             with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg', mode='wb') as tmp:
                 tmp.write(audio_data)
                 temp_path = tmp.name
             
             logger.info(f"📝 Создан временный файл: {temp_path} ({len(audio_data)} байт)")
             
-            # Загружаем файл
             with open(temp_path, 'rb') as f:
                 form_data = aiohttp.FormData()
                 form_data.add_field('file', f, filename='voice.ogg', content_type='audio/ogg')
@@ -258,7 +188,6 @@ async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None
         return False
     
     finally:
-        # Удаляем временный файл
         if temp_path and os.path.exists(temp_path):
             try:
                 os.unlink(temp_path)
@@ -297,12 +226,11 @@ async def handle_voice_message(message: Message):
     
     logger.info(f"🎤 Получено голосовое сообщение от пользователя {user_id}, состояние: {current_state}")
     
-    # ✅ ИСПРАВЛЕНО: Логируем событие через run_async_task
-    run_async_task(db.log_event,
-        user_id, 
-        'voice_received', 
+    # ✅ ИСПРАВЛЕНО: логируем через sync_db
+    threading.Thread(target=sync_db.log_event, args=(
+        user_id, 'voice_received', 
         {'state': current_state, 'voice_duration': message.voice.duration if message.voice else None}
-    )
+    ), daemon=True).start()
     
     # Проверяем, в правильном ли состоянии получено сообщение
     allowed_states = [
@@ -365,8 +293,7 @@ async def handle_voice_message(message: Message):
         if not recognized_text:
             await safe_delete_message(message.chat.id, status_msg.message_id)
             
-            # ✅ ИСПРАВЛЕНО: Логируем ошибку через run_async_task
-            run_async_task(db.log_event, user_id, 'voice_recognition_failed', {})
+            threading.Thread(target=sync_db.log_event, args=(user_id, 'voice_recognition_failed', {}), daemon=True).start()
             
             await safe_send_message(
                 message,
@@ -377,17 +304,15 @@ async def handle_voice_message(message: Message):
         
         logger.info(f"✅ Распознан текст ({len(recognized_text)} символов): {recognized_text[:100]}...")
         
-        # ✅ ИСПРАВЛЕНО: Логируем успешное распознавание через run_async_task
-        run_async_task(db.log_event,
-            user_id, 
-            'voice_recognized', 
+        threading.Thread(target=sync_db.log_event, args=(
+            user_id, 'voice_recognized', 
             {'text_length': len(recognized_text), 'state': current_state}
-        )
+        ), daemon=True).start()
         
         # Удаляем статусное сообщение
         await safe_delete_message(message.chat.id, status_msg.message_id)
         
-        # ✅ 1. Отправляем текст, что распознали
+        # ✅ Отправляем текст, что распознали
         await safe_send_message(
             message,
             f"📝 <b>Вы сказали:</b>\n{recognized_text}",
@@ -396,29 +321,24 @@ async def handle_voice_message(message: Message):
         
         # Обрабатываем распознанный текст в зависимости от состояния
         if current_state == TestStates.awaiting_question:
-            # Обычный вопрос - обрабатываем через questions.py
             from handlers.questions import process_text_question_async
             await process_text_question_async(message, user_id, recognized_text)
             
         elif current_state == TestStates.collecting_life_context:
-            # Сбор контекста жизни
             from handlers.reality import process_life_context_async
             await process_life_context_async(message, user_id, recognized_text)
             
         elif current_state == TestStates.collecting_goal_context:
-            # Сбор контекста цели
             from handlers.reality import process_goal_context_async
             await process_goal_context_async(message, user_id, recognized_text)
             
         elif current_state == TestStates.pretest_question:
-            # Вопрос до теста
             await handle_pretest_voice(message, user_id, recognized_text)
         
     except Exception as e:
         logger.error(f"❌ Ошибка при обработке голосового сообщения: {e}", exc_info=True)
         
-        # ✅ ИСПРАВЛЕНО: Логируем ошибку через run_async_task
-        run_async_task(db.log_event, user_id, 'voice_error', {'error': str(e)})
+        threading.Thread(target=sync_db.log_event, args=(user_id, 'voice_error', {'error': str(e)}), daemon=True).start()
         
         if status_msg:
             try:
@@ -449,14 +369,11 @@ async def handle_pretest_voice(message: Message, user_id: int, recognized_text: 
         delete_previous=True
     )
     
-    # ✅ ИСПРАВЛЕНО: Логируем вопрос до теста через run_async_task
-    run_async_task(db.log_event,
-        user_id, 
-        'pretest_question_voice', 
+    threading.Thread(target=sync_db.log_event, args=(
+        user_id, 'pretest_question_voice', 
         {'text_preview': recognized_text[:100]}
-    )
+    ), daemon=True).start()
     
-    # Сбрасываем состояние
     set_state(user_id, None)
 
 
@@ -475,8 +392,7 @@ async def test_voice_message(message: Message, text: str = "Привет! Это
         await safe_send_message(message, "⛔ Только для администраторов", delete_previous=True)
         return
     
-    # ✅ ИСПРАВЛЕНО: Логируем тест через run_async_task
-    run_async_task(db.log_event, user_id, 'voice_test_started', {'text_length': len(text)})
+    threading.Thread(target=sync_db.log_event, args=(user_id, 'voice_test_started', {'text_length': len(text)}), daemon=True).start()
     
     status_msg = await safe_send_message(
         message,
@@ -488,7 +404,6 @@ async def test_voice_message(message: Message, text: str = "Привет! Это
     for mode in ["coach", "psychologist", "trainer"]:
         audio = await text_to_speech(text, mode)
         if audio:
-            # ✅ Отправляем голос
             success = await send_voice_to_max(message.chat.id, audio, f"Тест режима {mode}")
             if success:
                 results.append(f"✅ {COMMUNICATION_MODES[mode]['display_name']} (отправлен)")
@@ -500,8 +415,7 @@ async def test_voice_message(message: Message, text: str = "Привет! Это
     
     await safe_delete_message(message.chat.id, status_msg.message_id)
     
-    # ✅ ИСПРАВЛЕНО: Логируем результаты через run_async_task
-    run_async_task(db.log_event, user_id, 'voice_test_completed', {'results': results})
+    threading.Thread(target=sync_db.log_event, args=(user_id, 'voice_test_completed', {'results': results}), daemon=True).start()
     
     await safe_send_message(
         message,
