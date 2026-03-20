@@ -2,58 +2,41 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики помощи и сказок для MAX
-Версия 2.1 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
-Восстановлено из оригинального bot3.py и адаптировано
+ВЕРСИЯ 2.2 - ИСПРАВЛЕНО: используется sync_db
 """
 
 import logging
 import random
-import asyncio
 import time
-import threading  # ✅ ДОБАВЛЕНО
+import threading
 from typing import Dict, Any, Optional
 
 from bot_instance import bot
-from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 
 # Наши модули
 from config import COMMUNICATION_MODES
 from message_utils import safe_send_message, safe_edit_message
 from keyboards import get_back_keyboard
 from hypno_module import TherapeuticTales
-from formatters import bold  # ✅ ДОБАВЛЕНО для show_weekend_ideas
+from formatters import bold
 
-# ✅ ИСПРАВЛЕНО: импортируем из state, а не из main
+# Импорты из state
 from state import (
     user_data, user_state_data, user_contexts, user_names, user_states,
     get_state, set_state, get_state_data, update_state_data, clear_state
 )
 
-# ✅ ДОБАВЛЕНО: импорт для БД
-from db_instance import db, save_user_to_db
+# ✅ ИСПРАВЛЕНО: используем sync_db
+from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
 
 # ============================================
-# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# ИНИЦИАЛИЗАЦИЯ ТЕРАПЕВТИЧЕСКИХ СКАЗОК
 # ============================================
 
-def run_async_task(coro_func, *args, **kwargs):
-    """
-    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
-    """
-    def _wrapper():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            coro = coro_func(*args, **kwargs)
-            loop.run_until_complete(coro)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
-        finally:
-            loop.close()
-    
-    threading.Thread(target=_wrapper, daemon=True).start()
+tales = TherapeuticTales()
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -91,13 +74,13 @@ def is_test_completed_check(user_data_dict: dict) -> bool:
     return False
 
 # ============================================
-# ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
+# ФУНКЦИИ ДЛЯ РАБОТЫ С БД (СИНХРОННЫЕ)
 # ============================================
 
-async def log_help_event(user_id: int, action: str, category: str = None):
-    """Логирует события помощи в БД"""
+def log_help_event(user_id: int, action: str, category: str = None):
+    """Синхронно логирует события помощи в БД"""
     try:
-        await db.log_event(
+        sync_db.log_event(
             user_id,
             f'help_{action}',
             {
@@ -109,10 +92,10 @@ async def log_help_event(user_id: int, action: str, category: str = None):
     except Exception as e:
         logger.error(f"❌ Ошибка логирования события помощи для {user_id}: {e}")
 
-async def log_tale_event(user_id: int, tale_title: str, issue: str):
-    """Логирует просмотр сказки в БД"""
+def log_tale_event(user_id: int, tale_title: str, issue: str):
+    """Синхронно логирует просмотр сказки в БД"""
     try:
-        await db.log_event(
+        sync_db.log_event(
             user_id,
             'tale_viewed',
             {
@@ -125,10 +108,10 @@ async def log_tale_event(user_id: int, tale_title: str, issue: str):
     except Exception as e:
         logger.error(f"❌ Ошибка логирования просмотра сказки для {user_id}: {e}")
 
-async def log_benefits_view(user_id: int):
-    """Логирует просмотр преимуществ теста"""
+def log_benefits_view(user_id: int):
+    """Синхронно логирует просмотр преимуществ теста"""
     try:
-        await db.log_event(
+        sync_db.log_event(
             user_id,
             'benefits_viewed',
             {'timestamp': time.time()}
@@ -136,10 +119,10 @@ async def log_benefits_view(user_id: int):
     except Exception as e:
         logger.error(f"❌ Ошибка логирования просмотра преимуществ для {user_id}: {e}")
 
-async def log_weekend_ideas_view(user_id: int, idea_type: str = None):
-    """Логирует просмотр идей на выходные"""
+def log_weekend_ideas_view(user_id: int, idea_type: str = None):
+    """Синхронно логирует просмотр идей на выходные"""
     try:
-        await db.log_event(
+        sync_db.log_event(
             user_id,
             'weekend_ideas_viewed',
             {
@@ -183,13 +166,6 @@ def get_help_keyboard() -> InlineKeyboardMarkup:
     return keyboard
 
 # ============================================
-# ИНИЦИАЛИЗАЦИЯ ТЕРАПЕВТИЧЕСКИХ СКАЗОК
-# ============================================
-
-# Создаём экземпляр библиотеки сказок
-tales = TherapeuticTales()
-
-# ============================================
 # ПОКАЗ МЕНЮ ПОМОЩИ
 # ============================================
 
@@ -200,8 +176,8 @@ def show_help(call: CallbackQuery):
     user_id = call.from_user.id
     context = get_user_context_obj(user_id)
     
-    # ✅ ИСПРАВЛЕНО: Логируем событие через run_async_task
-    run_async_task(log_help_event, user_id, 'menu_opened')
+    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    threading.Thread(target=log_help_event, args=(user_id, 'menu_opened'), daemon=True).start()
     
     # Проверяем, есть ли контекст для персонализации
     greeting = ""
@@ -245,8 +221,8 @@ def handle_help_category(call: CallbackQuery, category: str):
     user_id = call.from_user.id
     context = get_user_context_obj(user_id)
     
-    # ✅ ИСПРАВЛЕНО: Логируем выбор категории через run_async_task
-    run_async_task(log_help_event, user_id, 'category_selected', category)
+    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    threading.Thread(target=log_help_event, args=(user_id, 'category_selected', category), daemon=True).start()
     
     # Тексты для разных категорий
     category_texts = {
@@ -354,7 +330,7 @@ def handle_help_category(call: CallbackQuery, category: str):
         delete_previous=True
     )
     
-    # ✅ ИСПРАВЛЕНО: используем state вместо main
+    # ✅ ИСПРАВЛЕНО: используем state
     user_states[user_id] = "awaiting_question"
     
     if user_id not in user_state_data:
@@ -410,8 +386,8 @@ def show_tale(call: CallbackQuery):
             "text": "Жил-был человек, который искал ответы. Он ходил по миру, спрашивал мудрецов, читал книги. И однажды понял, что все ответы уже были внутри него. Просто нужно было время, чтобы их услышать."
         }
     
-    # ✅ ИСПРАВЛЕНО: Логируем просмотр сказки через run_async_task
-    run_async_task(log_tale_event, user_id, tale_title, issue)
+    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    threading.Thread(target=log_tale_event, args=(user_id, tale_title, issue), daemon=True).start()
     
     # Формируем текст
     text = f"📖 <b>{tale['title']}</b>\n\n{tale['text']}"
@@ -442,8 +418,8 @@ def show_benefits(call: CallbackQuery):
     """
     user_id = call.from_user.id
     
-    # ✅ ИСПРАВЛЕНО: Логируем просмотр через run_async_task
-    run_async_task(log_benefits_view, user_id)
+    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    threading.Thread(target=log_benefits_view, args=(user_id,), daemon=True).start()
     
     text = f"""
 🔍 **ЧТО ВЫ УЗНАЕТЕ О СЕБЕ:**
@@ -476,7 +452,6 @@ def show_benefits(call: CallbackQuery):
 👇 **Начинаем прямо сейчас?**
 """
     
-    # 👇 ТОЛЬКО ОДНА КНОПКА - НАЧАТЬ ТЕСТ (без кнопки НАЗАД)
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("🚀 НАЧАТЬ ТЕСТ", callback_data="start_stage_1_direct"))
     
@@ -489,7 +464,7 @@ def show_benefits(call: CallbackQuery):
     )
 
 # ============================================
-# ИДЕИ НА ВЫХОДНЫЕ (НОВАЯ ФУНКЦИЯ)
+# ИДЕИ НА ВЫХОДНЫЕ
 # ============================================
 
 def show_weekend_ideas(call: CallbackQuery):
@@ -500,8 +475,8 @@ def show_weekend_ideas(call: CallbackQuery):
     user_name = get_user_name(user_id)
     user_data_dict = get_user_data_dict(user_id)
     
-    # ✅ ИСПРАВЛЕНО: Логируем просмотр через run_async_task
-    run_async_task(log_weekend_ideas_view, user_id)
+    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    threading.Thread(target=log_weekend_ideas_view, args=(user_id,), daemon=True).start()
     
     # Проверяем, есть ли профиль
     if not is_test_completed_check(user_data_dict):
@@ -548,14 +523,14 @@ def show_weekend_ideas(call: CallbackQuery):
 # ОБРАБОТКА ВОПРОСОВ ПОСЛЕ ПОМОЩИ
 # ============================================
 
-def process_help_question(message, user_id: int, text: str, category: str):
+def process_help_question(message: Message, user_id: int, text: str, category: str):
     """
     Обрабатывает вопрос, заданный через категорию помощи
     """
     user_data_dict = get_user_data_dict(user_id)
     
-    # ✅ ИСПРАВЛЕНО: Логируем вопрос через run_async_task
-    run_async_task(log_help_event, user_id, 'question_asked', category)
+    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    threading.Thread(target=log_help_event, args=(user_id, 'question_asked', category), daemon=True).start()
     
     # Проверяем, завершен ли тест
     if not is_test_completed_check(user_data_dict):
@@ -605,10 +580,9 @@ __all__ = [
     'handle_help_category',
     'show_tale',
     'show_benefits',
-    'show_weekend_ideas',  # ✅ ДОБАВЛЕНО
+    'show_weekend_ideas',
     'process_help_question',
     'get_help_keyboard',
-    # ✅ ДОБАВЛЕНО: функции для БД
     'log_help_event',
     'log_tale_event',
     'log_benefits_view',
