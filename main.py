@@ -2067,5 +2067,228 @@ def main():
     finally:
         cleanup_resources()
 
+# ============================================
+# ДОПОЛНИТЕЛЬНЫЕ API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
+# ============================================
+
+@api_app.get("/api/goals")
+async def get_goals(user_id: int, mode: str = "coach"):
+    """
+    Получает динамически подобранные цели для пользователя
+    """
+    try:
+        user_id = int(user_id)
+        
+        # Получаем данные пользователя
+        data = user_data.get(user_id, {})
+        profile_data = data.get("profile_data", {})
+        profile_code = profile_data.get("display_name", "СБ-4_ТФ-4_УБ-4_ЧВ-4")
+        
+        # Получаем scores из профиля
+        scores = {
+            "СБ": profile_data.get("sb_level", 4),
+            "ТФ": profile_data.get("tf_level", 4),
+            "УБ": profile_data.get("ub_level", 4),
+            "ЧВ": profile_data.get("chv_level", 4)
+        }
+        
+        # Определяем слабый вектор
+        weakest = min(scores.items(), key=lambda x: x[1])[0] if scores else "СБ"
+        
+        # База целей
+        goals_db = {
+            "coach":
+
+            # ============================================
+# ДОПОЛНИТЕЛЬНЫЕ API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
+# Добавьте этот блок в ваш main.py после всех существующих @api_app,
+# но перед if __name__ == "__main__":
+# ============================================
+
+@api_app.get("/api/goals")
+async def get_goals(user_id: int, mode: str = "coach"):
+    """
+    Получает динамически подобранные цели для пользователя
+    """
+    try:
+        user_id = int(user_id)
+        
+        # Получаем данные пользователя
+        data = user_data.get(user_id, {})
+        profile_data = data.get("profile_data", {})
+        profile_code = profile_data.get("display_name", "СБ-4_ТФ-4_УБ-4_ЧВ-4")
+        
+        # Получаем scores из профиля
+        scores = {
+            "СБ": profile_data.get("sb_level", 4),
+            "ТФ": profile_data.get("tf_level", 4),
+            "УБ": profile_data.get("ub_level", 4),
+            "ЧВ": profile_data.get("chv_level", 4)
+        }
+        
+        # Определяем слабый вектор
+        weakest = min(scores.items(), key=lambda x: x[1])[0] if scores else "СБ"
+        
+        # База целей для разных режимов
+        goals_db = {
+            "coach": {
+                "weak": {
+                    "СБ": [
+                        {"id": "fear_work", "name": "Проработать страхи", "time": "3-4 недели", "difficulty": "medium", "emoji": "🛡️"},
+                        {"id": "boundaries", "name": "Научиться защищать границы", "time": "2-3 недели", "difficulty": "medium", "emoji": "🔒"},
+                        {"id": "calm", "name": "Найти внутреннее спокойствие", "time": "3-5 недель", "difficulty": "hard", "emoji": "🧘"}
+                    ],
+                    "ТФ": [
+                        {"id": "money_blocks", "name": "Проработать денежные блоки", "time": "3-4 недели", "difficulty": "medium", "emoji": "💰"},
+                        {"id": "income_growth", "name": "Увеличить доход", "time": "4-6 недель", "difficulty": "hard", "emoji": "📈"},
+                        {"id": "financial_plan", "name": "Создать финансовый план", "time": "2-3 недели", "difficulty": "easy", "emoji": "📊"}
+                    ],
+                    "УБ": [
+                        {"id": "meaning", "name": "Найти смысл и предназначение", "time": "4-6 недель", "difficulty": "hard", "emoji": "🎯"},
+                        {"id": "system_thinking", "name": "Развить системное мышление", "time": "3-5 недель", "difficulty": "medium", "emoji": "🧩"},
+                        {"id": "trust", "name": "Научиться доверять миру", "time": "3-4 недели", "difficulty": "medium", "emoji": "🤝"}
+                    ],
+                    "ЧВ": [
+                        {"id": "relations", "name": "Улучшить отношения", "time": "4-6 недель", "difficulty": "hard", "emoji": "💕"},
+                        {"id": "boundaries_people", "name": "Выстроить границы с людьми", "time": "3-4 недели", "difficulty": "medium", "emoji": "🚧"},
+                        {"id": "attachment", "name": "Проработать тип привязанности", "time": "5-7 недель", "difficulty": "hard", "emoji": "🪢"}
+                    ]
+                },
+                "general": [
+                    {"id": "purpose", "name": "Найти предназначение", "time": "5-7 недель", "difficulty": "hard", "emoji": "🌟"},
+                    {"id": "balance", "name": "Обрести баланс", "time": "4-6 недель", "difficulty": "medium", "emoji": "⚖️"},
+                    {"id": "growth", "name": "Личностный рост", "time": "6-8 недель", "difficulty": "medium", "emoji": "🌱"}
+                ]
+            },
+            "psychologist": {
+                "weak": {
+                    "СБ": [
+                        {"id": "fear_origin", "name": "Найти источник страхов", "time": "4-6 недель", "difficulty": "hard", "emoji": "🔍"},
+                        {"id": "trauma", "name": "Проработать травму", "time": "6-8 недель", "difficulty": "hard", "emoji": "🩹"},
+                        {"id": "safety", "name": "Сформировать чувство безопасности", "time": "5-7 недель", "difficulty": "hard", "emoji": "🛡️"}
+                    ],
+                    "ТФ": [
+                        {"id": "money_psychology", "name": "Понять психологию денег", "time": "4-5 недель", "difficulty": "medium", "emoji": "🧠💰"},
+                        {"id": "worth", "name": "Проработать чувство ценности", "time": "5-7 недель", "difficulty": "hard", "emoji": "💎"},
+                        {"id": "scarcity", "name": "Проработать сценарий дефицита", "time": "4-6 недель", "difficulty": "medium", "emoji": "🔄"}
+                    ],
+                    "УБ": [
+                        {"id": "core_beliefs", "name": "Найти глубинные убеждения", "time": "5-7 недель", "difficulty": "hard", "emoji": "🏛️"},
+                        {"id": "schemas", "name": "Проработать жизненные сценарии", "time": "6-8 недель", "difficulty": "hard", "emoji": "📜"},
+                        {"id": "meaning_deep", "name": "Экзистенциальный поиск", "time": "7-9 недель", "difficulty": "hard", "emoji": "🌌"}
+                    ],
+                    "ЧВ": [
+                        {"id": "attachment_style", "name": "Проработать тип привязанности", "time": "6-8 недель", "difficulty": "hard", "emoji": "🪢"},
+                        {"id": "inner_child", "name": "Исцелить внутреннего ребёнка", "time": "5-7 недель", "difficulty": "hard", "emoji": "🧸"},
+                        {"id": "family_system", "name": "Проработать семейную систему", "time": "6-8 недель", "difficulty": "hard", "emoji": "🏠"}
+                    ]
+                },
+                "general": [
+                    {"id": "self_discovery", "name": "Глубинное самопознание", "time": "7-9 недель", "difficulty": "hard", "emoji": "🔮"},
+                    {"id": "healing", "name": "Исцеление внутренних ран", "time": "8-10 недель", "difficulty": "hard", "emoji": "💖"},
+                    {"id": "integration", "name": "Интеграция личности", "time": "9-12 недель", "difficulty": "hard", "emoji": "🧩"}
+                ]
+            },
+            "trainer": {
+                "weak": {
+                    "СБ": [
+                        {"id": "assertiveness", "name": "Развить ассертивность", "time": "3-4 недели", "difficulty": "medium", "emoji": "💪"},
+                        {"id": "conflict_skills", "name": "Освоить навыки конфликта", "time": "4-5 недель", "difficulty": "medium", "emoji": "⚔️"},
+                        {"id": "courage", "name": "Тренировка смелости", "time": "3-5 недель", "difficulty": "hard", "emoji": "🦁"}
+                    ],
+                    "ТФ": [
+                        {"id": "money_skills", "name": "Освоить навыки управления деньгами", "time": "3-4 недели", "difficulty": "easy", "emoji": "💰"},
+                        {"id": "income_skills", "name": "Навыки увеличения дохода", "time": "4-6 недель", "difficulty": "medium", "emoji": "📊"},
+                        {"id": "investment_skills", "name": "Навыки инвестирования", "time": "5-7 недель", "difficulty": "hard", "emoji": "📈"}
+                    ],
+                    "УБ": [
+                        {"id": "thinking_tools", "name": "Освоить инструменты мышления", "time": "4-5 недель", "difficulty": "medium", "emoji": "🧠"},
+                        {"id": "triz", "name": "Научиться ТРИЗ", "time": "5-7 недель", "difficulty": "hard", "emoji": "💡"},
+                        {"id": "decision_making", "name": "Навыки принятия решений", "time": "3-4 недели", "difficulty": "easy", "emoji": "✅"}
+                    ],
+                    "ЧВ": [
+                        {"id": "communication_skills", "name": "Развить навыки общения", "time": "3-4 недели", "difficulty": "easy", "emoji": "💬"},
+                        {"id": "negotiation", "name": "Навыки переговоров", "time": "4-6 недель", "difficulty": "medium", "emoji": "🤝"},
+                        {"id": "influence", "name": "Навыки влияния", "time": "5-7 недель", "difficulty": "hard", "emoji": "⚡"}
+                    ]
+                },
+                "general": [
+                    {"id": "productivity", "name": "Повысить продуктивность", "time": "4-6 недель", "difficulty": "medium", "emoji": "⚡"},
+                    {"id": "habit_building", "name": "Сформировать полезные привычки", "time": "3-5 недель", "difficulty": "easy", "emoji": "🔄"},
+                    {"id": "skill_mastery", "name": "Мастерство в ключевых навыках", "time": "8-10 недель", "difficulty": "hard", "emoji": "🏆"}
+                ]
+            }
+        }
+        
+        mode_db = goals_db.get(mode, goals_db["coach"])
+        goals = []
+        
+        # Добавляем цели для слабого вектора
+        if weakest in mode_db["weak"]:
+            goals.extend(mode_db["weak"][weakest])
+        
+        # Добавляем общие цели
+        goals.extend(mode_db["general"])
+        
+        # Возвращаем первые 6 целей
+        return JSONResponse({
+            "success": True,
+            "goals": goals[:6],
+            "profile_code": profile_code
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_goals: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/modes")
+async def get_modes():
+    """
+    Получает список доступных режимов общения
+    """
+    try:
+        modes = [
+            {
+                "id": "coach",
+                "name": "КОУЧ",
+                "emoji": "🔮",
+                "description": "Если хочешь, чтобы я помог тебе самому найти решения.",
+                "what": "Задавать открытые вопросы, отражать твои мысли, направлять.",
+                "get": "• Жить станет легче\n• Появится больше радости от простых вещей\n• Начнёшь замечать возможности вместо проблем"
+            },
+            {
+                "id": "psychologist",
+                "name": "ПСИХОЛОГ",
+                "emoji": "🧠",
+                "description": "Если хочешь копнуть вглубь, разобраться с причинами, а не следствиями.",
+                "what": "Исследовать твои глубинные паттерны, защитные механизмы, прошлый опыт.",
+                "get": "• Перестанешь реагировать на триггеры\n• Исчезнут старые сценарии\n• Поймёшь, откуда растут ноги у твоих страхов"
+            },
+            {
+                "id": "trainer",
+                "name": "ТРЕНЕР",
+                "emoji": "⚡",
+                "description": "Если нужны чёткие инструменты, навыки и результат.",
+                "what": "Формировать твои поведенческие и мыслительные навыки.",
+                "get": "• Научишься чётко формулировать мысли\n• Освоишь алгоритмы ведения переговоров\n• Сформируешь полезные привычки"
+            }
+        ]
+        
+        return JSONResponse({
+            "success": True,
+            "modes": modes
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_modes: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
 if __name__ == "__main__":
     main()
