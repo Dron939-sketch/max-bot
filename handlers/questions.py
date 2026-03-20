@@ -33,7 +33,7 @@ from state import (
 )
 
 # ✅ ДОБАВЛЕНО: импорт для БД
-from db_instance import db, save_user_to_db
+from db_sync import sync_db
 
 # Импорты из profiles.py
 from profiles import VECTORS, STAGE_1_FEEDBACK, STAGE_2_FEEDBACK, STAGE_3_FEEDBACK
@@ -61,6 +61,34 @@ from question_analyzer import create_analyzer_from_user_data
 from handlers.voice import send_voice_to_max
 
 logger = logging.getLogger(__name__)
+
+def save_answer_to_db_sync(user_id: int, answer_data: Dict[str, Any]):
+    """Синхронное сохранение отдельного ответа в БД"""
+    try:
+        results = sync_db.get_user_test_results(user_id, limit=1)
+        test_result_id = results[0]['id'] if results else None
+        
+        sync_db.save_test_answer(
+            user_id=user_id,
+            test_result_id=test_result_id,
+            stage=answer_data.get('stage', 0),
+            question_index=answer_data.get('question_index', 0),
+            question_text=answer_data.get('question', ''),
+            answer_text=answer_data.get('answer', ''),
+            answer_value=answer_data.get('option', ''),
+            scores=answer_data.get('scores'),
+            measures=answer_data.get('measures'),
+            strategy=answer_data.get('strategy'),
+            dilts=answer_data.get('dilts'),
+            pattern=answer_data.get('pattern'),
+            target=answer_data.get('target')
+        )
+        logger.debug(f"💾 Ответ этапа {answer_data.get('stage')} для {user_id} сохранен в БД")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения ответа для {user_id}: {e}")
+
+# И вызывать:
+threading.Thread(target=save_answer_to_db_sync, args=(user_id, answer_data), daemon=True).start()
 
 # ============================================
 # ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
@@ -400,7 +428,7 @@ def handle_stage_1_answer(call: CallbackQuery, user_id: int, state_data: dict):
         all_answers.append(answer_data)
         
         # ✅ Сохраняем в БД
-        run_async_task(save_answer_to_db, user_id, answer_data)
+        threading.Thread(target=save_answer_to_db_sync, args=(user_id, answer_data), daemon=True).start()
         
         update_state_data(user_id,
             perception_scores=perception_scores,
@@ -583,7 +611,7 @@ def handle_stage_2_answer(call: CallbackQuery, user_id: int, state_data: dict):
         all_answers.append(answer_data)
         
         # ✅ Сохраняем в БД
-        run_async_task(save_answer_to_db, user_id, answer_data)
+        threading.Thread(target=save_answer_to_db_sync, args=(user_id, answer_data), daemon=True).start()
         
         update_state_data(user_id,
             stage2_level_scores_dict=stage2_level_scores_dict,
@@ -770,7 +798,7 @@ def handle_stage_3_answer(call: CallbackQuery, user_id: int, state_data: dict):
         all_answers.append(answer_data)
         
         # ✅ Сохраняем в БД
-        run_async_task(save_answer_to_db, user_id, answer_data)
+        threading.Thread(target=save_answer_to_db_sync, args=(user_id, answer_data), daemon=True).start()
         
         update_state_data(user_id,
             stage3_level_scores=stage3_level_scores,
@@ -947,7 +975,7 @@ def handle_stage_4_answer(call: CallbackQuery, user_id: int, state_data: dict):
         all_answers.append(answer_data)
         
         # ✅ Сохраняем в БД
-        run_async_task(save_answer_to_db, user_id, answer_data)
+        threading.Thread(target=save_answer_to_db_sync, args=(user_id, answer_data), daemon=True).start()
         
         update_state_data(user_id,
             dilts_counts=dilts_counts,
@@ -1102,7 +1130,7 @@ def handle_stage_5_answer(call: CallbackQuery, user_id: int, state_data: dict):
         stage5_answers.append(answer_data)
         
         # ✅ Сохраняем в БД
-        run_async_task(save_answer_to_db, user_id, answer_data)
+        threading.Thread(target=save_answer_to_db_sync, args=(user_id, answer_data), daemon=True).start()
         
         update_state_data(user_id,
             stage5_answers=stage5_answers,
@@ -1427,7 +1455,7 @@ def handle_smart_question(call: CallbackQuery, question_num: int):
     user_data_dict["history"] = mode.history
     
     # ✅ Сохраняем в БД
-    run_async_task(save_user_to_db, user_id, user_data, user_contexts, {})
+    sync_db.save_user_to_db(user_id)
     
     # Очищаем ответ от форматирования для отображения
     clean_response = clean_text_for_safe_display(response)
@@ -1622,7 +1650,7 @@ def process_text_question_sync(
         user_data_dict["history"] = history
         
         # ✅ Сохраняем в БД
-        run_async_task(save_user_to_db, user_id, user_data, user_contexts, {})
+        sync_db.save_user_to_db(user_id)
         
         # Очищаем ответ от форматирования для отображения
         clean_response = clean_text_for_safe_display(response)
@@ -1681,7 +1709,7 @@ def process_text_question_sync(
             logger.error(f"❌ Ошибка при отправке голоса: {e}", exc_info=True)
         
         # Сбрасываем состояние
-        set_state(user_id, TestStates.results)
+        set_state(user_id, TestStates.awaiting_question)
         
     finally:
         # ✅ ВАЖНО: Снимаем блокировку в любом случае
