@@ -11,6 +11,7 @@ import pickle
 import logging
 import asyncio
 import threading
+import inspect
 from typing import Dict, Any, Optional, Callable, Awaitable
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from functools import wraps
@@ -110,8 +111,12 @@ class DBLoopManager:
     async def _init_db_in_loop(self):
         """Инициализирует БД внутри правильного цикла"""
         if self._db_instance:
-            await self._db_instance.connect()
-            logger.info("✅ Подключение к БД установлено в цикле")
+            try:
+                await self._db_instance.connect()
+                logger.info("✅ Подключение к БД установлено в цикле")
+            except Exception as e:
+                logger.error(f"❌ Ошибка подключения к БД: {e}")
+                raise
     
     def run_coro(self, coro_func: Callable[..., Awaitable], *args, timeout: int = 30, **kwargs):
         """
@@ -119,8 +124,8 @@ class DBLoopManager:
         Это основной метод для вызова из любого потока.
         
         Args:
-            coro_func: Асинхронная функция
-            *args: Аргументы для функции
+            coro_func: Асинхронная функция или готовая корутина
+            *args: Аргументы для функции (если coro_func - функция)
             timeout: Таймаут в секундах
             **kwargs: Именованные аргументы
         
@@ -134,17 +139,22 @@ class DBLoopManager:
         if self.loop is None:
             raise RuntimeError("Цикл БД не инициализирован. Вызовите init()")
         
-        # Проверяем, что передана именно корутина
-        import inspect
-        if not inspect.iscoroutinefunction(coro_func):
-            raise TypeError(f"{coro_func} is not a coroutine function. Use async def.")
+        # Проверяем тип переданного объекта
+        is_coro_func = inspect.iscoroutinefunction(coro_func)
+        is_coro = inspect.iscoroutine(coro_func)
+        
+        if not is_coro_func and not is_coro:
+            raise TypeError(f"{coro_func} is not a coroutine or coroutine function")
         
         # Проверяем, не вызваны ли мы уже из правильного цикла
         try:
             current_loop = asyncio.get_event_loop()
             if current_loop is self.loop:
                 # Уже в правильном цикле - выполняем напрямую
-                future = asyncio.ensure_future(coro_func(*args, **kwargs), loop=self.loop)
+                if is_coro:
+                    future = asyncio.ensure_future(coro_func, loop=self.loop)
+                else:
+                    future = asyncio.ensure_future(coro_func(*args, **kwargs), loop=self.loop)
                 return self.loop.run_until_complete(
                     asyncio.wait_for(future, timeout=timeout)
                 )
@@ -153,19 +163,22 @@ class DBLoopManager:
             pass
         
         # Создаем Future в цикле БД
-        future = asyncio.run_coroutine_threadsafe(
-            coro_func(*args, **kwargs),
-            self.loop
-        )
+        if is_coro:
+            future = asyncio.run_coroutine_threadsafe(coro_func, self.loop)
+        else:
+            future = asyncio.run_coroutine_threadsafe(
+                coro_func(*args, **kwargs),
+                self.loop
+            )
         
         try:
             return future.result(timeout=timeout)
         except TimeoutError:
             future.cancel()
-            logger.error(f"❌ Таймаут {timeout}с при выполнении {coro_func.__name__}")
+            logger.error(f"❌ Таймаут {timeout}с при выполнении")
             raise
         except Exception as e:
-            logger.error(f"❌ Ошибка при выполнении {coro_func.__name__}: {e}")
+            logger.error(f"❌ Ошибка при выполнении: {e}")
             raise
     
     def run_task(self, coro_func: Callable[..., Awaitable], *args, **kwargs):
@@ -183,15 +196,20 @@ class DBLoopManager:
         if self.loop is None:
             raise RuntimeError("Цикл БД не инициализирован")
         
-        import inspect
-        if not inspect.iscoroutinefunction(coro_func):
-            raise TypeError(f"{coro_func} is not a coroutine function")
+        is_coro_func = inspect.iscoroutinefunction(coro_func)
+        is_coro = inspect.iscoroutine(coro_func)
+        
+        if not is_coro_func and not is_coro:
+            raise TypeError(f"{coro_func} is not a coroutine or coroutine function")
         
         async def _wrapped():
             try:
-                return await coro_func(*args, **kwargs)
+                if is_coro:
+                    return await coro_func
+                else:
+                    return await coro_func(*args, **kwargs)
             except Exception as e:
-                logger.error(f"❌ Ошибка в фоновой задаче {coro_func.__name__}: {e}")
+                logger.error(f"❌ Ошибка в фоновой задаче: {e}")
                 return None
         
         task = asyncio.run_coroutine_threadsafe(_wrapped(), self.loop)
@@ -234,7 +252,6 @@ db_loop_manager = DBLoopManager()
 async def init_db():
     """Инициализация подключения к БД"""
     try:
-        # Инициализируем менеджер цикла (он сам создаст подключение)
         db_loop_manager.init(db)
         logger.info("✅ Подключение к PostgreSQL установлено")
         return True
@@ -247,7 +264,7 @@ async def close_db():
     """Закрытие подключения к БД"""
     try:
         if db and db.pool:
-            # Закрываем через менеджер
+            # Используем run_coro для закрытия
             db_loop_manager.run_coro(db.disconnect, timeout=10)
             logger.info("🔒 Подключение к PostgreSQL закрыто")
         
@@ -385,15 +402,20 @@ def save_telegram_user(
     """
     СИНХРОННАЯ обертка для сохранения пользователя Telegram
     """
-    return db_loop_manager.run_coro(
-        save_telegram_user_async,
-        user_id,
-        username,
-        first_name,
-        last_name,
-        language_code,
-        timeout=30
-    )
+    try:
+        result = db_loop_manager.run_coro(
+            save_telegram_user_async,
+            user_id,
+            username,
+            first_name,
+            last_name,
+            language_code,
+            timeout=30
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_telegram_user: {e}")
+        return False
 
 
 async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None):
@@ -465,14 +487,19 @@ def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_
     """
     Синхронная обертка для сохранения (вызывается из любого потока)
     """
-    return db_loop_manager.run_coro(
-        save_user_to_db_async,
-        user_id,
-        user_data_dict,
-        user_contexts_dict,
-        user_routes_dict,
-        timeout=30
-    )
+    try:
+        result = db_loop_manager.run_coro(
+            save_user_to_db_async,
+            user_id,
+            user_data_dict,
+            user_contexts_dict,
+            user_routes_dict,
+            timeout=30
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_user_to_db: {e}")
+        return False
 
 
 async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
@@ -552,13 +579,18 @@ def save_test_result_to_db(user_id, test_type, user_data_dict=None):
     """
     Синхронная обертка для сохранения результатов теста
     """
-    return db_loop_manager.run_coro(
-        save_test_result_to_db_async,
-        user_id,
-        test_type,
-        user_data_dict,
-        timeout=30
-    )
+    try:
+        result = db_loop_manager.run_coro(
+            save_test_result_to_db_async,
+            user_id,
+            test_type,
+            user_data_dict,
+            timeout=30
+        )
+        return result if result is not None else None
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_test_result_to_db: {e}")
+        return None
 
 
 # ============================================
