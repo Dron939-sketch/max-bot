@@ -2,14 +2,12 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики команды /start и начальных экранов для MAX
-ВЕРСИЯ 2.4 - ИСПРАВЛЕНО: Добавлены call.answer() во все callback-обработчики
-ДОБАВЛЕНО: Загрузка пользователей из БД, автосохранение
-ИСПРАВЛЕНО: Все асинхронные вызовы обернуты в отдельные потоки с новым циклом событий
+ВЕРСИЯ 2.5 - ИСПРАВЛЕНО: Используется sync_db вместо создания новых циклов
 """
 import logging
 import time
-import asyncio
 import threading
+import asyncio
 from typing import Optional, Dict, Any
 
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
@@ -34,8 +32,8 @@ from state import (
     get_user_name, load_user_from_db
 )
 
-# ✅ ИСПРАВЛЕНО: импортируем из db_instance вместо main
-from db_instance import db, save_user_to_db, ensure_db_connection
+# ✅ ИСПРАВЛЕНО: используем sync_db вместо прямых вызовов
+from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +84,7 @@ def get_profile_code(user_id: int) -> str:
     return "СБ-4_ТФ-4_УБ-4_ЧВ-4"
 
 # ============================================
-# СТАТИСТИКА (теперь с сохранением в БД)
+# СТАТИСТИКА
 # ============================================
 class Stats:
     def __init__(self):
@@ -94,18 +92,9 @@ class Stats:
     
     def register_start(self, user_id):
         self.starts[user_id] = time.time()
-        # Логируем событие в БД (в отдельном потоке)
+        # ✅ ИСПРАВЛЕНО: используем sync_db
         def run_log():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                # ✅ Проверяем соединение перед логированием
-                loop.run_until_complete(ensure_db_connection())
-                loop.run_until_complete(db.log_event(user_id, 'start', {'timestamp': time.time()}))
-            except Exception as e:
-                logger.error(f"❌ Ошибка логирования старта для {user_id}: {e}")
-            finally:
-                loop.close()
+            sync_db.log_event(user_id, 'start', {'timestamp': time.time()})
         
         threading.Thread(target=run_log, daemon=True).start()
     
@@ -114,15 +103,13 @@ class Stats:
 
 stats = Stats()
 
-
 # ============================================
-# ✅ ИСПРАВЛЕНО: ФУНКЦИЯ ЗАГРУЗКИ ПОЛЬЗОВАТЕЛЯ ИЗ БД С ПРОВЕРКОЙ СОЕДИНЕНИЯ
+# ФУНКЦИЯ ЗАГРУЗКИ ПОЛЬЗОВАТЕЛЯ
 # ============================================
 
 async def ensure_user_loaded(user_id: int, user_name: str = None) -> bool:
     """
     Проверяет, загружен ли пользователь, и загружает из БД если нужно
-    Возвращает True, если данные загружены
     """
     # Если пользователь уже в памяти, просто обновляем имя
     if user_id in user_data or user_id in user_contexts:
@@ -130,20 +117,15 @@ async def ensure_user_loaded(user_id: int, user_name: str = None) -> bool:
             user_names[user_id] = user_name
         return True
     
-    # ✅ Проверяем, что соединение с БД установлено
-    try:
-        # Пробуем выполнить простой запрос для проверки соединения
-        async with db.get_connection() as conn:
-            await conn.execute("SELECT 1")
-    except Exception as e:
-        logger.warning(f"⚠️ Соединение с БД не установлено, пробуем подключиться... Ошибка: {e}")
-        # Пробуем переподключиться
-        from db_instance import init_db
-        await init_db()
+    # ✅ ИСПРАВЛЕНО: проверяем соединение через sync_db
+    if not sync_db.ensure_connection():
+        logger.warning("⚠️ Нет соединения с БД")
+        return False
     
     # Пробуем загрузить из БД
     logger.info(f"🔄 Загружаем пользователя {user_id} из БД...")
-    loaded = await load_user_from_db(user_id, db)
+    from db_instance import load_user_from_db as async_load
+    loaded = await async_load(user_id)
     
     if loaded and user_name:
         user_names[user_id] = user_name
@@ -164,51 +146,95 @@ def cmd_start(message: Message):
     user_names[user_id] = user_name
     clear_state(user_id)
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем пользователя в БД в отдельном потоке
+    # ✅ ИСПРАВЛЕНО: используем sync_db
     def run_save_user():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # ✅ Проверяем соединение перед сохранением
-            loop.run_until_complete(ensure_db_connection())
-            loop.run_until_complete(db.save_telegram_user(
-                user_id=user_id,
-                first_name=user_name,
-                username=message.from_user.username,
-                last_name=message.from_user.last_name,
-                language_code=message.from_user.language_code
-            ))
-            logger.debug(f"💾 Пользователь {user_id} сохранен в БД")
-        except Exception as e:
-            logger.error(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
-        finally:
-            loop.close()
+        sync_db.save_telegram_user(
+            user_id=user_id,
+            first_name=user_name,
+            username=message.from_user.username,
+            last_name=message.from_user.last_name,
+            language_code=message.from_user.language_code
+        )
+        logger.debug(f"💾 Пользователь {user_id} сохранен в БД")
     
     threading.Thread(target=run_save_user, daemon=True).start()
     
-    # ✅ ИСПРАВЛЕНО: Проверяем наличие пользователя в БД в отдельном потоке
+    # ✅ ИСПРАВЛЕНО: проверка загрузки
     def run_load_check():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Создаем событие для ожидания
+        loaded = False
         try:
-            # ✅ Проверяем соединение перед загрузкой
-            loop.run_until_complete(ensure_db_connection())
-            loaded = loop.run_until_complete(ensure_user_loaded(user_id, user_name))
-            # После загрузки продолжаем обработку в основном потоке
-            # Но так как мы в отдельном потоке, используем bot.send_message напрямую
-            continue_start_in_thread(message, user_id, user_name, loaded)
+            # Проверяем соединение
+            if sync_db.ensure_connection():
+                # Запускаем асинхронную загрузку через отдельный цикл
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loaded = loop.run_until_complete(ensure_user_loaded(user_id, user_name))
+                finally:
+                    loop.close()
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки пользователя {user_id}: {e}")
-        finally:
-            loop.close()
+        
+        # Продолжаем обработку
+        continue_start_in_thread(message, user_id, user_name, loaded)
     
     threading.Thread(target=run_load_check, daemon=True).start()
 
 
+@bot.message_handler(commands=['menu'])
+def cmd_menu(message: Message):
+    """Обработчик команды /menu"""
+    user_id = message.from_user.id
+    
+    if user_id in user_contexts:
+        from handlers.modes import show_main_menu_after_mode
+        show_main_menu_after_mode(message, user_contexts[user_id])
+    else:
+        # Если нет контекста, показываем /start
+        cmd_start(message)
+
+
+# ============================================
+# КОМАНДА СИНХРОНИЗАЦИИ
+# ============================================
+
+@bot.message_handler(commands=['sync'])
+def cmd_sync(message: Message):
+    """Принудительная синхронизация с БД (для админов)"""
+    user_id = message.from_user.id
+    
+    # Проверяем, админ ли это
+    from config import ADMIN_IDS
+    if user_id not in ADMIN_IDS:
+        safe_send_message(message, "⛔ Доступ запрещен")
+        return
+    
+    def run_sync():
+        saved_count = 0
+        for uid in list(user_data.keys()):
+            try:
+                if sync_db.save_user_to_db(uid):
+                    saved_count += 1
+            except Exception as e:
+                logger.error(f"❌ Ошибка синхронизации {uid}: {e}")
+        
+        safe_send_message(
+            message,
+            f"✅ Синхронизировано {saved_count} пользователей",
+            delete_previous=True
+        )
+    
+    threading.Thread(target=run_sync, daemon=True).start()
+
+
+# ============================================
+# ПРОДОЛЖЕНИЕ ОБРАБОТКИ START
+# ============================================
+
 def continue_start_in_thread(message: Message, user_id: int, user_name: str, loaded_from_db: bool):
     """
     Продолжает обработку /start в отдельном потоке
-    (вызывается из потока, поэтому используем bot.send_message напрямую)
     """
     # Получаем или создаем контекст
     if user_id not in user_contexts:
@@ -217,7 +243,7 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
     context = user_contexts[user_id]
     context.name = user_name
     
-    # Регистрируем старт (событие в БД) - уже в отдельном потоке
+    # Регистрируем старт
     stats.register_start(user_id)
     
     # Проверяем, есть ли уже профиль
@@ -250,7 +276,6 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
         
         keyboard = get_restart_keyboard()
         
-        # Используем bot.send_message напрямую, так как мы в потоке
         try:
             bot.send_message(
                 message.chat.id,
@@ -310,9 +335,6 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
     
     # Если контекст уже заполнен, показываем меню
     try:
-        from handlers.modes import show_main_menu_after_mode
-        # Создаем фейковый объект message для передачи в функцию
-        # Так как мы в потоке, нужно использовать bot.send_message напрямую
         context.update_weather()
         day_context = context.get_day_context()
         mode_config = COMMUNICATION_MODES.get(context.communication_mode, COMMUNICATION_MODES["coach"])
@@ -363,65 +385,13 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
         logger.error(f"❌ Ошибка при показе меню: {e}")
 
 
-@bot.message_handler(commands=['menu'])
-def cmd_menu(message: Message):
-    """Обработчик команды /menu"""
-    user_id = message.from_user.id
-    
-    if user_id in user_contexts:
-        from handlers.modes import show_main_menu_after_mode
-        show_main_menu_after_mode(message, user_contexts[user_id])
-    else:
-        # Если нет контекста, показываем /start
-        cmd_start(message)
-
-
 # ============================================
-# ✅ НОВАЯ КОМАНДА: ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ
-# ============================================
-
-@bot.message_handler(commands=['sync'])
-def cmd_sync(message: Message):
-    """Принудительная синхронизация с БД (для админов)"""
-    user_id = message.from_user.id
-    
-    # Проверяем, админ ли это
-    from config import ADMIN_IDS
-    if user_id not in ADMIN_IDS:
-        safe_send_message(message, "⛔ Доступ запрещен")
-        return
-    
-    def run_sync():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        saved_count = 0
-        for uid in list(user_data.keys()):
-            try:
-                loop.run_until_complete(save_user_to_db(uid, user_data, user_contexts, user_routes))
-                saved_count += 1
-            except Exception as e:
-                logger.error(f"❌ Ошибка синхронизации {uid}: {e}")
-        
-        loop.close()
-        
-        safe_send_message(
-            message,
-            f"✅ Синхронизировано {saved_count} пользователей",
-            delete_previous=True
-        )
-    
-    threading.Thread(target=run_sync, daemon=True).start()
-
-
-# ============================================
-# CALLBACK-ОБРАБОТЧИКИ - ИСПРАВЛЕНО: добавлены call.answer()
+# CALLBACK-ОБРАБОТЧИКИ
 # ============================================
 
 @bot.callback_query_handler(func=lambda call: call.data == 'start_context')
 def callback_start_context(call: CallbackQuery):
     """Начать заполнение контекста"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -434,7 +404,6 @@ def callback_start_context(call: CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'why_details')
 def callback_why_details(call: CallbackQuery):
     """Показать детальную информацию о боте"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -446,7 +415,6 @@ def callback_why_details(call: CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'restart_test')
 def callback_restart_test(call: CallbackQuery):
     """Перезапустить тест"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -456,7 +424,6 @@ def callback_restart_test(call: CallbackQuery):
     
     # Очищаем профиль в user_data
     if user_id in user_data:
-        # Сохраняем только базовую информацию, удаляем данные теста
         user_data[user_id] = {}
     
     # Очищаем состояние
@@ -465,25 +432,15 @@ def callback_restart_test(call: CallbackQuery):
     # Обновляем контекст
     if user_id in user_contexts:
         context = user_contexts[user_id]
-        # Очищаем данные профиля
         if hasattr(context, 'profile_data'):
             context.profile_data = {}
         if hasattr(context, 'confinement_model'):
             context.confinement_model = {}
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем изменения в БД в отдельном потоке
+    # ✅ ИСПРАВЛЕНО: используем sync_db
     def run_save():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # ✅ Проверяем соединение перед сохранением
-            loop.run_until_complete(ensure_db_connection())
-            loop.run_until_complete(save_user_to_db(user_id, user_data, user_contexts, user_routes))
-            loop.run_until_complete(db.log_event(user_id, 'restart_test', {}))
-        except Exception as e:
-            logger.error(f"❌ Ошибка сохранения при перезапуске: {e}")
-        finally:
-            loop.close()
+        sync_db.save_user_to_db(user_id)
+        sync_db.log_event(user_id, 'restart_test', {})
     
     threading.Thread(target=run_save, daemon=True).start()
     
@@ -514,7 +471,6 @@ def callback_restart_test(call: CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'show_profile')
 def callback_show_profile(call: CallbackQuery):
     """Показать профиль"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -527,7 +483,6 @@ def callback_show_profile(call: CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'show_modes')
 def callback_show_modes(call: CallbackQuery):
     """Показать выбор режимов"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -540,7 +495,6 @@ def callback_show_modes(call: CallbackQuery):
 @bot.callback_query_handler(func=lambda call: call.data == 'back_to_start')
 def callback_back_to_start(call: CallbackQuery):
     """Вернуться к начальному экрану"""
-    # ✅ Добавлен ответ на callback
     try:
         call.answer()
     except Exception as e:
@@ -613,10 +567,6 @@ def show_why_details(call: CallbackQuery):
         delete_previous=True
     )
 
-
-# ============================================
-# ФУНКЦИЯ SHOW_INTRO
-# ============================================
 
 def show_intro(message: Message):
     """
