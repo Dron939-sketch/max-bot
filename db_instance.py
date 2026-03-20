@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ 3.0 - ЧИСТАЯ ВЕРСИЯ ДЛЯ PYTHON 3.11 (БЕЗ ПАТЧЕЙ)
+ВЕРСИЯ ДЛЯ PYTHON 3.11 - С ГЛОБАЛЬНЫМ ЦИКЛОМ
 """
 
 import os
@@ -10,30 +10,77 @@ import json
 import pickle
 import logging
 import asyncio
+import threading
 from typing import Dict, Any, Optional
+from concurrent.futures import ThreadPoolExecutor
+
+# Импортируем класс БД
+from database import BotDatabase
 
 logger = logging.getLogger(__name__)
 
-# ========== ИМПОРТ БАЗЫ ДАННЫХ ==========
-from database import BotDatabase  # Импортируем класс
-# ======================================
+# ============================================
+# ГЛОБАЛЬНЫЙ ЦИКЛ СОБЫТИЙ ДЛЯ БАЗЫ ДАННЫХ
+# ============================================
+_db_loop = None
+_db_loop_thread = None
+_db_executor = ThreadPoolExecutor(max_workers=2)
+_db_lock = threading.Lock()
 
-# URL базы данных из переменных окружения Render
+def get_db_loop():
+    """Возвращает глобальный цикл событий для БД, создавая его при необходимости"""
+    global _db_loop, _db_loop_thread
+    
+    with _db_lock:
+        if _db_loop is None or (_db_loop_thread and not _db_loop_thread.is_alive()):
+            _db_loop = asyncio.new_event_loop()
+            _db_loop_thread = threading.Thread(target=_run_db_loop, daemon=True, name="DB-Loop")
+            _db_loop_thread.start()
+            logger.info("✅ Создан новый глобальный цикл для БД")
+    
+    return _db_loop
+
+def _run_db_loop():
+    """Запускает цикл событий БД в отдельном потоке"""
+    global _db_loop
+    asyncio.set_event_loop(_db_loop)
+    try:
+        _db_loop.run_forever()
+    except Exception as e:
+        logger.error(f"❌ Ошибка в цикле БД: {e}")
+    finally:
+        logger.info("🔚 Цикл БД завершен")
+
+def run_db_coro(coro):
+    """
+    Безопасно запускает корутину в глобальном цикле БД
+    Возвращает Future, который можно await
+    """
+    loop = get_db_loop()
+    return asyncio.run_coroutine_threadsafe(coro, loop)
+
+# ============================================
+# URL базы данных
+# ============================================
 DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://variatica:Ben9BvM0OnppX1EVSabWQQSwTCrqkahh@dpg-d639vucr85hc73b2ge00-a.oregon-postgres.render.com/variatica"
+    "EXTERNAL_DATABASE_URL",
+    os.environ.get(
+        "DATABASE_URL",
+        "postgresql://variatica:Ben9BvM0OnppX1EVSabWQQSwTCrqkahh@dpg-d639vucr85hc73b2ge00-a.oregon-postgres.render.com/variatica"
+    )
 )
 
-# Логируем используемый URL (без пароля для безопасности)
+# Логируем URL без пароля
 url_parts = DATABASE_URL.split('@')
-if len(url_parts) > 1:
-    safe_url = f"postgresql://{url_parts[1]}"
-else:
-    safe_url = DATABASE_URL[:50] + "..." if len(DATABASE_URL) > 50 else DATABASE_URL
+safe_url = f"postgresql://{url_parts[1]}" if len(url_parts) > 1 else DATABASE_URL[:50] + "..."
 logger.info(f"🔗 Используем URL базы данных: {safe_url}")
 
 # Создаем единый экземпляр БД
 db = BotDatabase(DATABASE_URL)
+
+# ============================================
+# ИНИЦИАЛИЗАЦИЯ
+# ============================================
 
 async def init_db():
     """Инициализация подключения к БД"""
@@ -47,171 +94,98 @@ async def init_db():
 
 async def close_db():
     """Закрытие подключения к БД"""
+    global _db_loop
     try:
         await db.disconnect()
         logger.info("🔒 Подключение к PostgreSQL закрыто")
+        
+        # Останавливаем цикл БД
+        if _db_loop:
+            _db_loop.call_soon_threadsafe(_db_loop.stop)
+            logger.info("🛑 Цикл БД остановлен")
     except Exception as e:
         logger.error(f"❌ Ошибка при закрытии подключения: {e}")
 
 # ============================================
-# ✅ ФУНКЦИЯ ПРОВЕРКИ СОЕДИНЕНИЯ С БД (С ПАУЗАМИ)
+# ПРОВЕРКА СОЕДИНЕНИЯ
 # ============================================
 
 async def ensure_db_connection():
-    """Проверяет, установлено ли соединение с БД, и подключается если нет"""
+    """Проверяет соединение с БД"""
     max_retries = 3
     retry_delay = 0.5
     
     for attempt in range(max_retries):
         try:
-            # Проверяем, существует ли пул
             if db.pool is None:
                 logger.info("🔄 Пул соединений не инициализирован, подключаемся...")
                 await db.connect()
                 return True
             
-            # Проверяем, работает ли соединение
             async with db.get_connection() as conn:
                 await conn.execute("SELECT 1")
             logger.debug("✅ Соединение с БД работает")
             return True
             
         except Exception as e:
-            error_str = str(e).lower()
-            logger.error(f"❌ Ошибка при проверке соединения с БД (попытка {attempt+1}/{max_retries}): {e}")
+            logger.error(f"❌ Ошибка при проверке соединения (попытка {attempt+1}/{max_retries}): {e}")
             
-            # Проверяем, связана ли ошибка с соединением
-            if any(phrase in error_str for phrase in [
-                "пул закрыт", "pool is closed", "connection", 
-                "timeout", "ssl", "network", "reset"
-            ]):
-                if attempt < max_retries - 1:
-                    logger.info(f"⏳ Повторная попытка через {retry_delay}с...")
-                    await asyncio.sleep(retry_delay)
-                    retry_delay *= 2  # Увеличиваем задержку
-                    
-                    # Пробуем переподключиться
-                    try:
-                        await db.disconnect()
-                    except:
-                        pass
-                    
-                    continue
-                else:
-                    logger.warning(f"⚠️ Не удалось восстановить соединение после {max_retries} попыток")
-                    return False
+            if attempt < max_retries - 1:
+                logger.info(f"⏳ Повтор через {retry_delay}с...")
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
             else:
-                # Если это не ошибка соединения, возвращаем False
-                logger.warning(f"⚠️ Не связанная с соединением ошибка: {e}")
+                logger.warning(f"⚠️ Не удалось восстановить соединение")
                 return False
     
     return False
 
 # ============================================
-# ✅ ФУНКЦИЯ ДЛЯ ВЫПОЛНЕНИЯ С ПОВТОРНЫМИ ПОПЫТКАМИ
+# ВЫПОЛНЕНИЕ С ПОВТОРАМИ
 # ============================================
 
 async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
     """
-    Выполняет асинхронную функцию с повторными попытками при ошибках соединения
-    
-    Args:
-        coro_func: асинхронная функция для выполнения
-        *args: позиционные аргументы для функции
-        max_retries: максимальное количество попыток
-        **kwargs: именованные аргументы для функции
-    
-    Returns:
-        Результат выполнения функции или None в случае ошибки
+    Выполняет функцию с повторными попытками
     """
     last_error = None
     
     for attempt in range(max_retries):
         try:
-            # Проверяем соединение перед выполнением
-            if not await ensure_db_connection():
-                logger.warning(f"⚠️ Не удалось установить соединение с БД (попытка {attempt+1}/{max_retries})")
-                if attempt < max_retries - 1:
-                    wait_time = 1 * (attempt + 1)
-                    logger.info(f"⏳ Ожидание {wait_time}с перед следующей попыткой...")
-                    await asyncio.sleep(wait_time)
-                    continue
-                else:
-                    logger.error(f"❌ Все попытки подключения исчерпаны")
-                    return None
-            
-            # Выполняем функцию
             if asyncio.iscoroutinefunction(coro_func):
                 result = await coro_func(*args, **kwargs)
             else:
-                # Если функция не асинхронная, выполняем в executor
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(None, lambda: coro_func(*args, **kwargs))
-            
             return result
             
         except Exception as e:
             last_error = e
-            error_str = str(e).lower()
+            logger.warning(f"⚠️ Ошибка (попытка {attempt+1}/{max_retries}): {e}")
             
-            # Проверяем, связана ли ошибка с соединением
-            if any(phrase in error_str for phrase in [
-                "пул закрыт", "pool is closed", "connection", 
-                "timeout", "ssl", "network", "reset"
-            ]):
-                logger.warning(f"⚠️ Ошибка соединения с БД (попытка {attempt+1}/{max_retries}): {e}")
-                
-                if attempt < max_retries - 1:
-                    # Увеличиваем задержку с каждой попыткой
-                    wait_time = 1 * (attempt + 1)
-                    logger.info(f"⏳ Ожидание {wait_time}с перед следующей попыткой...")
-                    await asyncio.sleep(wait_time)
-                    
-                    # Принудительно сбрасываем соединение
-                    try:
-                        await db.disconnect()
-                    except:
-                        pass
-                    continue
+            if attempt < max_retries - 1:
+                await asyncio.sleep(1 * (attempt + 1))
             else:
-                # Если это не ошибка соединения, пробрасываем исключение
-                logger.error(f"❌ Неожиданная ошибка: {e}")
-                raise e
+                logger.error(f"❌ Все попытки исчерпаны: {last_error}")
     
-    # Если все попытки исчерпаны
-    logger.error(f"❌ Все {max_retries} попыток выполнения исчерпаны. Последняя ошибка: {last_error}")
     return None
 
 # ============================================
-# ФУНКЦИИ ДЛЯ СОХРАНЕНИЯ ДАННЫХ
+# СОХРАНЕНИЕ ДАННЫХ (обернуто в глобальный цикл)
 # ============================================
 
-async def save_user_to_db(
-    user_id: int, 
-    user_data_dict: Dict[int, Dict] = None, 
-    user_contexts_dict: Dict[int, Any] = None, 
-    user_routes_dict: Dict[int, Dict] = None
-):
+def _save_user_to_db_sync(user_id, user_data_dict, user_contexts_dict, user_routes_dict):
     """
-    Сохраняет данные конкретного пользователя в БД
-    Универсальная функция, которая принимает данные из state.py
+    Синхронная обертка для сохранения пользователя
+    Запускается в отдельном потоке
     """
     try:
-        # ✅ Используем execute_with_retry для всех операций с БД
-        async def _do_save():
-            # Если данные не переданы, пытаемся импортировать из state
-            nonlocal user_data_dict, user_contexts_dict, user_routes_dict
-            if user_data_dict is None or user_contexts_dict is None or user_routes_dict is None:
-                try:
-                    from state import user_data as global_user_data, user_contexts as global_user_contexts, user_routes as global_user_routes
-                    user_data_dict = global_user_data if user_data_dict is None else user_data_dict
-                    user_contexts_dict = global_user_contexts if user_contexts_dict is None else user_contexts_dict
-                    user_routes_dict = global_user_routes if user_routes_dict is None else user_routes_dict
-                except ImportError:
-                    logger.warning(f"⚠️ Не удалось импортировать глобальные данные для user {user_id}")
-                    return False
-            
-            # Сохраняем пользователя в таблицу fredi_users
+        # Создаем временный цикл для этого потока
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        async def _save():
+            # Сохраняем пользователя
             if user_id in user_data_dict:
                 user_info = user_data_dict[user_id]
                 first_name = user_info.get('first_name') or user_info.get('name')
@@ -223,15 +197,14 @@ async def save_user_to_db(
                     first_name=first_name
                 )
             
-            # Сохраняем user_data (результаты тестов, профиль)
+            # Сохраняем user_data
             if user_id in user_data_dict:
                 await db.save_user_data(user_id, user_data_dict[user_id])
             
-            # Сохраняем контекст (UserContext объект)
+            # Сохраняем контекст
             if user_id in user_contexts_dict:
                 context = user_contexts_dict[user_id]
                 await db.save_user_context(user_id, context)
-                # Также сохраняем pickled версию как резерв
                 await db.save_pickled_context(user_id, context)
             
             # Сохраняем маршрут
@@ -244,70 +217,92 @@ async def save_user_to_db(
                     progress=route.get('progress', [])
                 )
             
-            logger.debug(f"💾 Данные пользователя {user_id} сохранены в БД")
             return True
         
-        # Выполняем с повторными попытками
-        return await execute_with_retry(_do_save, max_retries=3)
+        result = loop.run_until_complete(_save())
+        loop.close()
+        return result
         
     except Exception as e:
-        logger.error(f"❌ Ошибка сохранения пользователя {user_id} в БД после всех попыток: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
         return False
 
-async def save_test_result_to_db(
-    user_id: int,
-    test_type: str,
-    user_data_dict: Dict[int, Dict]
-):
-    """Сохраняет результаты теста в БД"""
+async def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None):
+    """
+    Сохраняет данные пользователя в БД (асинхронная версия)
+    """
     try:
-        async def _do_save():
-            data = user_data_dict.get(user_id, {})
-            
-            # Получаем profile_code из данных
-            profile_code = None
-            if data.get("profile_data"):
-                profile_code = data["profile_data"].get("display_name")
-            
-            # Сохраняем результат теста
-            test_id = await db.save_test_result(
-                user_id=user_id,
-                test_type=test_type,
-                results=data,
-                profile_code=profile_code,
-                perception_type=data.get("perception_type"),
-                thinking_level=data.get("thinking_level"),
-                vectors=data.get("behavioral_levels"),
-                deep_patterns=data.get("deep_patterns"),
-                confinement_model=data.get("confinement_model")
-            )
-            
-            # Сохраняем все ответы, если есть
-            all_answers = data.get("all_answers", [])
-            if all_answers and test_id:
-                for answer in all_answers:
-                    await db.save_test_answer(
-                        user_id=user_id,
-                        test_result_id=test_id,
-                        stage=answer.get('stage', 0),
-                        question_index=answer.get('question_index', 0),
-                        question_text=answer.get('question', ''),
-                        answer_text=answer.get('answer', ''),
-                        answer_value=answer.get('option', ''),
-                        scores=answer.get('scores'),
-                        measures=answer.get('measures'),
-                        strategy=answer.get('strategy'),
-                        dilts=answer.get('dilts'),
-                        pattern=answer.get('pattern'),
-                        target=answer.get('target')
-                    )
-            
-            return test_id
+        # Запускаем в отдельном потоке через executor
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            _db_executor,
+            _save_user_to_db_sync,
+            user_id, user_data_dict, user_contexts_dict, user_routes_dict
+        )
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка при сохранении пользователя {user_id}: {e}")
+        return False
+
+async def save_test_result_to_db(user_id, test_type, user_data_dict):
+    """
+    Сохраняет результаты теста в БД
+    """
+    try:
+        data = user_data_dict.get(user_id, {})
         
-        # Выполняем с повторными попытками
-        return await execute_with_retry(_do_save, max_retries=3)
+        profile_code = None
+        if data.get("profile_data"):
+            profile_code = data["profile_data"].get("display_name")
+        
+        # Запускаем сохранение в отдельном потоке
+        loop = asyncio.get_event_loop()
+        
+        def _save_sync():
+            save_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(save_loop)
+            
+            async def _save():
+                test_id = await db.save_test_result(
+                    user_id=user_id,
+                    test_type=test_type,
+                    results=data,
+                    profile_code=profile_code,
+                    perception_type=data.get("perception_type"),
+                    thinking_level=data.get("thinking_level"),
+                    vectors=data.get("behavioral_levels"),
+                    deep_patterns=data.get("deep_patterns"),
+                    confinement_model=data.get("confinement_model")
+                )
+                
+                # Сохраняем ответы
+                all_answers = data.get("all_answers", [])
+                if all_answers and test_id:
+                    for answer in all_answers:
+                        await db.save_test_answer(
+                            user_id=user_id,
+                            test_result_id=test_id,
+                            stage=answer.get('stage', 0),
+                            question_index=answer.get('question_index', 0),
+                            question_text=answer.get('question', ''),
+                            answer_text=answer.get('answer', ''),
+                            answer_value=answer.get('option', ''),
+                            scores=answer.get('scores'),
+                            measures=answer.get('measures'),
+                            strategy=answer.get('strategy'),
+                            dilts=answer.get('dilts'),
+                            pattern=answer.get('pattern'),
+                            target=answer.get('target')
+                        )
+                
+                return test_id
+            
+            result = save_loop.run_until_complete(_save())
+            save_loop.close()
+            return result
+        
+        return await loop.run_in_executor(_db_executor, _save_sync)
+        
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения результатов теста для {user_id}: {e}")
         return None
@@ -323,5 +318,7 @@ __all__ = [
     'save_user_to_db',
     'save_test_result_to_db',
     'ensure_db_connection',
-    'execute_with_retry'
+    'execute_with_retry',
+    'run_db_coro',
+    'get_db_loop'
 ]
