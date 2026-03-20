@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Optional, Dict, Any
 
-from db_instance import db_loop_manager, db, ensure_db_connection
+from db_instance import db_loop_manager, db
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +19,10 @@ class SyncDB:
     def ensure_connection() -> bool:
         """Синхронная проверка соединения с БД"""
         try:
-            async def _check():
-                return await ensure_db_connection()
-            return db_loop_manager.run_coro(_check(), timeout=10)
+            from db_instance import ensure_db_connection
+            # Вызываем через менеджер и ЖДЕМ результат
+            result = db_loop_manager.run_coro(ensure_db_connection(), timeout=10)
+            return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка ensure_connection: {e}")
             return False
@@ -36,10 +37,12 @@ class SyncDB:
     ) -> bool:
         """Синхронное сохранение пользователя"""
         try:
+            # Создаем корутину
             async def _save():
                 return await db.save_telegram_user(
                     user_id, username, first_name, last_name, language_code
                 )
+            # Вызываем через менеджер и ЖДЕМ результат
             result = db_loop_manager.run_coro(_save(), timeout=10)
             return result if result is not None else False
         except Exception as e:
@@ -53,7 +56,8 @@ class SyncDB:
             async def _save():
                 await db.save_user_data(user_id, data)
                 return True
-            return db_loop_manager.run_coro(_save(), timeout=10)
+            result = db_loop_manager.run_coro(_save(), timeout=10)
+            return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка save_user_data: {e}")
             return False
@@ -65,7 +69,8 @@ class SyncDB:
             from db_instance import save_user_to_db as async_save
             async def _save():
                 return await async_save(user_id)
-            return db_loop_manager.run_coro(_save(), timeout=10)
+            result = db_loop_manager.run_coro(_save(), timeout=10)
+            return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка save_user_to_db: {e}")
             return False
@@ -77,7 +82,8 @@ class SyncDB:
             async def _log():
                 await db.log_event(user_id, event_type, event_data)
                 return True
-            return db_loop_manager.run_coro(_log(), timeout=5)
+            result = db_loop_manager.run_coro(_log(), timeout=5)
+            return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка log_event: {e}")
             return False
@@ -111,7 +117,8 @@ class SyncDB:
             async def _cache():
                 await db.cache_weekend_ideas(user_id, ideas_text, main_vector, main_level)
                 return True
-            return db_loop_manager.run_coro(_cache(), timeout=10)
+            result = db_loop_manager.run_coro(_cache(), timeout=10)
+            return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка cache_weekend_ideas: {e}")
             return False
