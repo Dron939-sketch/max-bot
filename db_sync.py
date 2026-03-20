@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Синхронные обертки для работы с БД - для вызовов из любого потока
-ВЕРСИЯ 2.3 - ИСПРАВЛЕНО: прямой вызов синхронных функций
+ВЕРСИЯ 2.4 - ИСПРАВЛЕНО: log_event
 """
 
 import logging
@@ -77,10 +77,9 @@ class SyncDB:
     def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
         """
         Синхронное логирование события
-        Использует прямой вызов синхронной функции
         """
         try:
-            # Создаем корутину для логирования
+            # ✅ ПРАВИЛЬНО: создаем корутину и запускаем через run_coro
             async def _log():
                 try:
                     await db.log_event(user_id, event_type, event_data)
