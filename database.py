@@ -4,7 +4,7 @@
 Модуль для работы с PostgreSQL базой данных бота "Фреди"
 Все таблицы имеют префикс fredi_ для избежания конфликтов
 
-Версия 3.0 - ЧИСТАЯ ВЕРСИЯ (без патчей для Python 3.11)
+Версия 3.1 - ИСПРАВЛЕНО: сериализация ConfinementElement
 """
 
 import asyncpg
@@ -86,6 +86,64 @@ class BotDatabase:
         except Exception as e:
             logger.error(f"❌ Ошибка при получении соединения: {e}")
             raise
+    
+    # ====================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ СЕРИАЛИЗАЦИИ ======================
+    
+    def _make_json_serializable(self, obj: Any) -> Any:
+        """
+        Рекурсивно преобразует объект в JSON-сериализуемый формат
+        """
+        if obj is None:
+            return None
+        
+        # Если это базовый тип, который уже сериализуется
+        if isinstance(obj, (str, int, float, bool)):
+            return obj
+        
+        # Если это datetime
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        
+        # Если это список или кортеж
+        if isinstance(obj, (list, tuple)):
+            return [self._make_json_serializable(item) for item in obj]
+        
+        # Если это словарь
+        if isinstance(obj, dict):
+            return {key: self._make_json_serializable(value) for key, value in obj.items()}
+        
+        # Если это объект с __dict__ (пользовательский класс)
+        if hasattr(obj, '__dict__'):
+            result = {}
+            for key, value in obj.__dict__.items():
+                # Пропускаем приватные атрибуты
+                if not key.startswith('_'):
+                    result[key] = self._make_json_serializable(value)
+            return result
+        
+        # Если ничего не подошло, преобразуем в строку
+        return str(obj)
+    
+    def _safe_json_dumps(self, data: Any) -> Optional[str]:
+        """
+        Безопасно сериализует данные в JSON, обрабатывая любые типы
+        """
+        if data is None:
+            return None
+        
+        try:
+            # Пробуем прямую сериализацию
+            return json.dumps(data, default=str)
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка прямой сериализации JSON: {e}, пробуем рекурсивное преобразование")
+            try:
+                # Пробуем рекурсивное преобразование
+                serializable = self._make_json_serializable(data)
+                return json.dumps(serializable)
+            except Exception as e2:
+                logger.error(f"❌ Не удалось сериализовать данные: {e2}")
+                # Возвращаем пустой объект вместо None, чтобы не ломать запрос
+                return "{}"
     
     # ====================== СОЗДАНИЕ ТАБЛИЦ ======================
     
@@ -459,7 +517,7 @@ class BotDatabase:
                 getattr(context_obj, 'timezone_offset', 3),
                 getattr(context_obj, 'communication_mode', 'coach'),
                 getattr(context_obj, 'last_context_update', None),
-                json.dumps(getattr(context_obj, 'weather_cache', {})),
+                self._safe_json_dumps(getattr(context_obj, 'weather_cache', {})),
                 getattr(context_obj, 'weather_cache_time', None),
                 getattr(context_obj, 'family_status', None),
                 getattr(context_obj, 'has_children', False),
@@ -521,7 +579,7 @@ class BotDatabase:
                 ON CONFLICT (user_id) DO UPDATE SET
                     data = $2,
                     updated_at = NOW()
-            """, user_id, json.dumps(data, default=str))
+            """, user_id, self._safe_json_dumps(data))
     
     async def load_user_data(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Загружает user_data для пользователя"""
@@ -603,7 +661,7 @@ class BotDatabase:
                     user_id, route_data, current_step, progress, is_active
                 ) VALUES ($1, $2, $3, $4, TRUE)
                 RETURNING id
-            """, user_id, json.dumps(route_data), current_step, json.dumps(progress))
+            """, user_id, self._safe_json_dumps(route_data), current_step, self._safe_json_dumps(progress))
             
             return route_id
     
@@ -643,7 +701,7 @@ class BotDatabase:
                     completed_at = CASE WHEN $4 THEN NOW() ELSE completed_at END,
                     updated_at = NOW()
                 WHERE id = $1
-            """, route_id, current_step, json.dumps(progress), completed)
+            """, route_id, current_step, self._safe_json_dumps(progress), completed)
     
     # ====================== РЕЗУЛЬТАТЫ ТЕСТОВ ======================
     
@@ -683,16 +741,16 @@ class BotDatabase:
             """,
                 user_id,
                 test_type,
-                json.dumps(results, default=str),
+                self._safe_json_dumps(results),
                 profile_code,
                 perception_type,
                 thinking_level,
-                json.dumps(vectors) if vectors else None,
-                json.dumps(behavioral_levels) if behavioral_levels else None,
-                json.dumps(deep_patterns) if deep_patterns else None,
-                json.dumps(confinement_model) if confinement_model else None,
-                json.dumps(current_destination) if current_destination else None,
-                json.dumps(current_route) if current_route else None
+                self._safe_json_dumps(vectors) if vectors else None,
+                self._safe_json_dumps(behavioral_levels) if behavioral_levels else None,
+                self._safe_json_dumps(deep_patterns) if deep_patterns else None,
+                self._safe_json_dumps(confinement_model) if confinement_model else None,
+                self._safe_json_dumps(current_destination) if current_destination else None,
+                self._safe_json_dumps(current_route) if current_route else None
             )
             
             return test_id
@@ -779,7 +837,7 @@ class BotDatabase:
                 question_text,
                 answer_text,
                 answer_value,
-                json.dumps(scores) if scores else None,
+                self._safe_json_dumps(scores) if scores else None,
                 measures,
                 strategy,
                 dilts,
@@ -873,7 +931,7 @@ class BotDatabase:
                 INSERT INTO fredi_reminders (user_id, reminder_type, remind_at, data)
                 VALUES ($1, $2, $3, $4)
                 RETURNING id
-            """, user_id, reminder_type, remind_at, json.dumps(data) if data else None)
+            """, user_id, reminder_type, remind_at, self._safe_json_dumps(data) if data else None)
             
             return reminder_id
     
@@ -994,7 +1052,7 @@ class BotDatabase:
                 INSERT INTO fredi_question_analysis_cache (user_id, question_hash, question_text, analysis)
                 VALUES ($1, $2, $3, $4)
                 RETURNING id
-            """, user_id, question_hash, question[:200], json.dumps(analysis, default=str))
+            """, user_id, question_hash, question[:200], self._safe_json_dumps(analysis))
             
             return cache_id
     
@@ -1028,7 +1086,7 @@ class BotDatabase:
             await conn.execute("""
                 INSERT INTO fredi_events (user_id, event_type, event_data)
                 VALUES ($1, $2, $3)
-            """, user_id, event_type, json.dumps(event_data) if event_data else None)
+            """, user_id, event_type, self._safe_json_dumps(event_data) if event_data else None)
             
             # Также обновляем last_activity
             await self.update_last_activity(user_id)
@@ -1208,6 +1266,11 @@ class BotDatabase:
                 
                 # Если есть результаты теста, сохраняем их отдельно
                 if data.get('profile_data') or data.get('ai_generated_profile'):
+                    # Преобразуем confinement_model, если это объект
+                    confinement_model_dict = None
+                    if data.get('confinement_model'):
+                        confinement_model_dict = self._make_json_serializable(data['confinement_model'])
+                    
                     test_id = await self.save_test_result(
                         user_id=user_id,
                         test_type='full_profile',
@@ -1217,7 +1280,7 @@ class BotDatabase:
                         thinking_level=data.get('thinking_level'),
                         vectors=data.get('behavioral_levels'),
                         deep_patterns=data.get('deep_patterns'),
-                        confinement_model=data.get('confinement_model')
+                        confinement_model=confinement_model_dict
                     )
                     migrated_tests += 1
                     
