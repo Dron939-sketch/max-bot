@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 ВИРТУАЛЬНЫЙ ПСИХОЛОГ - МАТРИЦА ПОВЕДЕНИЙ 4×6
-ВЕРСИЯ ДЛЯ PYTHON 3.11 - С ЕДИНЫМ ЦИКЛОМ ДЛЯ БД (УЛУЧШЕННАЯ)
+ВЕРСИЯ ДЛЯ PYTHON 3.11 - С ЕДИНЫМ ЦИКЛОМ ДЛЯ БД И ДИАГНОСТИКОЙ
 """
 
 import os
@@ -812,6 +812,38 @@ async def get_test_progress(user_id: int):
             status_code=500,
             content={"error": str(e)}
         )
+
+# ========== ДОБАВЛЕННЫЙ ЭНДПОИНТ ДЛЯ ПРОВЕРКИ БД ==========
+@api_app.get("/api/check-db")
+async def check_db():
+    """Проверяет работу базы данных"""
+    try:
+        from db_instance import db, ensure_db_connection
+        
+        # Проверяем соединение
+        await ensure_db_connection()
+        
+        # Получаем статистику
+        async with db.get_connection() as conn:
+            users = await conn.fetchval("SELECT COUNT(*) FROM fredi_users")
+            tests = await conn.fetchval("SELECT COUNT(*) FROM fredi_test_results")
+            contexts = await conn.fetchval("SELECT COUNT(*) FROM fredi_user_contexts")
+            
+            return {
+                "status": "ok",
+                "users": users or 0,
+                "tests": tests or 0,
+                "contexts": contexts or 0,
+                "message": "✅ База данных работает"
+            }
+    except Exception as e:
+        logger.error(f"❌ Ошибка при проверке БД: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": "❌ База данных НЕ работает"
+        }
+# ============================================================
 
 # ============================================
 # СТАРЫЕ ЭНДПОИНТЫ (ОСТАВЛЯЕМ ДЛЯ СОВМЕСТИМОСТИ)
