@@ -2,44 +2,35 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик голосовых сообщений для MAX
-Версия 2.1 - ИСПРАВЛЕНО: использование правильного токена MAX_TOKEN
+Версия 3.1 - АДАПТИРОВАН ПОД ЛОГИКУ ОРИГИНАЛЬНОГО КОДА
 """
 
 import logging
-import requests
-import asyncio
-import io
+import tempfile
 import os
+import asyncio
+import requests
 import time
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Dict, Any, List
 
-from maxibot.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from message_utils import safe_send_message, safe_delete_message, send_with_status_cleanup
+from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
-# ✅ ИСПРАВЛЕНО: используем правильную переменную MAX_TOKEN
 from config import MAX_TOKEN, DEEPGRAM_API_KEY, YANDEX_API_KEY, VOICE_SETTINGS, COMMUNICATION_MODES
-from services import synthesize_speech, transcribe_audio
+from message_utils import safe_send_message, safe_delete_message
+from services import speech_to_text, text_to_speech
+from state import user_data, user_contexts, get_state, set_state, TestStates, get_user_name
+from modes import get_mode
 
 logger = logging.getLogger(__name__)
-
-# API URL для работы с голосом в MAX
-MAX_VOICE_API_URL = "https://api.max.ru/v1/voice"  # Замените на реальный URL
 
 # Кэш для синтезированной речи
 _voice_cache = {}
 _voice_cache_time = {}
 
+
 def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.ogg") -> bool:
     """
     Отправляет голосовое сообщение через API MAX
-    
-    Args:
-        chat_id: ID чата (пользователя)
-        audio_data: бинарные данные аудио
-        filename: имя файла
-        
-    Returns:
-        bool: успешность отправки
     """
     try:
         if not MAX_TOKEN:
@@ -63,7 +54,7 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
             try:
                 if method.get("use_param"):
                     response = requests.post(
-                        f"{MAX_VOICE_API_URL}/upload",
+                        "https://api.max.ru/v1/voice/upload",
                         params={"token": MAX_TOKEN},
                         json={
                             "chat_id": chat_id,
@@ -75,7 +66,7 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
                     )
                 else:
                     response = requests.post(
-                        f"{MAX_VOICE_API_URL}/upload",
+                        "https://api.max.ru/v1/voice/upload",
                         headers=method["headers"],
                         json={
                             "chat_id": chat_id,
@@ -97,19 +88,16 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
                 elif response.status_code == 401:
                     logger.warning(f"⚠️ Ошибка 401 для метода {method['name']}: {response.text}")
                     continue
-                else:
-                    logger.warning(f"⚠️ Неожиданный статус {response.status_code} для {method['name']}: {response.text}")
-                    continue
                     
             except Exception as e:
                 logger.error(f"❌ Ошибка при запросе через {method['name']}: {e}")
                 continue
         
         if not upload_url:
-            logger.error("❌ Не удалось получить URL для загрузки ни одним методом")
+            logger.error("❌ Не удалось получить URL для загрузки")
             return False
         
-        # ШАГ 2: Загружаем аудио по полученному URL
+        # ШАГ 2: Загружаем аудио
         logger.info(f"📡 ШАГ 2: загружаем аудио ({len(audio_data)} байт)...")
         
         try:
@@ -133,8 +121,8 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
             logger.error(f"❌ Ошибка при загрузке аудио: {e}")
             return False
         
-        # ШАГ 3: Отправляем сообщение с голосом
-        logger.info(f"📡 ШАГ 3: отправляем сообщение с голосом в чат {chat_id}...")
+        # ШАГ 3: Отправляем сообщение
+        logger.info(f"📡 ШАГ 3: отправляем сообщение с голосом...")
         
         try:
             if upload_method == "X-API-Key":
@@ -145,7 +133,7 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
                 headers = {}
             
             response = requests.post(
-                f"{MAX_VOICE_API_URL}/send",
+                "https://api.max.ru/v1/voice/send",
                 headers=headers,
                 json={
                     "chat_id": chat_id,
@@ -156,10 +144,10 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
             )
             
             if response.status_code == 200:
-                logger.info(f"✅ Голосовое сообщение успешно отправлено пользователю {chat_id}")
+                logger.info(f"✅ Голосовое сообщение отправлено")
                 return True
             else:
-                logger.error(f"❌ Ошибка отправки: {response.status_code} - {response.text}")
+                logger.error(f"❌ Ошибка отправки: {response.status_code}")
                 return False
                 
         except Exception as e:
@@ -167,25 +155,14 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
             return False
             
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка при отправке голоса: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ Критическая ошибка: {e}")
         return False
 
 
 def get_voice_message_url(message_id: int) -> Optional[str]:
-    """
-    Получает URL голосового сообщения для скачивания
-    
-    Args:
-        message_id: ID сообщения с голосом
-        
-    Returns:
-        Optional[str]: URL для скачивания или None
-    """
+    """Получает URL голосового сообщения"""
     try:
         if not MAX_TOKEN:
-            logger.error("❌ MAX_TOKEN не задан")
             return None
         
         auth_methods = [
@@ -196,7 +173,7 @@ def get_voice_message_url(message_id: int) -> Optional[str]:
         for method in auth_methods:
             try:
                 response = requests.get(
-                    f"{MAX_VOICE_API_URL}/message/{message_id}",
+                    f"https://api.max.ru/v1/voice/message/{message_id}",
                     headers=method["headers"],
                     timeout=10
                 )
@@ -205,278 +182,177 @@ def get_voice_message_url(message_id: int) -> Optional[str]:
                     data = response.json()
                     voice_url = data.get("voice_url") or data.get("audio_url")
                     if voice_url:
-                        logger.info(f"✅ Получен URL голоса через {method['name']}")
+                        logger.info(f"✅ Получен URL голоса")
                         return voice_url
-                elif response.status_code == 401:
-                    logger.warning(f"⚠️ Ошибка 401 для {method['name']}")
-                    continue
-                    
+                        
             except Exception as e:
-                logger.error(f"❌ Ошибка при получении URL через {method['name']}: {e}")
+                logger.error(f"❌ Ошибка: {e}")
                 continue
         
-        logger.error("❌ Не удалось получить URL голосового сообщения")
         return None
         
     except Exception as e:
-        logger.error(f"❌ Ошибка при получении URL голоса: {e}")
+        logger.error(f"❌ Ошибка: {e}")
         return None
 
 
 def download_voice_message(voice_url: str) -> Optional[bytes]:
-    """
-    Скачивает голосовое сообщение по URL
-    
-    Args:
-        voice_url: URL для скачивания
-        
-    Returns:
-        Optional[bytes]: бинарные данные аудио или None
-    """
+    """Скачивает голосовое сообщение"""
     try:
         response = requests.get(voice_url, timeout=30)
         
         if response.status_code == 200:
-            logger.info(f"✅ Голосовое сообщение скачано: {len(response.content)} байт")
+            logger.info(f"✅ Голос скачан: {len(response.content)} байт")
             return response.content
         else:
             logger.error(f"❌ Ошибка скачивания: {response.status_code}")
             return None
             
     except Exception as e:
-        logger.error(f"❌ Ошибка при скачивании: {e}")
+        logger.error(f"❌ Ошибка: {e}")
         return None
 
 
-def get_cached_voice(text: str, voice_id: str, emotion: str = "neutral") -> Optional[bytes]:
+async def handle_voice_message(message: Message, state):
     """
-    Получает синтезированную речь из кэша
+    Обработка голосового сообщения - АДАПТИРОВАНО ИЗ ОРИГИНАЛЬНОГО КОДА
     
-    Args:
-        text: текст для синтеза
-        voice_id: ID голоса
-        emotion: эмоция
-        
-    Returns:
-        Optional[bytes]: аудио данные или None
+    Алгоритм:
+    1. Проверяем, пройден ли тест
+    2. Сохраняем голос во временный файл
+    3. Распознаём речь через Deepgram
+    4. Получаем текущий режим пользователя
+    5. Обрабатываем текст через режим (коуч/психолог/тренер)
+    6. Отправляем текстовый ответ
+    7. Отправляем голосовой ответ
     """
-    cache_key = f"{voice_id}_{emotion}_{hash(text)}"
+    user_id = message.from_user.id
     
-    # Проверяем кэш (храним 1 час)
-    if cache_key in _voice_cache:
-        cache_time = _voice_cache_time.get(cache_key, 0)
-        if time.time() - cache_time < 3600:  # 1 час
-            logger.info(f"📦 Используем кэшированный голос для {voice_id}")
-            return _voice_cache[cache_key]
+    # Получаем данные пользователя
+    from state import user_data, user_contexts
+    data = user_data.get(user_id, {})
     
-    return None
-
-
-def cache_voice(text: str, voice_id: str, emotion: str, audio_data: bytes):
-    """
-    Сохраняет синтезированную речь в кэш
-    
-    Args:
-        text: текст для синтеза
-        voice_id: ID голоса
-        emotion: эмоция
-        audio_data: аудио данные
-    """
-    cache_key = f"{voice_id}_{emotion}_{hash(text)}"
-    _voice_cache[cache_key] = audio_data
-    _voice_cache_time[cache_key] = time.time()
-    
-    # Очищаем старый кэш если слишком много
-    if len(_voice_cache) > 100:
-        oldest_key = min(_voice_cache_time.items(), key=lambda x: x[1])[0]
-        del _voice_cache[oldest_key]
-        del _voice_cache_time[oldest_key]
-        logger.info(f"🧹 Очищен старый кэш: {oldest_key}")
-
-
-async def send_voice_message_async(
-    message: Message,
-    text: str,
-    mode: str = "coach",
-    delete_previous: bool = True,
-    parse_mode: str = None
-) -> bool:
-    """
-    Асинхронная отправка голосового сообщения
-    
-    Args:
-        message: сообщение для ответа
-        text: текст для озвучивания
-        mode: режим общения (coach, psychologist, trainer)
-        delete_previous: удалять предыдущее сообщение
-        parse_mode: режим парсинга
-        
-    Returns:
-        bool: успешность отправки
-    """
-    try:
-        # Получаем настройки голоса для режима
-        voice_config = VOICE_SETTINGS.get(mode, VOICE_SETTINGS["coach"])
-        voice_id = voice_config["voice"]
-        emotion = voice_config.get("emotion", "neutral")
-        
-        # Проверяем кэш
-        cached_audio = get_cached_voice(text, voice_id, emotion)
-        
-        if cached_audio:
-            # Отправляем из кэша
-            success = send_voice_message(message.chat.id, cached_audio)
-            if success:
-                logger.info(f"✅ Отправлен кэшированный голос для {message.chat.id}")
-                return True
-        
-        # Синтезируем речь через Yandex TTS
-        logger.info(f"🎤 Синтез речи для текста: {len(text)} символов, режим: {mode}")
-        
-        audio_data = await synthesize_speech(
-            text=text,
-            voice=voice_id,
-            emotion=emotion,
-            speed=voice_config.get("speed", 1.0),
-            format="ogg"
-        )
-        
-        if not audio_data:
-            logger.error(f"❌ Не удалось синтезировать речь")
-            return False
-        
-        # Сохраняем в кэш
-        cache_voice(text, voice_id, emotion, audio_data)
-        
-        # Отправляем голосовое сообщение
-        success = send_voice_message(message.chat.id, audio_data)
-        
-        if success:
-            logger.info(f"✅ Голосовое сообщение отправлено пользователю {message.chat.id}")
+    # Проверяем, пройден ли тест
+    def is_test_completed(user_data_dict):
+        """Проверяет, завершен ли тест"""
+        if user_data_dict.get("profile_data"):
             return True
-        else:
-            logger.warning(f"⚠️ Не удалось отправить голосовое сообщение пользователю {message.chat.id}")
-            return False
-            
-    except Exception as e:
-        logger.error(f"❌ Ошибка при отправке голосового сообщения: {e}")
-        import traceback
-        traceback.print_exc()
+        if user_data_dict.get("ai_generated_profile"):
+            return True
+        required = ["perception_type", "thinking_level", "behavioral_levels"]
+        if all(field in user_data_dict for field in required):
+            return True
         return False
-
-
-async def handle_voice_message(message: Message, user_id: int):
-    """
-    Обработчик голосовых сообщений
     
-    Args:
-        message: сообщение с голосом
-        user_id: ID пользователя
-    """
-    logger.info(f"🎤 Получено голосовое сообщение от пользователя {user_id}")
-    
-    try:
-        # Отправляем статус "печатает"
-        await message.chat.send_action(action="typing")
-        
-        # Получаем URL голосового сообщения
-        voice_url = get_voice_message_url(message.message_id)
-        
-        if not voice_url:
-            await safe_send_message(
-                message,
-                "❌ Не удалось получить голосовое сообщение. Попробуйте позже.",
-                delete_previous=True
-            )
-            return
-        
-        # Скачиваем голос
-        audio_data = download_voice_message(voice_url)
-        
-        if not audio_data:
-            await safe_send_message(
-                message,
-                "❌ Не удалось загрузить голосовое сообщение.",
-                delete_previous=True
-            )
-            return
-        
-        # Распознаем голос
-        if not DEEPGRAM_API_KEY:
-            await safe_send_message(
-                message,
-                "❌ Сервис распознавания голоса не настроен. Пожалуйста, используйте текст.",
-                delete_previous=True
-            )
-            return
-        
-        # Используем сервис распознавания
-        transcript = await transcribe_audio(audio_data, DEEPGRAM_API_KEY)
-        
-        if not transcript:
-            await safe_send_message(
-                message,
-                "❌ Не удалось распознать голосовое сообщение. Попробуйте говорить чётче или используйте текст.",
-                delete_previous=True
-            )
-            return
-        
-        # Отправляем распознанный текст
-        status_msg = await safe_send_message(
+    if not is_test_completed(data):
+        await safe_send_message(
             message,
-            f"🎤 *Распознано:*\n{transcript}\n\n_Обрабатываю..._",
-            parse_mode="Markdown",
+            "🎙 Голосовые сообщения доступны только после завершения теста.\n\n"
+            "Пожалуйста, пройдите тест с помощью команды /start",
             delete_previous=True
+        )
+        return
+    
+    # Отправляем статусное сообщение
+    status_msg = await safe_send_message(
+        message,
+        "🎤 Распознаю речь...",
+        delete_previous=True
+    )
+    
+    temp_file = None
+    try:
+        # Получаем файл голосового сообщения
+        file_info = await message.bot.get_file(message.voice.file_id)
+        
+        # Создаём временный файл
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg') as tmp:
+            temp_file = tmp.name
+            await message.bot.download_file(file_info.file_path, destination=temp_file)
+        
+        # Распознаём речь
+        if not DEEPGRAM_API_KEY:
+            await status_msg.edit_text(
+                "❌ Сервис распознавания голоса не настроен.\n\n"
+                "Пожалуйста, используйте текст."
+            )
+            return
+        
+        recognized_text = await speech_to_text(temp_file)
+        
+        # Удаляем временный файл
+        try:
+            os.unlink(temp_file)
+        except:
+            pass
+        
+        if not recognized_text:
+            await status_msg.edit_text(
+                "❌ Не удалось распознать речь\n\n"
+                "Попробуйте еще раз или напишите текстом."
+            )
+            return
+        
+        # Обновляем статусное сообщение
+        await status_msg.edit_text(
+            f"📝 Распознано: {recognized_text[:100]}...\n\n"
+            "🧠 Думаю над ответом..."
         )
         
         # Получаем текущий режим пользователя
-        from state import get_user_mode
-        mode = get_user_mode(user_id)
+        context = user_contexts.get(user_id)
+        mode_name = context.communication_mode if context else "coach"
         
-        # Получаем системный промпт для режима
-        mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
-        system_prompt = mode_config.get("system_prompt", "")
+        # Создаём режим и обрабатываем вопрос
+        mode = get_mode(mode_name, user_id, data, context)
+        result = mode.process_question(recognized_text)
+        response = result["response"]
         
-        # Формируем запрос к LLM
-        from services import get_llm_response
+        # Обновляем данные с новой историей
+        data['history'] = mode.history
+        user_data[user_id] = data
         
-        llm_response = await get_llm_response(
-            user_id=user_id,
-            message=transcript,
-            system_prompt=system_prompt,
-            mode=mode
-        )
-        
-        if not llm_response:
-            await safe_send_message(
-                message,
-                "❌ Не удалось получить ответ. Попробуйте позже.",
-                delete_previous=True
-            )
-            return
+        # Очищаем ответ от форматирования
+        clean_response = response
         
         # Удаляем статусное сообщение
-        if status_msg:
-            try:
-                await safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
-                pass
+        await status_msg.delete()
+        
+        # Создаём клавиатуру
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🎤 ЗАДАТЬ ЕЩЁ", callback_data="ask_question"),
+                InlineKeyboardButton(text="🎯 К ЦЕЛИ", callback_data="show_dynamic_destinations")
+            ],
+            [InlineKeyboardButton(text="🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought")],
+            [InlineKeyboardButton(text="⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection")]
+        ])
+        
+        # Добавляем предложения, если есть
+        suggestions_text = ""
+        if result.get("suggestions"):
+            suggestions_text = "\n\n" + "\n".join(result["suggestions"])
         
         # Отправляем текстовый ответ
+        mode_config = COMMUNICATION_MODES.get(mode_name, COMMUNICATION_MODES["coach"])
+        
         await safe_send_message(
             message,
-            llm_response,
-            parse_mode=None,
+            f"📝 <b>Вы сказали:</b>\n{recognized_text}\n\n"
+            f"{mode_config['emoji']} <b>Ответ:</b>\n{clean_response}{suggestions_text}",
+            reply_markup=keyboard,
+            parse_mode='HTML',
             delete_previous=True
         )
         
-        # Если нужно, отправляем голосовой ответ
-        if mode_config.get("voice_enabled", True):
-            await send_voice_message_async(
-                message=message,
-                text=llm_response,
-                mode=mode,
-                delete_previous=False
+        # Отправляем голосовой ответ
+        audio_data = await text_to_speech(clean_response, mode_name)
+        if audio_data:
+            from maxibot.types import BufferedInputFile
+            audio_file = BufferedInputFile(audio_data, filename="response.ogg")
+            await message.answer_voice(
+                audio_file,
+                caption=f"🎙 Голосовой ответ ({mode_config['display_name']})"
             )
         
     except Exception as e:
@@ -484,11 +360,84 @@ async def handle_voice_message(message: Message, user_id: int):
         import traceback
         traceback.print_exc()
         
+        if status_msg:
+            try:
+                await status_msg.delete()
+            except:
+                pass
+        
         await safe_send_message(
             message,
-            "❌ Произошла ошибка при обработке голосового сообщения. Попробуйте позже.",
+            "❌ Произошла ошибка при обработке голосового сообщения.\n\n"
+            "Попробуйте еще раз или напишите текстом.",
             delete_previous=True
         )
+
+
+async def send_voice_response(message: Message, text: str, mode: str = "coach"):
+    """
+    Отправляет голосовой ответ (синтезирует речь и отправляет)
+    
+    Args:
+        message: сообщение для ответа
+        text: текст для озвучивания
+        mode: режим (coach, psychologist, trainer)
+    """
+    try:
+        # Очищаем текст от HTML и Markdown для синтеза
+        import re
+        clean_text = text
+        clean_text = re.sub(r'<[^>]+>', '', clean_text)
+        clean_text = re.sub(r'\*\*(.*?)\*\*', r'\1', clean_text)
+        clean_text = re.sub(r'__(.*?)__', r'\1', clean_text)
+        clean_text = re.sub(r'\*(.*?)\*', r'\1', clean_text)
+        clean_text = re.sub(r'_(.*?)_', r'\1', clean_text)
+        
+        # Синтезируем речь
+        audio_data = await text_to_speech(clean_text, mode)
+        
+        if audio_data:
+            from maxibot.types import BufferedInputFile
+            audio_file = BufferedInputFile(audio_data, filename="response.ogg")
+            
+            mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
+            await message.answer_voice(
+                audio_file,
+                caption=f"🎙 {mode_config['emoji']} {mode_config['name']}"
+            )
+            logger.info(f"✅ Голосовой ответ отправлен, режим: {mode}")
+        else:
+            logger.warning(f"⚠️ Не удалось синтезировать речь для режима {mode}")
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка при отправке голосового ответа: {e}")
+
+
+def get_cached_voice(text: str, voice_id: str, emotion: str = "neutral") -> Optional[bytes]:
+    """Получает синтезированную речь из кэша"""
+    cache_key = f"{voice_id}_{emotion}_{hash(text)}"
+    
+    if cache_key in _voice_cache:
+        cache_time = _voice_cache_time.get(cache_key, 0)
+        if time.time() - cache_time < 3600:  # 1 час
+            logger.info(f"📦 Используем кэшированный голос")
+            return _voice_cache[cache_key]
+    
+    return None
+
+
+def cache_voice(text: str, voice_id: str, emotion: str, audio_data: bytes):
+    """Сохраняет синтезированную речь в кэш"""
+    cache_key = f"{voice_id}_{emotion}_{hash(text)}"
+    _voice_cache[cache_key] = audio_data
+    _voice_cache_time[cache_key] = time.time()
+    
+    # Очищаем старый кэш
+    if len(_voice_cache) > 100:
+        oldest_key = min(_voice_cache_time.items(), key=lambda x: x[1])[0]
+        del _voice_cache[oldest_key]
+        del _voice_cache_time[oldest_key]
+        logger.info(f"🧹 Очищен старый кэш")
 
 
 # ============================================
@@ -497,10 +446,10 @@ async def handle_voice_message(message: Message, user_id: int):
 
 __all__ = [
     'send_voice_message',
-    'send_voice_message_async',
+    'handle_voice_message',
+    'send_voice_response',
     'get_voice_message_url',
     'download_voice_message',
-    'handle_voice_message',
     'get_cached_voice',
     'cache_voice'
 ]
