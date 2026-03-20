@@ -845,6 +845,62 @@ async def check_db():
         }
 # ============================================================
 
+# ========== ДОБАВЛЕННЫЙ ЭНДПОИНТ ДЛЯ ПРОСМОТРА ЛОГОВ ==========
+@api_app.get("/api/logs/{user_id}")
+async def get_user_logs(user_id: int):
+    """Показывает последние логи по пользователю"""
+    try:
+        from db_instance import db, ensure_db_connection
+        await ensure_db_connection()
+        
+        result = {}
+        
+        async with db.get_connection() as conn:
+            # Последние события
+            events = await conn.fetch("""
+                SELECT event_type, event_data, created_at 
+                FROM fredi_events 
+                WHERE user_id = $1 
+                ORDER BY created_at DESC 
+                LIMIT 20
+            """, user_id)
+            
+            if events:
+                result['events'] = [
+                    {
+                        'type': e['event_type'],
+                        'data': e['event_data'],
+                        'time': e['created_at'].isoformat() if e['created_at'] else None
+                    }
+                    for e in events
+                ]
+            
+            # Результаты тестов
+            tests = await conn.fetch("""
+                SELECT id, test_type, created_at 
+                FROM fredi_test_results 
+                WHERE user_id = $1 
+                ORDER BY created_at DESC
+            """, user_id)
+            
+            if tests:
+                result['tests'] = [
+                    {
+                        'id': t['id'],
+                        'type': t['test_type'],
+                        'time': t['created_at'].isoformat() if t['created_at'] else None
+                    }
+                    for t in tests
+                ]
+        
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+# ============================================================
+
 # ============================================
 # СТАРЫЕ ЭНДПОИНТЫ (ОСТАВЛЯЕМ ДЛЯ СОВМЕСТИМОСТИ)
 # ============================================
