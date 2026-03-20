@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики выбора и подтверждения режима для MAX
-Версия 2.2 - ИСПРАВЛЕНО: Добавлены call.answer() во все callback-обработчики
+Версия 2.3 - ИСПРАВЛЕНО: убрано создание циклов, используется db_loop_manager
 """
 import logging
 import asyncio
@@ -34,56 +34,57 @@ from state import (
     TestStates
 )
 
-# ✅ ДОБАВЛЕНО: импорт для БД
-from db_instance import db, save_user_to_db
+# ✅ ИСПРАВЛЕНО: импортируем db_loop_manager вместо создания новых циклов
+from db_instance import db, save_user_to_db, db_loop_manager
 
 logger = logging.getLogger(__name__)
 
 # ============================================
-# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
+# ✅ ИСПРАВЛЕНО: функция для асинхронных вызовов через db_loop_manager
 # ============================================
 
 def run_async_task(coro_func, *args, **kwargs):
     """
-    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
+    Запускает асинхронную корутину через глобальный менеджер цикла БД
     """
-    def _wrapper():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            coro = coro_func(*args, **kwargs)
-            loop.run_until_complete(coro)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
-        finally:
-            loop.close()
-    
-    threading.Thread(target=_wrapper, daemon=True).start()
-
-# ============================================
-# ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
-# ============================================
-
-async def save_mode_to_db(user_id: int, mode: str):
-    """Сохраняет выбранный режим в БД"""
     try:
-        # Логируем событие
-        await db.log_event(
-            user_id,
-            'mode_selected',
-            {
-                'mode': mode,
-                'mode_name': COMMUNICATION_MODES.get(mode, {}).get('display_name', mode),
-                'timestamp': time.time()
-            }
-        )
-        
-        # Сохраняем пользователя целиком (контекст уже должен быть обновлен)
-        await save_user_to_db(user_id, user_data, user_contexts, {})
-        
-        logger.debug(f"💾 Режим {mode} для пользователя {user_id} сохранен в БД")
+        # Запускаем как фоновую задачу через менеджер
+        db_loop_manager.run_task(coro_func, *args, **kwargs)
     except Exception as e:
-        logger.error(f"❌ Ошибка сохранения режима для {user_id}: {e}")
+        logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+
+# ============================================
+# ✅ ИСПРАВЛЕНО: функции для работы с БД (синхронные обертки)
+# ============================================
+
+def save_mode_to_db(user_id: int, mode: str):
+    """Сохраняет выбранный режим в БД (синхронная версия)"""
+    try:
+        # Создаем корутину для выполнения
+        async def _save():
+            try:
+                # Логируем событие
+                await db.log_event(
+                    user_id,
+                    'mode_selected',
+                    {
+                        'mode': mode,
+                        'mode_name': COMMUNICATION_MODES.get(mode, {}).get('display_name', mode),
+                        'timestamp': time.time()
+                    }
+                )
+                
+                # Сохраняем пользователя целиком
+                await save_user_to_db(user_id, user_data, user_contexts, {})
+                logger.debug(f"💾 Режим {mode} для пользователя {user_id} сохранен в БД")
+            except Exception as e:
+                logger.error(f"❌ Ошибка сохранения режима для {user_id}: {e}")
+        
+        # Запускаем через менеджер (без ожидания)
+        db_loop_manager.run_task(_save)
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при запуске сохранения режима: {e}")
 
 # ============================================
 # ОБРАБОТЧИКИ КОМАНД
@@ -301,8 +302,8 @@ def set_mode_coach(call: types.CallbackQuery):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-    run_async_task(save_mode_to_db, user_id, "coach")
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через db_loop_manager
+    save_mode_to_db(user_id, "coach")
     
     # Показываем подтверждение
     show_mode_selected(call.message, "coach")
@@ -330,8 +331,8 @@ def set_mode_psychologist(call: types.CallbackQuery):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-    run_async_task(save_mode_to_db, user_id, "psychologist")
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через db_loop_manager
+    save_mode_to_db(user_id, "psychologist")
     
     # Показываем подтверждение
     show_mode_selected(call.message, "psychologist")
@@ -359,8 +360,8 @@ def set_mode_trainer(call: types.CallbackQuery):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-    run_async_task(save_mode_to_db, user_id, "trainer")
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через db_loop_manager
+    save_mode_to_db(user_id, "trainer")
     
     # Показываем подтверждение
     show_mode_selected(call.message, "trainer")
@@ -398,8 +399,8 @@ def choose_mode(call: types.CallbackQuery, mode: str):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
-    run_async_task(save_mode_to_db, user_id, new_mode)
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через db_loop_manager
+    save_mode_to_db(user_id, new_mode)
     
     mode_info = COMMUNICATION_MODES.get(new_mode, COMMUNICATION_MODES["coach"])
     
