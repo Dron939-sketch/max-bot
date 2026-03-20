@@ -153,117 +153,24 @@ logger = logging.getLogger(__name__)
 # ============================================
 # ГЛОБАЛЬНЫЙ ЦИКЛ СОБЫТИЙ ДЛЯ БАЗЫ ДАННЫХ
 # ============================================
-db_loop = None
-db_loop_thread = None
-db_executor = ThreadPoolExecutor(max_workers=4)
-_db_loop_init_lock = threading.Lock()
-
-def init_db_loop():
-    """Инициализирует глобальный цикл событий для БД в отдельном потоке"""
-    global db_loop, db_loop_thread
-    
-    if db_loop is not None:
-        return
-    
-    with _db_loop_init_lock:
-        if db_loop is not None:
-            return
-        
-        db_loop = asyncio.new_event_loop()
-        db_loop_thread = threading.Thread(target=db_loop.run_forever, daemon=True, name="DB-Loop")
-        db_loop_thread.start()
-        logger.info("✅ Глобальный цикл БД запущен")
-
-def run_db_coro(coro, timeout: int = 30):
-    """
-    Запускает корутину в глобальном цикле БД и возвращает результат
-    Безопасно для вызова из любого потока
-    
-    Args:
-        coro: корутина для выполнения
-        timeout: таймаут в секундах
-    
-    Returns:
-        Результат выполнения корутины
-    """
-    global db_loop
-    
-    if db_loop is None:
-        init_db_loop()
-    
-    # Проверяем, не в цикле ли мы уже
-    try:
-        current_loop = asyncio.get_event_loop()
-        if current_loop == db_loop:
-            # Мы уже в правильном цикле - выполняем напрямую
-            try:
-                # Создаем задачу и ждем результат
-                future = asyncio.run_coroutine_threadsafe(coro, db_loop)
-                return future.result(timeout=timeout)
-            except TimeoutError:
-                logger.error(f"❌ Таймаут {timeout}с при выполнении в цикле БД")
-                raise
-    except RuntimeError:
-        # Нет текущего цикла - используем стандартный механизм
-        pass
-    
-    # Создаем future в вызывающем потоке
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    result_future = loop.create_future()
-    
-    def _run():
-        try:
-            # Создаем задачу в цикле БД
-            task_future = asyncio.run_coroutine_threadsafe(coro, db_loop)
-            try:
-                result = task_future.result(timeout=timeout)
-                # Возвращаем результат в вызывающий цикл
-                loop.call_soon_threadsafe(result_future.set_result, result)
-            except TimeoutError as e:
-                logger.error(f"❌ Таймаут {timeout}с при выполнении в цикле БД")
-                loop.call_soon_threadsafe(result_future.set_exception, e)
-            except Exception as e:
-                loop.call_soon_threadsafe(result_future.set_exception, e)
-        except Exception as e:
-            loop.call_soon_threadsafe(result_future.set_exception, e)
-    
-    db_executor.submit(_run)
-    
-    try:
-        # Ждем результат с таймаутом
-        return result_future.result(timeout=timeout + 5)
-    finally:
-        loop.close()
-
-def run_db_task(coro):
-    """
-    Запускает корутину в глобальном цикле БД как фоновую задачу (fire-and-forget)
-    Без ожидания результата
-    """
-    global db_loop
-    
-    if db_loop is None:
-        init_db_loop()
-    
-    asyncio.run_coroutine_threadsafe(coro, db_loop)
-
-def with_db_loop(func):
-    """Декоратор для функций, которые должны выполняться в цикле БД"""
-    async def wrapper(*args, **kwargs):
-        # Проверяем, в каком цикле мы находимся
-        try:
-            current_loop = asyncio.get_event_loop()
-            if current_loop == db_loop:
-                # Уже в правильном цикле
-                return await func(*args, **kwargs)
-        except RuntimeError:
-            pass
-        
-        # Нужно переключиться
-        result = await run_db_coro(func(*args, **kwargs))
-        return result
-    return wrapper
+# ⚠️ ВЕСЬ ЭТОТ БЛОК УДАЛЕН - теперь используется db_loop_manager из db_instance.py
+# db_loop = None
+# db_loop_thread = None
+# db_executor = ThreadPoolExecutor(max_workers=4)
+# _db_loop_init_lock = threading.Lock()
+#
+# def init_db_loop():
+#     ...
+#
+# def run_db_coro(coro, timeout: int = 30):
+#     ...
+#
+# def run_db_task(coro):
+#     ...
+#
+# def with_db_loop(func):
+#     ...
+# ============================================
 
 # ============================================
 # ЭКЗЕМПЛЯР БОТА
@@ -303,9 +210,9 @@ morning_manager.set_contexts(user_contexts, user_data)
 # ============================================
 
 # Инициализируем глобальный цикл БД
-init_db_loop()
+# init_db_loop()  # ⚠️ УДАЛЕНО - теперь инициализация происходит через db_loop_manager
 
-@with_db_loop
+# ⚠️ ДЕКОРАТОР @with_db_loop УДАЛЕН
 async def init_database():
     """Инициализация базы данных"""
     try:
@@ -322,7 +229,7 @@ async def init_database():
         # ✅ ЗАПУСКАЕМ АВТОСОХРАНЕНИЕ
         setup_auto_save(interval_seconds=300)  # Каждые 5 минут
         
-        # Запускаем фоновые задачи в цикле БД
+        # Запускаем фоновые задачи
         asyncio.create_task(periodic_save_to_db())
         asyncio.create_task(periodic_cleanup_db())
         
@@ -332,7 +239,7 @@ async def init_database():
         logger.error(f"❌ Ошибка инициализации БД: {e}")
         raise  # Пробрасываем исключение дальше
 
-@with_db_loop
+# ⚠️ ДЕКОРАТОР @with_db_loop УДАЛЕН
 async def load_all_users_from_db():
     """Загружает всех пользователей из БД в словари памяти"""
     global user_data, user_names, user_contexts, user_routes
@@ -446,7 +353,7 @@ async def load_all_users_from_db():
         import traceback
         traceback.print_exc()
 
-@with_db_loop
+# ⚠️ ДЕКОРАТОР @with_db_loop УДАЛЕН
 async def periodic_save_to_db():
     """Периодически сохраняет всех пользователей в БД"""
     while True:
@@ -457,12 +364,8 @@ async def periodic_save_to_db():
         saved_count = 0
         for user_id in list(user_data.keys()):
             try:
-                # Внутри with_db_loop уже правильный цикл, execute_with_retry не нужно оборачивать
-                result = await execute_with_retry(
-                    save_user_to_db, 
-                    user_id, user_data, user_contexts, user_routes,
-                    max_retries=3
-                )
+                # ⚠️ УБРАЛИ execute_with_retry - save_user_to_db теперь синхронная
+                result = save_user_to_db(user_id, user_data, user_contexts, user_routes)
                 if result:
                     saved_count += 1
             except Exception as e:
@@ -470,7 +373,7 @@ async def periodic_save_to_db():
         
         logger.info(f"✅ Сохранено {saved_count} пользователей")
 
-@with_db_loop
+# ⚠️ ДЕКОРАТОР @with_db_loop УДАЛЕН
 async def periodic_cleanup_db():
     """Периодическая очистка старых данных"""
     while True:
@@ -585,10 +488,8 @@ async def save_context(request: Request):
         
         logger.info(f"📝 Контекст сохранен для пользователя {user_id}: {context_data}")
         
-        # Сохраняем в БД через глобальный цикл (fire-and-forget)
-        run_db_task(
-            save_user_to_db(user_id, user_data, user_contexts, user_routes)
-        )
+        # ⚠️ run_db_task УДАЛЕН - save_user_to_db теперь синхронная
+        save_user_to_db(user_id, user_data, user_contexts, user_routes)
         
         return JSONResponse({"success": True})
     except Exception as e:
@@ -616,10 +517,8 @@ async def save_profile(request: Request):
         user_data[user_id]['ai_generated_profile'] = profile
         user_data[user_id]['profile_data'] = profile.get('profile_data', {})
         
-        # Сохраняем в БД через глобальный цикл (fire-and-forget)
-        run_db_task(
-            save_user_to_db(user_id, user_data, user_contexts, user_routes)
-        )
+        # ⚠️ run_db_task УДАЛЕН - save_user_to_db теперь синхронная
+        save_user_to_db(user_id, user_data, user_contexts, user_routes)
         
         return JSONResponse({
             "success": True,
@@ -667,10 +566,8 @@ async def save_test_progress(request: Request):
             })
             user_data[user_id][stage_key].append(answer)
         
-        # Сохраняем в БД через глобальный цикл (fire-and-forget)
-        run_db_task(
-            save_user_to_db(user_id, user_data, user_contexts, user_routes)
-        )
+        # ⚠️ run_db_task УДАЛЕН - save_user_to_db теперь синхронная
+        save_user_to_db(user_id, user_data, user_contexts, user_routes)
         
         return JSONResponse({
             "success": True,
@@ -703,10 +600,8 @@ async def save_mode(request: Request):
             user_data[user_id] = {}
         user_data[user_id]['communication_mode'] = mode
         
-        # Сохраняем в БД через глобальный цикл (fire-and-forget)
-        run_db_task(
-            save_user_to_db(user_id, user_data, user_contexts, user_routes)
-        )
+        # ⚠️ run_db_task УДАЛЕН - save_user_to_db теперь синхронная
+        save_user_to_db(user_id, user_data, user_contexts, user_routes)
         
         return JSONResponse({
             "success": True,
@@ -748,10 +643,8 @@ async def sync_data(request: Request):
         if 'mode' in sync_data and user_id in user_contexts:
             user_contexts[user_id].communication_mode = sync_data['mode']
         
-        # Сохраняем в БД через глобальный цикл (с ожиданием результата для синхронизации)
-        await run_db_coro(
-            save_user_to_db(user_id, user_data, user_contexts, user_routes)
-        )
+        # ⚠️ run_db_coro УДАЛЕН - save_user_to_db теперь синхронная и возвращает результат
+        save_user_to_db(user_id, user_data, user_contexts, user_routes)
         
         return JSONResponse({
             "success": True,
@@ -1009,10 +902,8 @@ async def get_thought(user_id: int):
                 if user_id not in user_data:
                     user_data[user_id] = {}
                 user_data[user_id]["psychologist_thought"] = thought
-                # Сохраняем в БД через глобальный цикл (fire-and-forget)
-                run_db_task(
-                    save_user_to_db(user_id, user_data, user_contexts, user_routes)
-                )
+                # ⚠️ run_db_task УДАЛЕН - save_user_to_db теперь синхронная
+                save_user_to_db(user_id, user_data, user_contexts, user_routes)
             else:
                 thought = "Мысли психолога еще не сгенерированы."
         
@@ -1033,8 +924,8 @@ async def get_ideas(user_id: int):
         context = user_contexts.get(user_id)
         user_name = context.name if context else user_names.get(user_id, "друг")
         
-        # Проверяем кэш в БД через глобальный цикл
-        cached_ideas = await run_db_coro(db.get_cached_weekend_ideas(user_id))
+        # Проверяем кэш в БД - напрямую вызываем db
+        cached_ideas = await db.get_cached_weekend_ideas(user_id)
         if cached_ideas:
             return {"ideas": [{"title": "Идеи на выходные", "description": cached_ideas}]}
         
@@ -1053,13 +944,11 @@ async def get_ideas(user_id: int):
             context=context
         )
         
-        # Сохраняем в кэш БД через глобальный цикл (fire-and-forget)
+        # Сохраняем в кэш БД - напрямую вызываем db
         if scores:
             main_vector = max(scores.items(), key=lambda x: x[1])[0]
             main_level = int(scores.get(main_vector, 3))
-            run_db_task(
-                db.cache_weekend_ideas(user_id, ideas_text, main_vector, main_level)
-            )
+            await db.cache_weekend_ideas(user_id, ideas_text, main_vector, main_level)
         
         # Преобразуем текст в структурированные идеи
         ideas = []
@@ -1482,10 +1371,8 @@ async def submit_test_answer(request: Request):
             user_data[user_id][stage_key] = []
         user_data[user_id][stage_key].append(answer_record)
         
-        # Сохраняем в БД через глобальный цикл (fire-and-forget)
-        run_db_task(
-            save_user_to_db(user_id, user_data, user_contexts, user_routes)
-        )
+        # ⚠️ run_db_task УДАЛЕН - save_user_to_db теперь синхронная
+        save_user_to_db(user_id, user_data, user_contexts, user_routes)
         
         # Определяем, завершен ли этап
         stage_questions_count = {
@@ -2314,26 +2201,24 @@ async def shutdown_handler():
     
     try:
         from state import save_all_users_to_db
-        # Используем run_db_coro для сохранения
-        saved_count = await run_db_coro(
-            execute_with_retry(save_all_users_to_db, db, max_retries=3)
-        )
+        # ⚠️ run_db_coro УДАЛЕН - save_all_users_to_db теперь синхронная
+        saved_count = save_all_users_to_db(db)
         logger.info(f"✅ Сохранено {saved_count} пользователей")
     except Exception as e:
         logger.error(f"❌ Ошибка при сохранении: {e}")
     
     try:
-        # Закрываем БД через глобальный цикл
-        await run_db_coro(close_db())
+        # Закрываем БД - напрямую
+        await close_db()
         logger.info("✅ База данных закрыта")
     except Exception as e:
         logger.error(f"❌ Ошибка при закрытии БД: {e}")
     
-    # Останавливаем цикл БД
-    global db_loop
-    if db_loop:
-        db_loop.call_soon_threadsafe(db_loop.stop)
-        logger.info("🔒 Цикл событий БД остановлен")
+    # Останавливаем цикл БД - теперь это делает db_loop_manager
+    # global db_loop
+    # if db_loop:
+    #     db_loop.call_soon_threadsafe(db_loop.stop)
+    #     logger.info("🔒 Цикл событий БД остановлен")
 
 def main():
     print("\n" + "="*80)
@@ -2357,17 +2242,17 @@ def main():
     
     logger.info("🚀 Бот для MAX запущен!")
     
-    # Инициализируем глобальный цикл БД
-    init_db_loop()
+    # ⚠️ init_db_loop() УДАЛЕН - теперь инициализация происходит через db_loop_manager в db_instance.py
+    # init_db_loop()
     
     # Создаем новый event loop для основного потока
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
-    # Инициализируем БД через глобальный цикл
+    # Инициализируем БД - напрямую, без run_db_coro
     try:
-        # Используем run_db_coro для инициализации
-        loop.run_until_complete(run_db_coro(init_database()))
+        # ⚠️ run_db_coro УДАЛЕН
+        loop.run_until_complete(init_database())
         logger.info("✅ База данных инициализирована")
     except Exception as e:
         logger.error(f"❌ Ошибка при инициализации БД: {e}")
