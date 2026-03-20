@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики голосовых сообщений для MAX
-Версия 2.8 - ИСПРАВЛЕНО: синхронные операции с БД
+Версия 2.9 - ИСПРАВЛЕНО: поддержка разных типов токенов
 """
 
 import os
@@ -40,97 +40,61 @@ logger = logging.getLogger(__name__)
 
 async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None) -> bool:
     """
-    Отправляет голосовое сообщение в MAX (3-шаговый процесс)
-    
-    Args:
-        chat_id: ID чата (не используется напрямую, но нужен для совместимости)
-        audio_data: Аудиоданные в формате OGG
-        caption: Подпись к сообщению (опционально)
-    
-    Returns:
-        True если успешно, False если ошибка
+    Отправляет голосовое сообщение в MAX API
+    Поддерживает как JWT токены, так и простые API ключи
     """
     if not audio_data:
         logger.error("❌ Нет аудиоданных для отправки")
         return False
     
-    # ========== РАСШИРЕННАЯ ДИАГНОСТИКА ТОКЕНА ==========
+    # ========== ДИАГНОСТИКА ТОКЕНА ==========
     logger.info("=" * 50)
     logger.info("🔍 ДИАГНОСТИКА ОТПРАВКИ ГОЛОСА")
     logger.info("=" * 50)
     
     if not MAX_TOKEN:
         logger.error("❌ MAX_TOKEN не настроен в config.py")
-        logger.error("Проверьте переменные окружения на Render")
-        logger.error("В Dashboard Render -> ваш сервис -> Environment -> добавьте MAX_TOKEN")
         return False
     
-    # Проверяем, что токен не равен заглушке
     if MAX_TOKEN == "ВАШ_ТОКЕН_ЗДЕСЬ":
-        logger.error("❌ MAX_TOKEN не заменен на реальный токен (стоит заглушка)")
-        logger.error("Получите реальный токен у @MasterBot и добавьте в переменные окружения")
+        logger.error("❌ MAX_TOKEN не заменен на реальный токен")
         return False
     
-    # Проверяем длину токена (обычно JWT токены имеют длину > 100 символов)
+    # Определяем тип токена
+    is_jwt = '.' in MAX_TOKEN
+    token_parts = MAX_TOKEN.split('.')
+    
     logger.info(f"📏 Длина токена: {len(MAX_TOKEN)} символов")
-    if len(MAX_TOKEN) < 50:
-        logger.warning("⚠️ Токен подозрительно короткий. Обычно JWT токены длиннее 50 символов.")
-    
-    # Показываем первые и последние символы для отладки
-    token_start = MAX_TOKEN[:15] if len(MAX_TOKEN) > 15 else MAX_TOKEN
-    token_end = MAX_TOKEN[-15:] if len(MAX_TOKEN) > 15 else MAX_TOKEN
-    logger.info(f"🔑 Начало токена: {token_start}...")
-    logger.info(f"🔑 Конец токена: ...{token_end}")
-    
-    # Проверяем, есть ли у токена префикс "Bearer " (это ошибка - в токене не должно быть)
-    if MAX_TOKEN.startswith("Bearer "):
-        logger.error("❌ Токен содержит 'Bearer ' в начале. Это неправильно!")
-        logger.error("Токен должен быть просто строкой, без 'Bearer '")
-        return False
-    
-    # Проверяем, есть ли у токена пробелы
-    if " " in MAX_TOKEN:
-        logger.error("❌ Токен содержит пробелы. Токен не должен содержать пробелов.")
-        return False
-    
-    # Проверяем, является ли токен валидным JWT (опционально)
-    parts = MAX_TOKEN.split('.')
-    if len(parts) == 3:
-        logger.info("✅ Токен имеет структуру JWT (3 части через точки)")
-        try:
-            # Пробуем декодировать первую часть (заголовок) - не проверяем подпись, просто смотрим
-            import base64
-            import json
-            # Добавляем padding если нужно
-            header_part = parts[0]
-            header_part += '=' * (4 - len(header_part) % 4) if len(header_part) % 4 else ''
-            try:
-                header_json = base64.urlsafe_b64decode(header_part).decode('utf-8')
-                header = json.loads(header_json)
-                logger.info(f"📋 JWT заголовок: {header}")
-            except:
-                logger.warning("⚠️ Не удалось декодировать JWT заголовок")
-        except:
-            logger.warning("⚠️ Ошибка при анализе JWT структуры")
-    else:
-        logger.warning(f"⚠️ Токен имеет {len(parts)} частей (ожидалось 3 для JWT)")
+    logger.info(f"🔑 Тип токена: {'JWT' if is_jwt else 'простой API ключ'}")
+    if is_jwt:
+        logger.info(f"📋 JWT частей: {len(token_parts)}")
     
     logger.info(f"📤 Отправка голоса в чат {chat_id}")
     logger.info("=" * 50)
-    # ===================================================
     
     temp_path = None
     try:
         import aiohttp
         
-        # ШАГ 1: Получаем URL для загрузки
         async with aiohttp.ClientSession() as session:
-            headers = {
-                "Authorization": f"Bearer {MAX_TOKEN}",
-                "Content-Type": "application/json"
-            }
+            # Выбираем метод авторизации в зависимости от типа токена
+            if is_jwt:
+                headers = {
+                    "Authorization": f"Bearer {MAX_TOKEN}",
+                    "Content-Type": "application/json"
+                }
+                logger.info("🔑 Используем Bearer авторизацию (JWT)")
+            else:
+                # Простой API ключ - пробуем разные форматы
+                headers = {
+                    "X-API-Key": MAX_TOKEN,
+                    "Content-Type": "application/json"
+                }
+                logger.info("🔑 Используем X-API-Key авторизацию")
             
             logger.info("📡 ШАГ 1: Запрашиваем upload URL...")
+            
+            # Пробуем основной эндпоинт
             upload_response = await session.post(
                 "https://platform-api.max.ru/uploads?type=audio",
                 headers=headers
@@ -138,22 +102,30 @@ async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None
             
             logger.info(f"📡 Статус ответа: {upload_response.status}")
             
+            # Если не сработало с X-API-Key, пробуем другой формат
+            if upload_response.status == 401 and not is_jwt:
+                logger.info("🔄 Пробуем другой формат авторизации...")
+                headers = {
+                    "Authorization": f"Token {MAX_TOKEN}",
+                    "Content-Type": "application/json"
+                }
+                upload_response = await session.post(
+                    "https://platform-api.max.ru/uploads?type=audio",
+                    headers=headers
+                )
+                logger.info(f"📡 Статус ответа (Token): {upload_response.status}")
+            
             if upload_response.status != 200:
                 error_text = await upload_response.text()
                 logger.error(f"❌ Не удалось получить upload URL: {upload_response.status}")
                 logger.error(f"❌ Текст ошибки: {error_text}")
                 
-                # Дополнительная диагностика
                 if upload_response.status == 401:
-                    logger.error("🔍 ОШИБКА 401: Проблема с авторизацией")
-                    logger.error("   Возможные причины:")
-                    logger.error("   • Токен недействителен или истек")
-                    logger.error("   • Токен не имеет прав на отправку голосовых сообщений")
-                    logger.error("   • Неправильный формат токена")
-                elif upload_response.status == 403:
-                    logger.error("🔍 ОШИБКА 403: Доступ запрещен")
-                elif upload_response.status == 429:
-                    logger.error("🔍 ОШИБКА 429: Слишком много запросов")
+                    logger.error("🔍 ОШИБКА 401: Токен недействителен или не имеет прав")
+                    logger.error("   Проверьте:")
+                    logger.error("   1. Токен правильный?")
+                    logger.error("   2. У токена есть права на отправку голосовых сообщений?")
+                    logger.error("   3. В MAX API другой формат авторизации?")
                 
                 return False
             
@@ -175,21 +147,25 @@ async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None
             # ШАГ 2: Загружаем аудиофайл
             logger.info("📡 ШАГ 2: Загружаем аудиофайл...")
             
-            # Создаем временный файл
             with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg', mode='wb') as tmp:
                 tmp.write(audio_data)
                 temp_path = tmp.name
             
             logger.info(f"📝 Создан временный файл: {temp_path} ({len(audio_data)} байт)")
             
-            # Загружаем файл
+            # Для загрузки файла используем те же заголовки (без Content-Type)
+            file_headers = {}
+            if is_jwt:
+                file_headers = {"Authorization": f"Bearer {MAX_TOKEN}"}
+            
             with open(temp_path, 'rb') as f:
                 form_data = aiohttp.FormData()
                 form_data.add_field('file', f, filename='voice.ogg', content_type='audio/ogg')
                 
                 upload_file_response = await session.post(
                     upload_url,
-                    data=form_data
+                    data=form_data,
+                    headers=file_headers
                 )
             
             logger.info(f"📡 Статус загрузки файла: {upload_file_response.status}")
@@ -205,6 +181,7 @@ async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None
             # ШАГ 3: Отправляем сообщение с аттачем
             logger.info("📡 ШАГ 3: Отправляем сообщение с аудио...")
             
+            # Для отправки сообщения используем исходные заголовки
             message_data = {
                 "text": caption or "🎙 Голосовое сообщение",
                 "attachments": [
@@ -217,9 +194,16 @@ async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None
                 ]
             }
             
+            # Используем тот же тип авторизации, что и в первом шаге
+            if is_jwt:
+                msg_headers = {"Authorization": f"Bearer {MAX_TOKEN}", "Content-Type": "application/json"}
+            else:
+                # Пробуем X-API-Key для отправки сообщения
+                msg_headers = {"X-API-Key": MAX_TOKEN, "Content-Type": "application/json"}
+            
             message_response = await session.post(
                 "https://platform-api.max.ru/messages",
-                headers=headers,
+                headers=msg_headers,
                 json=message_data
             )
             
@@ -239,7 +223,6 @@ async def send_voice_to_max(chat_id: int, audio_data: bytes, caption: str = None
         return False
     
     finally:
-        # Удаляем временный файл
         if temp_path and os.path.exists(temp_path):
             try:
                 os.unlink(temp_path)
@@ -278,7 +261,7 @@ async def handle_voice_message(message: Message):
     
     logger.info(f"🎤 Получено голосовое сообщение от пользователя {user_id}, состояние: {current_state}")
     
-    # ✅ ИСПРАВЛЕНО: логируем через sync_db
+    # Логируем через sync_db
     threading.Thread(target=sync_db.log_event, args=(
         user_id, 'voice_received', 
         {'state': current_state, 'voice_duration': message.voice.duration if message.voice else None}
@@ -364,7 +347,7 @@ async def handle_voice_message(message: Message):
         # Удаляем статусное сообщение
         await safe_delete_message(message.chat.id, status_msg.message_id)
         
-        # ✅ Отправляем текст, что распознали
+        # Отправляем текст, что распознали
         await safe_send_message(
             message,
             f"📝 <b>Вы сказали:</b>\n{recognized_text}",
