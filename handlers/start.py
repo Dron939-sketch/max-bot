@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики команды /start и начальных экранов для MAX
-ВЕРСИЯ 2.5 - ИСПРАВЛЕНО: Используется sync_db вместо создания новых циклов
+ВЕРСИЯ 2.6 - ИСПРАВЛЕНО: безопасная работа с атрибутами message.from_user
 """
 import logging
 import time
@@ -107,9 +107,9 @@ stats = Stats()
 # ФУНКЦИЯ ЗАГРУЗКИ ПОЛЬЗОВАТЕЛЯ
 # ============================================
 
-async def ensure_user_loaded(user_id: int, user_name: str = None) -> bool:
+def ensure_user_loaded_sync(user_id: int, user_name: str = None) -> bool:
     """
-    Проверяет, загружен ли пользователь, и загружает из БД если нужно
+    СИНХРОННАЯ проверка, загружен ли пользователь, и загрузка из БД если нужно
     """
     # Если пользователь уже в памяти, просто обновляем имя
     if user_id in user_data or user_id in user_contexts:
@@ -117,20 +117,31 @@ async def ensure_user_loaded(user_id: int, user_name: str = None) -> bool:
             user_names[user_id] = user_name
         return True
     
-    # ✅ ИСПРАВЛЕНО: проверяем соединение через sync_db
+    # Проверяем соединение через sync_db
     if not sync_db.ensure_connection():
         logger.warning("⚠️ Нет соединения с БД")
         return False
     
     # Пробуем загрузить из БД
     logger.info(f"🔄 Загружаем пользователя {user_id} из БД...")
-    from db_instance import load_user_from_db as async_load
-    loaded = await async_load(user_id)
     
-    if loaded and user_name:
-        user_names[user_id] = user_name
-    
-    return loaded
+    try:
+        # Используем асинхронную загрузку через отдельный цикл
+        from db_instance import load_user_from_db as async_load
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loaded = loop.run_until_complete(async_load(user_id))
+        finally:
+            loop.close()
+        
+        if loaded and user_name:
+            user_names[user_id] = user_name
+        
+        return loaded
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки пользователя {user_id}: {e}")
+        return False
 
 # ============================================
 # ОБРАБОТЧИКИ КОМАНД
@@ -146,35 +157,41 @@ def cmd_start(message: Message):
     user_names[user_id] = user_name
     clear_state(user_id)
     
-    # ✅ ИСПРАВЛЕНО: используем sync_db
+    # ✅ ИСПРАВЛЕНО: безопасно получаем атрибуты from_user
     def run_save_user():
-        sync_db.save_telegram_user(
-            user_id=user_id,
-            first_name=user_name,
-            username=message.from_user.username,
-            last_name=message.from_user.last_name,
-            language_code=message.from_user.language_code
-        )
-        logger.debug(f"💾 Пользователь {user_id} сохранен в БД")
+        try:
+            # Безопасно получаем атрибуты, которые могут отсутствовать
+            username = None
+            last_name = None
+            language_code = None
+            
+            if hasattr(message.from_user, 'username') and message.from_user.username:
+                username = message.from_user.username
+            if hasattr(message.from_user, 'last_name') and message.from_user.last_name:
+                last_name = message.from_user.last_name
+            if hasattr(message.from_user, 'language_code') and message.from_user.language_code:
+                language_code = message.from_user.language_code
+            
+            sync_db.save_telegram_user(
+                user_id=user_id,
+                first_name=user_name,
+                username=username,
+                last_name=last_name,
+                language_code=language_code
+            )
+            logger.debug(f"💾 Пользователь {user_id} сохранен в БД")
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
     
     threading.Thread(target=run_save_user, daemon=True).start()
     
-    # ✅ ИСПРАВЛЕНО: проверка загрузки
+    # ✅ ИСПРАВЛЕНО: упрощенная проверка загрузки
     def run_load_check():
-        # Создаем событие для ожидания
-        loaded = False
         try:
-            # Проверяем соединение
-            if sync_db.ensure_connection():
-                # Запускаем асинхронную загрузку через отдельный цикл
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loaded = loop.run_until_complete(ensure_user_loaded(user_id, user_name))
-                finally:
-                    loop.close()
+            loaded = ensure_user_loaded_sync(user_id, user_name)
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки пользователя {user_id}: {e}")
+            loaded = False
         
         # Продолжаем обработку
         continue_start_in_thread(message, user_id, user_name, loaded)
@@ -647,6 +664,6 @@ __all__ = [
     'callback_show_profile',
     'callback_show_modes',
     'callback_back_to_start',
-    'ensure_user_loaded',
+    'ensure_user_loaded_sync',
     'get_profile_code'
 ]
