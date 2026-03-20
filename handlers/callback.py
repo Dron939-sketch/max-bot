@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик всех callback-запросов для MAX
-Версия 2.0 - ПОЛНАЯ с поддержкой state
+Версия 2.1 - ИСПРАВЛЕНО: добавлен call.answer() во все ветки
 """
 
 import logging
@@ -23,7 +23,7 @@ from state import (
     clear_state, 
     update_state_data, 
     get_user_name,
-    TestStates  # 👈 ДОБАВЛЕНО
+    TestStates
 )
 from message_utils import safe_send_message
 
@@ -45,7 +45,7 @@ from handlers.modes import (
     set_mode_coach, set_mode_psychologist, set_mode_trainer
 )
 
-# Импорты обработчиков контекста (исправлено - переименовали start_context)
+# Импорты обработчиков контекста
 from handlers.context import handle_context_callback, start_context as start_context_handler
 
 # Импорты обработчиков reality check
@@ -161,6 +161,12 @@ async def async_callback_handler(call: CallbackQuery):
     data = call.data
     
     logger.info(f"🔔 Асинхронный обратный вызов: {data} от пользователя {user_id}")
+    
+    # 👇 ВАЖНО: ВСЕГДА ОТВЕЧАЕМ НА CALLBACK
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
     
     try:
         # ============================================
@@ -502,7 +508,7 @@ async def handle_sync_callback(call: CallbackQuery):
         logger.info(f"📖 show_benefits для пользователя {user_id}")
         show_benefits(call)
     
-    elif data == "show_tale" or data == "ask_tale":  # 👈 ОБЪЕДИНЯЕМ СКАЗКИ
+    elif data == "show_tale" or data == "ask_tale":
         logger.info(f"📚 show_tale для пользователя {user_id}")
         show_tale(call)
     
@@ -554,7 +560,7 @@ async def handle_sync_callback(call: CallbackQuery):
         show_profile(call.message, user_id)
     
     # ============================================
-    # 👇 НОВЫЙ ОБРАБОТЧИК: ПРОФИЛЬ НЕ ГОТОВ
+    # 👇 ПРОФИЛЬ НЕ ГОТОВ
     # ============================================
     elif data == "profile_not_ready":
         logger.info(f"📊 profile_not_ready для пользователя {user_id}")
@@ -609,7 +615,6 @@ async def handle_sync_callback(call: CallbackQuery):
         logger.info(f"◀️ back_to_intro для пользователя {user_id}")
         show_intro(call.message)
     
-    # ДОБАВЛЕНО: обработка back_to_start
     elif data == "back_to_start":
         logger.info(f"◀️ back_to_start для пользователя {user_id}")
         from handlers.start import cmd_start
@@ -624,7 +629,6 @@ async def handle_sync_callback(call: CallbackQuery):
         fake_msg = FakeMessage(user_id, call.message.chat.id)
         cmd_start(fake_msg)
     
-    # ДОБАВЛЕНО: обработка back_to_context (возврат к контексту из начала теста)
     elif data == "back_to_context":
         logger.info(f"◀️ back_to_context для пользователя {user_id}")
         start_context_handler(call.message)
@@ -645,13 +649,19 @@ async def handle_sync_callback(call: CallbackQuery):
 
 
 # ============================================
-# СИНХРОННАЯ ОБЕРТКА ДЛЯ ОБРАТНОЙ СОВМЕСТИМОСТИ
+# СИНХРОННАЯ ОБЕРТКА
 # ============================================
 
 def callback_handler(call: CallbackQuery):
     """
     Синхронная обертка для асинхронного обработчика callback'ов
     """
+    # 👇 ДОБАВЛЕНО: отвечаем на callback даже до запуска асинхронной части
+    try:
+        call.answer()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось ответить на callback в синхронной обертке: {e}")
+    
     try:
         # Пытаемся получить текущий цикл событий
         loop = asyncio.get_running_loop()
