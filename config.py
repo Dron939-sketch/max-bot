@@ -22,7 +22,7 @@ DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "")
 YANDEX_API_KEY = os.environ.get("YANDEX_API_KEY", "")
 OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY", "")
 
-# ID администраторов (можно оставить те же)
+# ID администраторов
 ADMIN_IDS = [532205848]
 
 # ============================================
@@ -35,7 +35,7 @@ YANDEX_TTS_API_URL = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
 
 
 # ============================================
-# РЕЖИМЫ ОБЩЕНИЯ (ПОЛНОСТЬЮ ТЕ ЖЕ)
+# РЕЖИМЫ ОБЩЕНИЯ
 # ============================================
 
 COMMUNICATION_MODES = {
@@ -123,7 +123,7 @@ COMMUNICATION_MODES = {
     }
 }
 
-# Для обратной совместимости (если где-то используются старые названия)
+# Для обратной совместимости
 COMMUNICATION_MODES["hard"] = COMMUNICATION_MODES["trainer"]
 COMMUNICATION_MODES["medium"] = COMMUNICATION_MODES["coach"]
 COMMUNICATION_MODES["soft"] = COMMUNICATION_MODES["psychologist"]
@@ -161,8 +161,8 @@ VOICE_SETTINGS = {
 
 REMINDER_SETTINGS = {
     "coach": {
-        "motivation_delay": 5,  # минут
-        "checkin_delay": 24 * 60,  # 24 часа в минутах
+        "motivation_delay": 5,
+        "checkin_delay": 24 * 60,
         "messages": [
             "Как продвигается исследование себя?",
             "Какие инсайты были сегодня?",
@@ -191,7 +191,7 @@ REMINDER_SETTINGS = {
 
 
 # ============================================
-# ТОЧКИ НАЗНАЧЕНИЯ (ПОЛНОСТЬЮ ТЕ ЖЕ)
+# ТОЧКИ НАЗНАЧЕНИЯ
 # ============================================
 
 DESTINATIONS = {
@@ -323,6 +323,14 @@ def check_config():
         missing.append("MAX_TOKEN")
     elif MAX_TOKEN == "ВАШ_ТОКЕН_ЗДЕСЬ":
         warnings.append("MAX_TOKEN не заменен на реальный токен (стоит заглушка)")
+    else:
+        # Диагностика типа токена
+        is_jwt = '.' in MAX_TOKEN
+        token_parts = MAX_TOKEN.split('.')
+        if is_jwt:
+            print(f"📋 MAX_TOKEN является JWT токеном ({len(token_parts)} частей)")
+        else:
+            print(f"📋 MAX_TOKEN является простым API ключом (длина {len(MAX_TOKEN)} символов)")
     
     if not DEEPSEEK_API_KEY:
         missing.append("DEEPSEEK_API_KEY")
