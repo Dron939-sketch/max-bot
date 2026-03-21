@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ ДЛЯ PYTHON 3.11 - ИСПРАВЛЕНО: единый цикл событий + save_telegram_user + close_db
+ВЕРСИЯ ДЛЯ PYTHON 3.11 - ИСПРАВЛЕНО: единый цикл событий + save_telegram_user + close_db + retry
 """
 
 import os
@@ -12,6 +12,7 @@ import logging
 import asyncio
 import threading
 import inspect
+import traceback
 from typing import Dict, Any, Optional, Callable, Awaitable
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from functools import wraps
@@ -275,37 +276,57 @@ async def close_db():
         logger.error(f"❌ Ошибка при закрытии подключения: {e}")
 
 # ============================================
-# ПРОВЕРКА СОЕДИНЕНИЯ
+# ПРОВЕРКА СОЕДИНЕНИЯ С ПОВТОРНЫМИ ПОПЫТКАМИ
 # ============================================
 
-async def ensure_db_connection():
-    """Проверяет соединение с БД через менеджер"""
-    try:
-        if db.pool is None:
-            logger.info("🔄 Пул соединений не инициализирован, подключаемся...")
-            await db.connect()
-            return True
-        
-        # Проверяем соединение
-        async with db.get_connection() as conn:
-            await conn.execute("SELECT 1")
-        
-        logger.debug("✅ Соединение с БД работает")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка при проверке соединения: {e}")
-        
-        # Пробуем переподключиться
+async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
+    """
+    Проверяет соединение с БД через менеджер с повторными попытками
+    
+    Args:
+        max_retries: Максимальное количество попыток
+        delay: Задержка между попытками в секундах
+    
+    Returns:
+        bool: True если соединение установлено, False если нет
+    """
+    for attempt in range(max_retries):
         try:
-            if db.pool:
-                await db.disconnect()
-            await db.connect()
-            logger.info("✅ Соединение восстановлено")
+            # Если пула нет - подключаемся
+            if db.pool is None:
+                logger.info(f"🔄 Пул соединений не инициализирован, подключаемся... (попытка {attempt + 1}/{max_retries})")
+                await db.connect()
+                logger.info("✅ Подключение к БД установлено")
+                return True
+            
+            # Проверяем соединение
+            async with db.get_connection() as conn:
+                await conn.execute("SELECT 1")
+            
+            logger.debug("✅ Соединение с БД работает")
             return True
-        except Exception as e2:
-            logger.error(f"❌ Не удалось восстановить соединение: {e2}")
-            return False
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка при проверке соединения (попытка {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
+            
+            if attempt < max_retries - 1:
+                # Пробуем переподключиться
+                try:
+                    if db.pool:
+                        await db.disconnect()
+                        logger.info("🔌 Старый пул закрыт")
+                except Exception as disconnect_error:
+                    logger.warning(f"⚠️ Ошибка при закрытии пула: {disconnect_error}")
+                
+                # Ждем перед следующей попыткой (с экспоненциальной задержкой)
+                wait_time = delay * (2 ** attempt)
+                logger.info(f"⏳ Ждем {wait_time:.1f}с перед следующей попыткой...")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"❌ Все попытки ({max_retries}) исчерпаны")
+                return False
+    
+    return False
 
 # ============================================
 # ВЫПОЛНЕНИЕ С ПОВТОРАМИ
@@ -334,7 +355,8 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
             logger.warning(f"⚠️ Ошибка (попытка {attempt+1}/{max_retries}): {e}")
         
         if attempt < max_retries - 1:
-            await asyncio.sleep(1 * (attempt + 1))
+            wait_time = 1 * (attempt + 1)
+            await asyncio.sleep(wait_time)
     
     logger.error(f"❌ Все попытки исчерпаны: {last_error}")
     return None
@@ -372,7 +394,7 @@ async def save_telegram_user_async(
     Асинхронная версия сохранения пользователя Telegram
     """
     try:
-        # Проверяем соединение
+        # Проверяем соединение с повторными попытками
         if not await ensure_db_connection():
             logger.error(f"❌ Нет соединения с БД для сохранения пользователя {user_id}")
             return False
@@ -389,6 +411,7 @@ async def save_telegram_user_async(
         return result
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
+        logger.error(traceback.format_exc())
         return False
 
 
@@ -423,7 +446,7 @@ async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict
     Асинхронная версия сохранения (для вызова через менеджер)
     """
     try:
-        # Проверяем соединение
+        # Проверяем соединение с повторными попытками
         if not await ensure_db_connection():
             logger.error(f"❌ Нет соединения с БД для сохранения {user_id}")
             return False
@@ -507,7 +530,7 @@ async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
     Асинхронная версия сохранения результатов теста
     """
     try:
-        # Проверяем соединение
+        # Проверяем соединение с повторными попытками
         if not await ensure_db_connection():
             logger.error(f"❌ Нет соединения с БД для сохранения результатов {user_id}")
             return None
