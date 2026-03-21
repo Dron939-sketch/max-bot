@@ -2464,6 +2464,86 @@ async def get_smart_questions(user_id: int):
 # НЕДОСТАЮЩИЕ API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
 # ============================================
 
+@api_app.get("/api/max-status")
+async def get_max_api_status():
+    """Проверяет доступность MAX API"""
+    status = {
+        "available": False,
+        "message": "MAX API недоступен",
+        "token_configured": bool(MAX_TOKEN)
+    }
+    
+    if not MAX_TOKEN:
+        return JSONResponse(status)
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"https://platform-api.max.ru/bot/{MAX_TOKEN}/getMe"
+            async with session.get(url, timeout=5) as response:
+                if response.status == 200:
+                    status["available"] = True
+                    status["message"] = "MAX API доступен"
+                    bot_info = await response.json()
+                    status["bot_name"] = bot_info.get("result", {}).get("first_name", "MAX Bot")
+                else:
+                    status["message"] = f"MAX API ответил с ошибкой {response.status}"
+    except asyncio.TimeoutError:
+        status["message"] = "MAX API не отвечает (таймаут)"
+    except Exception as e:
+        status["message"] = f"Ошибка: {str(e)}"
+    
+    return JSONResponse(status)
+
+
+@api_app.post("/api/send-message")
+async def send_message_via_max(request: Request):
+    """Отправляет сообщение через MAX API"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        text = data.get('text')
+        keyboard = data.get('keyboard')
+        
+        if not user_id or not text:
+            raise HTTPException(status_code=400, detail="user_id and text required")
+        
+        if not MAX_TOKEN:
+            return JSONResponse(
+                status_code=503,
+                content={"success": False, "error": "MAX API не настроен"}
+            )
+        
+        url = f"https://platform-api.max.ru/bot/{MAX_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": user_id,
+            "text": text,
+            "parse_mode": "HTML"
+        }
+        
+        if keyboard:
+            payload["reply_markup"] = keyboard
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=10) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return JSONResponse({"success": True, "result": result})
+                else:
+                    error_text = await response.text()
+                    logger.error(f"MAX API error: {response.status} - {error_text}")
+                    return JSONResponse(
+                        status_code=response.status,
+                        content={"success": False, "error": error_text}
+                    )
+                    
+    except Exception as e:
+        logger.error(f"❌ Error in send_message_via_max: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
 @api_app.get("/api/user-status")
 async def api_user_status(user_id: int):
     """Получить статус пользователя (есть ли профиль, интерпретация)"""
@@ -2477,7 +2557,8 @@ async def api_user_status(user_id: int):
             "has_interpretation": bool(user_info.get('ai_generated_profile')),
             "test_completed": user_info.get('test_completed', False),
             "interpretation_ready": bool(user_info.get('ai_generated_profile')),
-            "profile_code": user_info.get('profile_data', {}).get('display_name')
+            "profile_code": user_info.get('profile_data', {}).get('display_name'),
+            "max_api_available": bool(MAX_TOKEN)
         })
         
     except Exception as e:
@@ -2571,7 +2652,6 @@ async def process_voice(request: Request):
         
         # Сохраняем временно файл
         import tempfile
-        import aiofiles
         
         with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as tmp:
             tmp_path = tmp.name
@@ -2730,107 +2810,6 @@ async def api_ideas(user_id: int):
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": str(e), "ideas": []}
-        )
-
-# ============================================
-# ГОЛОСОВОЙ ЭНДПОИНТ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
-# ============================================
-
-@api_app.post("/api/voice/process")
-async def process_voice(request: Request):
-    """Обработка голосового сообщения из мини-приложения"""
-    try:
-        form = await request.form()
-        user_id = form.get('user_id')
-        voice_file = form.get('voice')
-        
-        if not user_id or not voice_file:
-            return JSONResponse(
-                status_code=400,
-                content={"success": False, "error": "user_id and voice file required"}
-            )
-        
-        user_id = int(user_id)
-        
-        # Сохраняем временный файл
-        import tempfile
-        import aiofiles
-        
-        with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as tmp:
-            tmp_path = tmp.name
-        
-        content = await voice_file.read()
-        with open(tmp_path, 'wb') as f:
-            f.write(content)
-        
-        try:
-            # Распознаем речь
-            from services import transcribe_audio
-            recognized_text = await transcribe_audio(tmp_path)
-            
-            if not recognized_text:
-                return JSONResponse({
-                    "success": False,
-                    "error": "Не удалось распознать речь",
-                    "answer": "Не удалось распознать голос. Попробуйте говорить четче или напишите текстом."
-                })
-            
-            # Получаем контекст пользователя
-            if user_id not in user_contexts:
-                user_contexts[user_id] = UserContext(user_id)
-            
-            context = user_contexts[user_id]
-            user_info = user_data.get(user_id, {})
-            
-            # Отправляем в DeepSeek
-            from services import call_deepseek_with_context
-            response = await call_deepseek_with_context(
-                user_id=user_id,
-                user_message=recognized_text,
-                context=context,
-                mode=context.communication_mode,
-                profile_data=user_info
-            )
-            
-            if not response:
-                response = "Я понял ваш вопрос. Дайте подумать..."
-            
-            # Генерируем голосовой ответ
-            from services import text_to_speech
-            audio_response = await text_to_speech(response, context.communication_mode)
-            
-            audio_url = None
-            if audio_response:
-                # Сохраняем аудио
-                audio_filename = f"voice_response_{user_id}_{int(time.time())}.ogg"
-                audio_dir = os.path.join(MINIAPP_PATH, "audio")
-                os.makedirs(audio_dir, exist_ok=True)
-                audio_path = os.path.join(audio_dir, audio_filename)
-                
-                with open(audio_path, 'wb') as f:
-                    f.write(audio_response)
-                
-                audio_url = f"/static/audio/{audio_filename}"
-            
-            return JSONResponse({
-                "success": True,
-                "recognized_text": recognized_text,
-                "answer": response,
-                "audio_url": audio_url
-            })
-            
-        finally:
-            # Удаляем временный файл
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in process_voice: {e}")
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
         )
 
 if __name__ == "__main__":
