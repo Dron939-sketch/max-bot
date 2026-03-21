@@ -165,6 +165,66 @@ voice_handler = register_voice_handler(bot)
 logger.info("✅ Простой обработчик голоса зарегистрирован")
 
 # ============================================
+# ЭКЗЕМПЛЯР БОТА
+# ============================================
+
+if not MAX_TOKEN:
+    logger.error("❌ MAX_TOKEN не найден в переменных окружения!")
+    MAX_TOKEN = "ВАШ_ТОКЕН_ЗДЕСЬ"
+
+bot = MaxiBot(MAX_TOKEN)
+logger.info("✅ Экземпляр бота MAX создан")
+
+# ============================================
+# 🔥🔥🔥 ПЕРЕХВАТЧИК ВСЕХ ОБНОВЛЕНИЙ ДЛЯ ДИАГНОСТИКИ 🔥🔥🔥
+# ============================================
+
+# Сохраняем оригинальный метод обработки
+original_update_handler = None
+
+def intercept_update(update):
+    """Перехватывает ВСЕ обновления от MAX"""
+    import json
+    
+    logger.error("=" * 100)
+    logger.error("🔥🔥🔥 ПЕРЕХВАТЧИК ОБНОВЛЕНИЙ 🔥🔥🔥")
+    logger.error(f"Тип update: {type(update)}")
+    logger.error(f"Содержимое: {json.dumps(update, default=str, ensure_ascii=False)[:2000]}")
+    
+    # Проверяем наличие голосового сообщения
+    if 'message' in update:
+        msg = update['message']
+        logger.error(f"📨 Сообщение: content_type={msg.get('content_type')}, has_voice={msg.get('voice') is not None}")
+        
+        if msg.get('voice'):
+            logger.error("🎤🎤🎤 ОБНАРУЖЕНО ГОЛОСОВОЕ СООБЩЕНИЕ! 🎤🎤🎤")
+            logger.error(f"   voice данные: {json.dumps(msg['voice'], default=str, ensure_ascii=False)}")
+    
+    logger.error("=" * 100)
+    
+    # Вызываем оригинальный обработчик
+    if original_update_handler:
+        return original_update_handler(update)
+    return None
+
+# Подменяем обработчик
+try:
+    if hasattr(bot, '_update_handler'):
+        original_update_handler = bot._update_handler
+        bot._update_handler = intercept_update
+        logger.error("✅ ПЕРЕХВАТЧИК ОБНОВЛЕНИЙ УСТАНОВЛЕН")
+    else:
+        logger.error("❌ Не удалось установить перехватчик: нет _update_handler")
+except Exception as e:
+    logger.error(f"❌ Ошибка установки перехватчика: {e}")
+
+# ============================================
+
+from voice_handler import register_voice_handler
+voice_handler = register_voice_handler(bot)
+logger.info("✅ Простой обработчик голоса зарегистрирован")
+
+# ============================================
 # ИНИЦИАЛИЗАЦИЯ МЕНЕДЖЕРОВ
 # ============================================
 
