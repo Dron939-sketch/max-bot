@@ -128,7 +128,8 @@ from handlers.profile import (
     set_morning_manager
 )
 from handlers.stages import *
-from handlers.help import show_help, show_tale, show_benefits
+from handlers.help import show_help, show_benefits
+from handlers.tales import show_tale
 from handlers.goals import *
 from handlers.questions import *
 from handlers.admin import *
