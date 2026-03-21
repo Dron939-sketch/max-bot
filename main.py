@@ -1859,9 +1859,31 @@ def handle_all_voice_messages(message: types.Message):
     logger.info(f"📝 текущее состояние: {get_state(user_id)}")
     logger.info("=" * 80)
     
-    def run_async():
-        asyncio.run(handle_voice_message(message))
-    threading.Thread(target=run_async, daemon=True).start()
+    # ✅ ИСПРАВЛЕНО: правильный запуск асинхронной функции
+    try:
+        # Пытаемся получить текущий event loop
+        loop = asyncio.get_running_loop()
+        # Если цикл уже запущен, создаем задачу
+        asyncio.create_task(handle_voice_message(message))
+        logger.info("✅ Задача голоса создана в существующем цикле")
+    except RuntimeError:
+        # Нет запущенного цикла (например, в отдельном потоке)
+        # Создаем новый цикл в этом потоке
+        def run_async_in_new_loop():
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                new_loop.run_until_complete(handle_voice_message(message))
+            except Exception as e:
+                logger.error(f"❌ Ошибка в голосовом обработчике: {e}")
+                import traceback
+                traceback.print_exc()
+            finally:
+                new_loop.close()
+        
+        # Запускаем в отдельном потоке
+        threading.Thread(target=run_async_in_new_loop, daemon=True).start()
+        logger.info("✅ Запущен новый поток для обработки голоса")
 
 # ============================================
 # ОСТАЛЬНЫЕ ОБРАБОТЧИКИ (для текстовых сообщений)
