@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Конфигурация и константы бота для MAX
 Ключи API загружаются из переменных окружения (на Render)
@@ -22,8 +24,8 @@ DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "")
 YANDEX_API_KEY = os.environ.get("YANDEX_API_KEY", "")
 OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY", "")
 
-# ID администраторов
-ADMIN_IDS = [532205848]
+# ID администраторов - ДОБАВЛЕН ВАШ ID
+ADMIN_IDS = [213102077, 532205848]  # ваш ID и ID другого админа
 
 # ============================================
 # URL ВНЕШНИХ API
