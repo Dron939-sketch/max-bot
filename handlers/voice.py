@@ -66,6 +66,7 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
                 continue
             
             logger.info(f"✅ Получен URL для загрузки")
+            logger.info(f"📦 Token: {upload_token[:30]}...")
             
             # ШАГ 2: Загружаем аудио
             logger.info(f"📡 Загрузка аудио ({len(audio_data)} байт)...")
@@ -126,6 +127,7 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
             continue
         except Exception as e:
             logger.error(f"❌ Ошибка (попытка {attempt + 1}/3): {e}")
+            traceback.print_exc()
             if attempt < 2:
                 time.sleep(2 ** attempt)
             continue
