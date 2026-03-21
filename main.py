@@ -1843,77 +1843,31 @@ def handle_callback(call: types.CallbackQuery):
 # ОБРАБОТЧИКИ СООБЩЕНИЙ
 # ============================================
 
-# 🔥 ПЕРВЫЙ ОБРАБОТЧИК: ВСЕ ГОЛОСОВЫЕ СООБЩЕНИЯ (независимо от состояния)
-@bot.message_handler(content_types=['voice'])
-def handle_all_voice_messages(message: types.Message):
-    """
-    УНИВЕРСАЛЬНЫЙ обработчик голосовых сообщений
-    Срабатывает для любого голосового сообщения, из любого состояния
-    """
-    user_id = message.from_user.id
-    logger.info("=" * 80)
-    logger.info("🎤🎤🎤 УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК ГОЛОСА 🎤🎤🎤")
-    logger.info(f"📝 user_id: {user_id}")
-    logger.info(f"📝 message.voice: {message.voice}")
-    logger.info(f"📝 content_type: {message.content_type}")
-    logger.info(f"📝 текущее состояние: {get_state(user_id)}")
-    logger.info("=" * 80)
-    
-    # ✅ ИСПРАВЛЕНО: правильный запуск асинхронной функции
-    try:
-        # Пытаемся получить текущий event loop
-        loop = asyncio.get_running_loop()
-        # Если цикл уже запущен, создаем задачу
-        asyncio.create_task(handle_voice_message(message))
-        logger.info("✅ Задача голоса создана в существующем цикле")
-    except RuntimeError:
-        # Нет запущенного цикла (например, в отдельном потоке)
-        # Создаем новый цикл в этом потоке
-        def run_async_in_new_loop():
-            new_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(new_loop)
-            try:
-                new_loop.run_until_complete(handle_voice_message(message))
-            except Exception as e:
-                logger.error(f"❌ Ошибка в голосовом обработчике: {e}")
-                import traceback
-                traceback.print_exc()
-            finally:
-                new_loop.close()
-        
-        # Запускаем в отдельном потоке
-        threading.Thread(target=run_async_in_new_loop, daemon=True).start()
-        logger.info("✅ Запущен новый поток для обработки голоса")
-
-# ============================================
-# ОСТАЛЬНЫЕ ОБРАБОТЧИКИ (для текстовых сообщений)
-# ============================================
-
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.collecting_life_context and message.content_type == 'text')
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.collecting_life_context)
 def handle_life_context_wrapper(message: types.Message):
     process_life_context(message)
 
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.collecting_goal_context and message.content_type == 'text')
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.collecting_goal_context)
 def handle_goal_context_wrapper(message: types.Message):
     process_goal_context(message)
 
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_context and message.content_type == 'text')
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_context)
 def handle_context_message_wrapper(message: types.Message):
     handled = handle_context_message(message)
     if not handled:
         safe_send_message(message, "Пожалуйста, ответьте на вопрос или используйте кнопки", delete_previous=True, keep_last=1)
 
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_question and message.content_type == 'text')
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_question)
 def handle_question_message(message: types.Message):
     user_id = message.from_user.id
     text = message.text
-    logger.info(f"❓ Получен текст от пользователя {user_id}: {text[:50]}...")
+    logger.info(f"❓ Получен вопрос от пользователя {user_id} в состоянии awaiting_question: {text[:50]}...")
     def run_sync():
         from handlers.questions import process_text_question_sync
         process_text_question_sync(message, user_id, text)
     threading.Thread(target=run_sync, daemon=True).start()
 
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_custom_goal and message.content_type == 'text')
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_custom_goal)
 def handle_custom_goal_message(message: types.Message):
     user_id = message.from_user.id
     text = message.text
@@ -1922,7 +1876,7 @@ def handle_custom_goal_message(message: types.Message):
         asyncio.run(process_custom_goal_async(message, user_id, text))
     threading.Thread(target=run_async, daemon=True).start()
 
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.pretest_question and message.content_type == 'text')
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.pretest_question)
 def handle_pretest_question(message: types.Message):
     user_id = message.from_user.id
     text = message.text
@@ -1930,8 +1884,21 @@ def handle_pretest_question(message: types.Message):
     safe_send_message(message, "Спасибо за вопрос. Чтобы ответить точнее, мне нужно знать ваш профиль. Пройдите тест — это займёт 15 минут.", delete_previous=True)
     clear_state(user_id)
 
-# ПОСЛЕДНИЙ ОБРАБОТЧИК: ВСЕ НЕИЗВЕСТНЫЕ СООБЩЕНИЯ (только текст)
-@bot.message_handler(func=lambda message: message.content_type == 'text')
+# ✅ ВОССТАНОВЛЕННЫЙ РАБОЧИЙ ОБРАБОТЧИК ГОЛОСА
+@bot.message_handler(content_types=['voice'])
+def handle_voice_wrapper(message: types.Message):
+    """Обработчик голосовых сообщений - РАБОЧАЯ ВЕРСИЯ"""
+    user_id = message.from_user.id
+    logger.info(f"🎤🔥 ВХОД В handle_voice_wrapper от {user_id}")
+    logger.info(f"🎤🔥 message.voice: {message.voice}")
+    logger.info(f"🎤🔥 content_type: {message.content_type}")
+    
+    def run_async():
+        asyncio.run(handle_voice_message(message))
+    threading.Thread(target=run_async, daemon=True).start()
+
+# ПОСЛЕДНИЙ ОБРАБОТЧИК: ВСЕ НЕИЗВЕСТНЫЕ СООБЩЕНИЯ
+@bot.message_handler(func=lambda message: True)
 def handle_unknown_message(message: types.Message):
     user_id = message.from_user.id
     state = get_state(user_id)
