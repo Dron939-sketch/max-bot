@@ -10,7 +10,6 @@ import asyncio
 import time
 import traceback
 from typing import Optional
-
 from maxibot.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 # Импорты из наших модулей
@@ -544,9 +543,10 @@ async def handle_sync_callback(call: CallbackQuery):
         show_question_input(call)
     
     elif data == "ask_hypnosis":
-        logger.info(f"🧠 ask_hypnosis для пользователя {user_id}")
-        from handlers.help import show_tale
-        show_tale(call)
+    logger.info(f"🧠 ask_hypnosis для пользователя {user_id}")
+    # ✅ Импортируем из tales.py, а не из help.py
+    from handlers.tales import show_tale
+    show_tale(call)
     
     # ============================================
     # ПРОФИЛЬ (синхронные версии)
