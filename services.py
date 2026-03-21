@@ -276,6 +276,91 @@ async def call_deepseek(
     logger.error("❌ Все попытки вызова DeepSeek API исчерпаны")
     return None
 
+# ============================================
+# DEEPSEEK API С КОНТЕКСТОМ
+# ============================================
+
+async def call_deepseek_with_context(
+    user_id: int,
+    user_message: str,
+    context: Any,
+    mode: str,
+    profile_data: dict
+) -> Optional[str]:
+    """
+    Вызов DeepSeek API с учетом контекста пользователя
+    """
+    logger.info(f"📞 call_deepseek_with_context для пользователя {user_id}")
+    logger.info(f"📝 Сообщение: {user_message[:100]}...")
+    logger.info(f"🎭 Режим: {mode}")
+    
+    # Получаем системный промпт из режима
+    from config import COMMUNICATION_MODES
+    mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
+    system_prompt = mode_config.get("system_prompt", "")
+    
+    # Формируем контекст
+    context_text = ""
+    if context:
+        if hasattr(context, 'name') and context.name:
+            context_text += f"👤 Имя пользователя: {context.name}\n"
+        if hasattr(context, 'city') and context.city:
+            context_text += f"📍 Город: {context.city}\n"
+        if hasattr(context, 'age') and context.age:
+            context_text += f"📅 Возраст: {context.age}\n"
+        if hasattr(context, 'gender') and context.gender:
+            gender_text = "Мужчина" if context.gender == "male" else "Женщина" if context.gender == "female" else "Другое"
+            context_text += f"👤 Пол: {gender_text}\n"
+    
+    # Добавляем профиль
+    profile_code = profile_data.get("display_name", "не определен")
+    perception_type = profile_data.get("perception_type", "не определен")
+    thinking_level = profile_data.get("thinking_level", 5)
+    scores = profile_data.get("scores", {})
+    
+    profile_text = f"""
+📊 **ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:**
+• Код профиля: {profile_code}
+• Тип восприятия: {perception_type}
+• Уровень мышления: {thinking_level}/9
+"""
+    
+    if scores:
+        sb = scores.get("СБ", 3)
+        tf = scores.get("ТФ", 3)
+        ub = scores.get("УБ", 3)
+        chv = scores.get("ЧВ", 3)
+        profile_text += f"• Вектора: СБ={sb}, ТФ={tf}, УБ={ub}, ЧВ={chv}\n"
+    
+    # Формируем полный промпт
+    prompt = f"""
+{system_prompt}
+
+{profile_text}
+
+{context_text}
+
+Вопрос пользователя: {user_message}
+
+Ответь пользователю в соответствии с твоей ролью. Используй живой, разговорный язык. Не используй Markdown (**, __, и т.д.). Используй эмодзи для эмоциональной окраски. Длина ответа: 2-5 предложений для простых вопросов.
+"""
+    
+    logger.info(f"📝 Промпт создан, длина: {len(prompt)} символов")
+    
+    response = await call_deepseek(
+        prompt=prompt,
+        system_prompt=system_prompt,
+        max_tokens=1000,
+        temperature=0.7
+    )
+    
+    if response:
+        logger.info(f"✅ Ответ получен, длина: {len(response)} символов")
+        return response
+    else:
+        logger.error("❌ Не удалось получить ответ от DeepSeek")
+        return "Извините, я немного задумался. Можете повторить вопрос?"
+
 
 # ============================================
 # DEEPGRAM API (РАСПОЗНАВАНИЕ РЕЧИ) - С ДИАГНОСТИКОЙ
