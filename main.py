@@ -2420,5 +2420,277 @@ async def get_smart_questions(user_id: int):
             content={"success": False, "error": str(e), "questions": []}
         )
 
+# ============================================
+# НЕДОСТАЮЩИЕ API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
+# ============================================
+
+@api_app.get("/api/user-status")
+async def api_user_status(user_id: int):
+    """Получить статус пользователя (есть ли профиль, интерпретация)"""
+    try:
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        return JSONResponse({
+            "success": True,
+            "has_profile": bool(user_info.get('profile_data')) or bool(user_info.get('ai_generated_profile')),
+            "has_interpretation": bool(user_info.get('ai_generated_profile')),
+            "test_completed": user_info.get('test_completed', False),
+            "interpretation_ready": bool(user_info.get('ai_generated_profile')),
+            "profile_code": user_info.get('profile_data', {}).get('display_name')
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in api_user_status: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.post("/api/chat/action")
+async def api_chat_action(request: Request):
+    """Обработка действий из чата (кнопки)"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        action = data.get('action')
+        action_data = data.get('data', {})
+        
+        if not user_id or not action:
+            raise HTTPException(status_code=400, detail="user_id and action required")
+        
+        user_id = int(user_id)
+        
+        if action == "start_test":
+            return JSONResponse({
+                "success": True,
+                "action": action,
+                "data": {"stage": 1, "question_index": 0}
+            })
+        elif action == "show_profile":
+            profile_data = user_data.get(user_id, {}).get('ai_generated_profile')
+            return JSONResponse({
+                "success": True,
+                "action": action,
+                "data": {"profile": profile_data}
+            })
+        elif action == "show_thoughts":
+            thought = user_data.get(user_id, {}).get('psychologist_thought')
+            if not thought:
+                thought = await generate_psychologist_thought(user_id, user_data.get(user_id, {}))
+                if thought:
+                    if user_id not in user_data:
+                        user_data[user_id] = {}
+                    user_data[user_id]['psychologist_thought'] = thought
+                    sync_db.save_user_to_db(user_id)
+            return JSONResponse({
+                "success": True,
+                "action": action,
+                "data": {"thought": thought or "Мысли психолога еще не сгенерированы."}
+            })
+        elif action == "show_weekend":
+            ideas = await api_get_ideas_internal(user_id)
+            return JSONResponse({
+                "success": True,
+                "action": action,
+                "data": {"ideas": ideas}
+            })
+        elif action == "ask_question":
+            return JSONResponse({
+                "success": True,
+                "action": action,
+                "data": {"message": "Задайте ваш вопрос"}
+            })
+        
+        return JSONResponse({"success": True, "action": action})
+        
+    except Exception as e:
+        logger.error(f"❌ Error in api_chat_action: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.post("/api/voice/process")
+async def process_voice(request: Request):
+    """Обработка голосового сообщения"""
+    try:
+        form = await request.form()
+        user_id = form.get('user_id')
+        voice_file = form.get('voice')
+        
+        if not user_id or not voice_file:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "user_id and voice file required"}
+            )
+        
+        user_id = int(user_id)
+        
+        # Сохраняем временно файл
+        import tempfile
+        import aiofiles
+        
+        with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as tmp:
+            tmp_path = tmp.name
+        
+        content = await voice_file.read()
+        with open(tmp_path, 'wb') as f:
+            f.write(content)
+        
+        try:
+            # Распознаем речь через Deepgram
+            from services import transcribe_audio
+            recognized_text = await transcribe_audio(tmp_path)
+            
+            if not recognized_text:
+                return JSONResponse({
+                    "success": False,
+                    "error": "Не удалось распознать речь",
+                    "answer": "Не удалось распознать голос. Попробуйте говорить четче или напишите текстом."
+                })
+            
+            # Отправляем текст в DeepSeek
+            context = user_contexts.get(user_id)
+            mode = context.communication_mode if context else "coach"
+            profile = user_data.get(user_id, {})
+            
+            from services import call_deepseek_with_context
+            response = await call_deepseek_with_context(
+                user_id=user_id,
+                user_message=recognized_text,
+                context=context,
+                mode=mode,
+                profile_data=profile
+            )
+            
+            if not response:
+                response = "Я понял ваш вопрос. Дайте подумать..."
+            
+            # Генерируем голосовой ответ через Yandex TTS
+            from services import text_to_speech
+            audio_response = await text_to_speech(response, mode)
+            
+            audio_url = None
+            if audio_response:
+                # Сохраняем аудио
+                audio_filename = f"voice_response_{user_id}_{int(time.time())}.ogg"
+                audio_path = os.path.join(MINIAPP_PATH, "audio", audio_filename)
+                os.makedirs(os.path.dirname(audio_path), exist_ok=True)
+                
+                with open(audio_path, 'wb') as f:
+                    f.write(audio_response)
+                
+                audio_url = f"/static/audio/{audio_filename}"
+            
+            return JSONResponse({
+                "success": True,
+                "recognized_text": recognized_text,
+                "answer": response,
+                "audio_url": audio_url
+            })
+            
+        finally:
+            # Удаляем временный файл
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in process_voice: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.post("/api/tts")
+async def text_to_speech_api(request: Request):
+    """Преобразование текста в речь"""
+    try:
+        data = await request.json()
+        text = data.get('text')
+        mode = data.get('mode', 'coach')
+        
+        if not text:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "text required"}
+            )
+        
+        from services import text_to_speech
+        audio = await text_to_speech(text, mode)
+        
+        if audio:
+            import base64
+            audio_base64 = base64.b64encode(audio).decode('utf-8')
+            return JSONResponse({
+                "success": True,
+                "audio_base64": audio_base64
+            })
+        else:
+            return JSONResponse({
+                "success": False,
+                "error": "Failed to generate speech"
+            })
+            
+    except Exception as e:
+        logger.error(f"❌ Error in tts: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+async def api_get_ideas_internal(user_id: int) -> list:
+    """Внутренняя функция для получения идей"""
+    data = user_data.get(user_id, {})
+    context = user_contexts.get(user_id)
+    user_name = context.name if context else user_names.get(user_id, "друг")
+    
+    scores = {}
+    for k in VECTORS:
+        levels = data.get("behavioral_levels", {}).get(k, [])
+        scores[k] = sum(levels) / len(levels) if levels else 3.0
+    
+    profile_data = data.get("profile_data", {})
+    
+    ideas_text = await weekend_planner.get_weekend_ideas(
+        user_id=user_id,
+        user_name=user_name,
+        scores=scores,
+        profile_data=profile_data,
+        context=context
+    )
+    
+    ideas = []
+    paragraphs = ideas_text.split('\n\n') if ideas_text else []
+    for p in paragraphs:
+        if p.strip() and not p.startswith('#'):
+            ideas.append({
+                "title": p[:50] + "..." if len(p) > 50 else p,
+                "description": p
+            })
+    
+    return ideas[:5]
+
+
+# Обновляем существующий эндпоинт /api/ideas
+@api_app.get("/api/ideas")
+async def api_ideas(user_id: int):
+    """Получить идеи на выходные"""
+    try:
+        ideas = await api_get_ideas_internal(user_id)
+        return JSONResponse({"success": True, "ideas": ideas})
+    except Exception as e:
+        logger.error(f"❌ Error in api_ideas: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e), "ideas": []}
+        )
+
 if __name__ == "__main__":
     main()
