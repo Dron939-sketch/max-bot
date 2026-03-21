@@ -1278,7 +1278,7 @@ async def send_to_telegram(user_id: int, text: str):
         
         full_text = f"🧠 {user_name}, {text.lower() if text.startswith('🧠') else text}"
         
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        keyboard = InlineKeyboardMarkup(keyboard=[
             [
                 InlineKeyboardButton(text="🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"),
                 InlineKeyboardButton(text="🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations")
