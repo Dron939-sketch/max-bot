@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик голосовых сообщений для MAX
-Версия 4.0 - ИСПРАВЛЕНО: правильное API MAX, передача system_prompt
+Версия 4.1 - ИСПРАВЛЕНО: добавлен chat_id при отправке сообщения
 """
 
 import logging
@@ -46,7 +46,7 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
     for attempt in range(3):
         try:
             # ШАГ 1: Получаем URL для загрузки
-            logger.info(f"📡 Попытка {attempt + 1}/3: Запрос URL для загрузки аудио")
+            logger.info(f"📡 Попытка {attempt + 1}/3: запрос URL для загрузки аудио")
             response = requests.post(
                 f"{MAX_API_BASE_URL}/uploads?type=audio",
                 headers=headers,
@@ -81,7 +81,7 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
             )
             
             if upload_response.status_code not in [200, 201]:
-                logger.error(f"❌ Ошибка загрузки: {upload_response.status_code}")
+                logger.error(f"❌ Ошибка загрузки: {upload_response.status_code} - {upload_response.text}")
                 continue
             
             logger.info(f"✅ Аудио успешно загружено")
@@ -92,7 +92,9 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
             # ШАГ 3: Отправляем сообщение с вложением
             logger.info(f"📡 Отправка сообщения")
             
+            # ✅ ИСПРАВЛЕНО: добавлен chat_id
             message_data = {
+                "chat_id": chat_id,  # ← КЛЮЧЕВОЕ ПОЛЕ!
                 "text": "",  # Пустой текст для голосового сообщения
                 "attachments": [
                     {
