@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ ДЛЯ PYTHON 3.11 - ИСПРАВЛЕНО: единый цикл событий + save_telegram_user + close_db + retry
+ВЕРСИЯ ДЛЯ PYTHON 3.11 - ИСПРАВЛЕНО: единый цикл событий + save_telegram_user + close_db + retry + log_event
 """
 
 import os
@@ -123,19 +123,6 @@ class DBLoopManager:
         """
         Запускает корутину в цикле БД и возвращает результат.
         Это основной метод для вызова из любого потока.
-        
-        Args:
-            coro_func: Асинхронная функция или готовая корутина
-            *args: Аргументы для функции (если coro_func - функция)
-            timeout: Таймаут в секундах
-            **kwargs: Именованные аргументы
-        
-        Returns:
-            Результат выполнения корутины
-        
-        Raises:
-            TimeoutError: При превышении таймаута
-            Exception: Любое исключение из корутины
         """
         if self.loop is None:
             raise RuntimeError("Цикл БД не инициализирован. Вызовите init()")
@@ -147,23 +134,7 @@ class DBLoopManager:
         if not is_coro_func and not is_coro:
             raise TypeError(f"{coro_func} is not a coroutine or coroutine function")
         
-        # Проверяем, не вызваны ли мы уже из правильного цикла
-        try:
-            current_loop = asyncio.get_event_loop()
-            if current_loop is self.loop:
-                # Уже в правильном цикле - выполняем напрямую
-                if is_coro:
-                    future = asyncio.ensure_future(coro_func, loop=self.loop)
-                else:
-                    future = asyncio.ensure_future(coro_func(*args, **kwargs), loop=self.loop)
-                return self.loop.run_until_complete(
-                    asyncio.wait_for(future, timeout=timeout)
-                )
-        except RuntimeError:
-            # Нет текущего цикла
-            pass
-        
-        # Создаем Future в цикле БД
+        # ✅ ВСЕГДА выполняем в потоке БД, чтобы избежать конфликта циклов
         if is_coro:
             future = asyncio.run_coroutine_threadsafe(coro_func, self.loop)
         else:
@@ -185,14 +156,6 @@ class DBLoopManager:
     def run_task(self, coro_func: Callable[..., Awaitable], *args, **kwargs):
         """
         Запускает корутину как фоновую задачу (fire-and-forget)
-        
-        Args:
-            coro_func: Асинхронная функция
-            *args: Аргументы
-            **kwargs: Именованные аргументы
-        
-        Returns:
-            asyncio.Task: Задача (можно отменить при необходимости)
         """
         if self.loop is None:
             raise RuntimeError("Цикл БД не инициализирован")
@@ -282,13 +245,6 @@ async def close_db():
 async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
     """
     Проверяет соединение с БД через менеджер с повторными попытками
-    
-    Args:
-        max_retries: Максимальное количество попыток
-        delay: Задержка между попытками в секундах
-    
-    Returns:
-        bool: True если соединение установлено, False если нет
     """
     for attempt in range(max_retries):
         try:
@@ -368,11 +324,6 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
 def sync_db_call(coro_func):
     """
     Декоратор для синхронных функций, которые нужно выполнить в цикле БД
-    
-    Пример:
-        @sync_db_call
-        def save_user(user_id):
-            return db_loop_manager.run_coro(save_user_to_db, user_id)
     """
     @wraps(coro_func)
     def wrapper(*args, **kwargs):
@@ -438,6 +389,36 @@ def save_telegram_user(
         return result if result is not None else False
     except Exception as e:
         logger.error(f"❌ Ошибка save_telegram_user: {e}")
+        return False
+
+
+# ✅ ДОБАВЛЕНА ФУНКЦИЯ log_event_async И log_event
+async def log_event_async(user_id: int, event_type: str, event_data: Dict = None) -> bool:
+    """Асинхронная версия логирования"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для логирования {user_id}")
+            return False
+        
+        return await db.log_event(user_id, event_type, event_data or {})
+    except Exception as e:
+        logger.error(f"❌ Ошибка логирования: {e}")
+        return False
+
+
+def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
+    """Синхронная обертка для логирования"""
+    try:
+        result = db_loop_manager.run_coro(
+            log_event_async,
+            user_id,
+            event_type,
+            event_data,
+            timeout=10
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка log_event: {e}")
         return False
 
 
@@ -628,6 +609,7 @@ __all__ = [
     'save_telegram_user',
     'save_user_to_db',
     'save_test_result_to_db',
+    'log_event',  # ✅ ДОБАВЛЕНО
     'ensure_db_connection',
     'execute_with_retry',
     'sync_db_call'
