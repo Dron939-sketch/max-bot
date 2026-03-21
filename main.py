@@ -135,6 +135,8 @@ from handlers.questions import *
 from handlers.admin import *
 from handlers.voice import handle_voice_message, send_voice_to_max
 
+from voice_handler import register_voice_handler
+
 # Дополнительные импорты для API эндпоинтов
 from profiles import VECTORS
 from services import generate_psychologist_thought
@@ -157,6 +159,10 @@ if not MAX_TOKEN:
 
 bot = MaxiBot(MAX_TOKEN)
 logger.info("✅ Экземпляр бота MAX создан")
+
+from voice_handler import register_voice_handler
+voice_handler = register_voice_handler(bot)
+logger.info("✅ Простой обработчик голоса зарегистрирован")
 
 # ============================================
 # ИНИЦИАЛИЗАЦИЯ МЕНЕДЖЕРОВ
@@ -1883,18 +1889,6 @@ def handle_pretest_question(message: types.Message):
     safe_send_message(message, "Спасибо за вопрос. Чтобы ответить точнее, мне нужно знать ваш профиль. Пройдите тест — это займёт 15 минут.", delete_previous=True)
     clear_state(user_id)
 
-# ✅ ВОССТАНОВЛЕННЫЙ РАБОЧИЙ ОБРАБОТЧИК ГОЛОСА
-@bot.message_handler(content_types=['voice'])
-def handle_voice_wrapper(message: types.Message):
-    """Обработчик голосовых сообщений - РАБОЧАЯ ВЕРСИЯ"""
-    user_id = message.from_user.id
-    logger.info(f"🎤🔥 ВХОД В handle_voice_wrapper от {user_id}")
-    logger.info(f"🎤🔥 message.voice: {message.voice}")
-    logger.info(f"🎤🔥 content_type: {message.content_type}")
-    
-    def run_async():
-        asyncio.run(handle_voice_message(message))
-    threading.Thread(target=run_async, daemon=True).start()
 
 # ПОСЛЕДНИЙ ОБРАБОТЧИК: ВСЕ НЕИЗВЕСТНЫЕ СООБЩЕНИЯ
 @bot.message_handler(func=lambda message: True)
