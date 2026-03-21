@@ -1848,6 +1848,26 @@ def handle_callback(call: types.CallbackQuery):
 # ОБРАБОТЧИКИ СООБЩЕНИЙ
 # ============================================
 
+# 🔥🔥🔥 ОБРАБОТЧИК ГОЛОСОВЫХ СООБЩЕНИЙ 🔥🔥🔥
+@bot.message_handler(content_types=['voice'])
+def handle_voice_wrapper(message: types.Message):
+    """Обработчик голосовых сообщений"""
+    logger.error("=" * 80)
+    logger.error("🎤🎤🎤 ПОЛУЧЕНО ГОЛОСОВОЕ СООБЩЕНИЕ 🎤🎤🎤")
+    logger.error(f"   user_id: {message.from_user.id}")
+    logger.error(f"   длительность: {message.voice.duration if message.voice else 'неизвестно'}")
+    logger.error(f"   file_id: {message.voice.file_id if message.voice else 'нет'}")
+    logger.error("=" * 80)
+    
+    def run_async():
+        asyncio.run(handle_voice_message(message))
+    
+    threading.Thread(target=run_async, daemon=True).start()
+
+# ============================================
+# ОСТАЛЬНЫЕ ОБРАБОТЧИКИ (ОСТАЮТСЯ КАК ЕСТЬ)
+# ============================================
+
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.collecting_life_context)
 def handle_life_context_wrapper(message: types.Message):
     process_life_context(message)
