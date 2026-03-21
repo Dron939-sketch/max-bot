@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик голосовых сообщений для MAX
-Версия 3.6 - С ДИАГНОСТИКОЙ speech_to_text
+Версия 4.0 - ИСПРАВЛЕНО: правильное API MAX, передача system_prompt
 """
 
 import logging
@@ -16,11 +16,10 @@ from typing import Optional, Dict, Any, List
 
 from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import MAX_TOKEN, DEEPGRAM_API_KEY, YANDEX_API_KEY, VOICE_SETTINGS, COMMUNICATION_MODES
+from config import MAX_TOKEN, DEEPGRAM_API_KEY, YANDEX_API_KEY, VOICE_SETTINGS, COMMUNICATION_MODES, MAX_API_BASE_URL
 from message_utils import safe_send_message, safe_delete_message
-from services import speech_to_text, text_to_speech
+from services import speech_to_text, text_to_speech, call_deepseek
 from state import user_data, user_contexts, get_state, set_state, TestStates, get_user_name
-from modes import get_mode
 from question_analyzer import create_analyzer_from_user_data
 from profiles import VECTORS
 
@@ -33,183 +32,153 @@ _voice_cache_time = {}
 
 def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.ogg") -> bool:
     """
-    Отправляет голосовое сообщение через API MAX с повторными попытками
+    Отправляет голосовое сообщение через официальное API MAX
+    Документация: https://platform-api.max.ru/docs
     """
     if not MAX_TOKEN:
         logger.error("❌ MAX_TOKEN не задан в .env файле")
         return False
     
-    # Пробуем разные форматы авторизации
-    auth_methods = [
-        {"name": "X-API-Key", "headers": {"X-API-Key": MAX_TOKEN}},
-        {"name": "Bearer", "headers": {"Authorization": f"Bearer {MAX_TOKEN}"}},
-        {"name": "query_param", "headers": {}, "use_param": True}
-    ]
+    # ✅ ПРАВИЛЬНЫЙ формат авторизации
+    headers = {"Authorization": MAX_TOKEN}
     
     # 3 попытки
     for attempt in range(3):
-        for method in auth_methods:
-            try:
-                logger.info(f"📡 Попытка {attempt + 1}/3, метод: {method['name']}")
-                
-                # ШАГ 1: Получаем URL для загрузки
-                if method.get("use_param"):
-                    response = requests.post(
-                        "https://api.max.ru/v1/voice/upload",
-                        params={"token": MAX_TOKEN},
-                        json={
-                            "chat_id": chat_id,
-                            "filename": filename,
-                            "size": len(audio_data),
-                            "type": "voice"
-                        },
-                        timeout=30
-                    )
-                else:
-                    response = requests.post(
-                        "https://api.max.ru/v1/voice/upload",
-                        headers=method["headers"],
-                        json={
-                            "chat_id": chat_id,
-                            "filename": filename,
-                            "size": len(audio_data),
-                            "type": "voice"
-                        },
-                        timeout=30
-                    )
-                
-                logger.info(f"📡 Статус ответа ({method['name']}): {response.status_code}")
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    upload_url = data.get("upload_url")
-                    
-                    if not upload_url:
-                        logger.error("❌ Нет upload_url в ответе")
-                        continue
-                    
-                    logger.info(f"✅ Получен URL для загрузки через {method['name']}")
-                    
-                    # ШАГ 2: Загружаем аудио
-                    logger.info(f"📡 Загружаем аудио ({len(audio_data)} байт)...")
-                    
-                    put_response = requests.put(
-                        upload_url,
-                        data=audio_data,
-                        headers={
-                            "Content-Type": "audio/ogg",
-                            "Content-Length": str(len(audio_data))
-                        },
-                        timeout=60
-                    )
-                    
-                    if put_response.status_code not in [200, 201]:
-                        logger.error(f"❌ Ошибка загрузки: {put_response.status_code}")
-                        continue
-                    
-                    logger.info(f"✅ Аудио успешно загружено")
-                    
-                    # ШАГ 3: Отправляем сообщение
-                    logger.info(f"📡 Отправляем сообщение с голосом...")
-                    
-                    if method["name"] == "X-API-Key":
-                        headers = {"X-API-Key": MAX_TOKEN}
-                    elif method["name"] == "Bearer":
-                        headers = {"Authorization": f"Bearer {MAX_TOKEN}"}
-                    else:
-                        headers = {}
-                    
-                    send_response = requests.post(
-                        "https://api.max.ru/v1/voice/send",
-                        headers=headers,
-                        json={
-                            "chat_id": chat_id,
-                            "voice_file": upload_url,
-                            "type": "voice"
-                        },
-                        timeout=30
-                    )
-                    
-                    if send_response.status_code == 200:
-                        logger.info(f"✅ Голосовое сообщение отправлено")
-                        return True
-                    else:
-                        logger.error(f"❌ Ошибка отправки: {send_response.status_code} - {send_response.text}")
-                        continue
-                        
-                elif response.status_code == 401:
-                    logger.warning(f"⚠️ Ошибка 401 для метода {method['name']}")
-                    continue
-                else:
-                    logger.warning(f"⚠️ Неожиданный статус {response.status_code} для {method['name']}")
-                    continue
-                    
-            except requests.exceptions.Timeout as e:
-                logger.warning(f"⚠️ Таймаут для метода {method['name']} (попытка {attempt + 1}/3): {e}")
+        try:
+            # ШАГ 1: Получаем URL для загрузки
+            logger.info(f"📡 Попытка {attempt + 1}/3: Запрос URL для загрузки аудио")
+            response = requests.post(
+                f"{MAX_API_BASE_URL}/uploads?type=audio",
+                headers=headers,
+                timeout=30
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"❌ Ошибка получения URL: {response.status_code} - {response.text}")
                 continue
-            except requests.exceptions.ConnectionError as e:
-                logger.warning(f"⚠️ Ошибка соединения для {method['name']} (попытка {attempt + 1}/3): {e}")
+            
+            data = response.json()
+            upload_url = data.get("url")
+            upload_token = data.get("token")
+            
+            if not upload_url or not upload_token:
+                logger.error("❌ Нет url или token в ответе")
                 continue
-            except Exception as e:
-                logger.error(f"❌ Ошибка при запросе через {method['name']}: {e}")
+            
+            logger.info(f"✅ Получен URL для загрузки")
+            
+            # ШАГ 2: Загружаем аудио
+            logger.info(f"📡 Загрузка аудио ({len(audio_data)} байт)...")
+            
+            files = {
+                'data': (filename, audio_data, 'audio/ogg')
+            }
+            
+            upload_response = requests.post(
+                upload_url,
+                files=files,
+                timeout=60
+            )
+            
+            if upload_response.status_code not in [200, 201]:
+                logger.error(f"❌ Ошибка загрузки: {upload_response.status_code}")
                 continue
-        
-        # Если все методы не сработали, ждём перед следующей попыткой
-        if attempt < 2:
-            wait_time = 2 ** attempt
-            logger.info(f"🔄 Пауза {wait_time}с перед следующей попыткой...")
-            time.sleep(wait_time)
+            
+            logger.info(f"✅ Аудио успешно загружено")
+            
+            # Небольшая пауза для обработки файла на сервере
+            time.sleep(1)
+            
+            # ШАГ 3: Отправляем сообщение с вложением
+            logger.info(f"📡 Отправка сообщения")
+            
+            message_data = {
+                "text": "",  # Пустой текст для голосового сообщения
+                "attachments": [
+                    {
+                        "type": "audio",
+                        "payload": {
+                            "token": upload_token
+                        }
+                    }
+                ]
+            }
+            
+            send_response = requests.post(
+                f"{MAX_API_BASE_URL}/messages",
+                headers=headers,
+                json=message_data,
+                timeout=30
+            )
+            
+            if send_response.status_code == 200:
+                logger.info(f"✅ Голосовое сообщение отправлено")
+                return True
+            else:
+                logger.error(f"❌ Ошибка отправки: {send_response.status_code} - {send_response.text}")
+                continue
+                
+        except requests.exceptions.Timeout as e:
+            logger.warning(f"⚠️ Таймаут (попытка {attempt + 1}/3): {e}")
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+            continue
+        except requests.exceptions.ConnectionError as e:
+            logger.warning(f"⚠️ Ошибка соединения (попытка {attempt + 1}/3): {e}")
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+            continue
+        except Exception as e:
+            logger.error(f"❌ Ошибка (попытка {attempt + 1}/3): {e}")
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+            continue
     
     logger.error("❌ Не удалось отправить голосовое сообщение после 3 попыток")
     return False
 
 
-# ✅ ДОБАВЛЯЕМ АЛИАС ДЛЯ СОВМЕСТИМОСТИ
+# Алиас для совместимости
 send_voice_to_max = send_voice_message
 
 
 def get_voice_message_url(message_id: int) -> Optional[str]:
-    """Получает URL голосового сообщения с повторными попытками"""
+    """Получает URL голосового сообщения"""
     try:
         if not MAX_TOKEN:
             return None
         
-        auth_methods = [
-            {"name": "X-API-Key", "headers": {"X-API-Key": MAX_TOKEN}},
-            {"name": "Bearer", "headers": {"Authorization": f"Bearer {MAX_TOKEN}"}}
-        ]
+        headers = {"Authorization": MAX_TOKEN}
         
         for attempt in range(3):
-            for method in auth_methods:
-                try:
-                    response = requests.get(
-                        f"https://api.max.ru/v1/voice/message/{message_id}",
-                        headers=method["headers"],
-                        timeout=30
-                    )
+            try:
+                response = requests.get(
+                    f"{MAX_API_BASE_URL}/messages/{message_id}",
+                    headers=headers,
+                    timeout=30
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    attachments = data.get("attachments", [])
+                    for attachment in attachments:
+                        if attachment.get("type") == "audio":
+                            return attachment.get("payload", {}).get("url")
+                elif response.status_code == 401:
+                    logger.warning(f"⚠️ Ошибка 401 при получении URL")
+                else:
+                    logger.warning(f"⚠️ Статус {response.status_code} при получении URL")
                     
-                    if response.status_code == 200:
-                        data = response.json()
-                        voice_url = data.get("voice_url") or data.get("audio_url")
-                        if voice_url:
-                            logger.info(f"✅ Получен URL голоса через {method['name']}")
-                            return voice_url
-                    elif response.status_code == 401:
-                        logger.warning(f"⚠️ Ошибка 401 для {method['name']}")
-                        continue
-                        
-                except requests.exceptions.Timeout:
-                    logger.warning(f"⚠️ Таймаут для {method['name']} (попытка {attempt + 1}/3)")
-                    continue
-                except requests.exceptions.ConnectionError as e:
-                    logger.warning(f"⚠️ Ошибка соединения для {method['name']} (попытка {attempt + 1}/3): {e}")
-                    continue
-                except Exception as e:
-                    logger.error(f"❌ Ошибка: {e}")
-                    continue
-            
-            if attempt < 2:
-                time.sleep(2 ** attempt)
+            except requests.exceptions.Timeout:
+                logger.warning(f"⚠️ Таймаут при получении URL (попытка {attempt + 1}/3)")
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                continue
+            except Exception as e:
+                logger.error(f"❌ Ошибка при получении URL: {e}")
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                continue
         
         return None
         
@@ -231,13 +200,14 @@ def download_voice_message(voice_url: str) -> Optional[bytes]:
             return None
             
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
+        logger.error(f"❌ Ошибка скачивания: {e}")
         return None
 
 
 async def handle_voice_message(message: Message, state):
     """
-    Обработка голосового сообщения - С ИСПОЛЬЗОВАНИЕМ QUESTION_ANALYZER
+    Обработка голосового сообщения - ИСПРАВЛЕННАЯ ВЕРСИЯ
+    Использует правильное API MAX и передает system_prompt
     """
     user_id = message.from_user.id
     
@@ -387,6 +357,10 @@ async def handle_voice_message(message: Message, state):
         context = user_contexts.get(user_id)
         mode_name = context.communication_mode if context else "coach"
         
+        # ✅ ПОЛУЧАЕМ system_prompt ИЗ КОНФИГА
+        mode_config = COMMUNICATION_MODES.get(mode_name, COMMUNICATION_MODES["coach"])
+        system_prompt = mode_config.get("system_prompt", "")
+        
         # Получаем данные профиля для контекста
         profile_data = data.get("profile_data", {})
         scores = {}
@@ -418,18 +392,37 @@ async def handle_voice_message(message: Message, state):
             "🧠 Формирую ответ с учётом твоего профиля..."
         )
         
-        # Создаём режим и обрабатываем вопрос
-        mode = get_mode(mode_name, user_id, data, context)
-        result = mode.process_question(recognized_text)
-        response = result["response"]
+        # Формируем промпт для DeepSeek
+        prompt = f"""
+Вопрос пользователя: {recognized_text}
+
+{context_text}
+
+Ответь пользователю в соответствии с твоей ролью.
+"""
         
-        # Обновляем данные с новой историей
-        if hasattr(mode, 'history'):
-            data['history'] = mode.history
-            user_data[user_id] = data
+        # ✅ ВЫЗЫВАЕМ DeepSeek С system_prompt
+        logger.info(f"📝 Вызов DeepSeek с system_prompt ({len(system_prompt)} символов)")
+        response = await call_deepseek(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            max_tokens=1000,
+            temperature=0.7
+        )
         
-        # Очищаем ответ от форматирования
-        clean_response = response
+        if not response:
+            response = "Извините, я немного задумался. Можете повторить вопрос?"
+        
+        # Сохраняем в историю
+        history = data.get('history', [])
+        history.append({"role": "user", "content": recognized_text})
+        history.append({"role": "assistant", "content": response})
+        data["history"] = history
+        user_data[user_id] = data
+        
+        # Сохраняем в БД
+        from db_sync import sync_db
+        sync_db.save_user_to_db(user_id)
         
         # Удаляем статусное сообщение
         await status_msg.delete()
@@ -444,44 +437,44 @@ async def handle_voice_message(message: Message, state):
             [InlineKeyboardButton(text="⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection")]
         ])
         
-        # Добавляем предложения, если есть
-        suggestions_text = ""
-        if result.get("suggestions"):
-            suggestions_text = "\n\n" + "\n".join(result["suggestions"])
-        
-        # Добавляем рефлексию, если есть
-        reflection_text = ""
-        if reflection and "анализ" not in clean_response.lower() and "вижу" not in clean_response.lower():
-            reflection_text = f"\n\n🔍 {reflection}"
+        # Очищаем ответ от форматирования
+        clean_response = response
         
         # Отправляем текстовый ответ
-        mode_config = COMMUNICATION_MODES.get(mode_name, COMMUNICATION_MODES["coach"])
-        
-        # ✅ ЛОГИРУЕМ, ЧТО ОТПРАВЛЯЕМ
-        logger.info(f"📝 Отправляем текстовый ответ с текстом: '{recognized_text}'")
+        logger.info(f"📝 Отправляем текстовый ответ пользователю {user_id}")
         
         await safe_send_message(
             message,
             f"📝 <b>Вы сказали:</b>\n{recognized_text}\n\n"
-            f"{mode_config['emoji']} <b>Ответ:</b>\n{clean_response}{suggestions_text}{reflection_text}",
+            f"{mode_config['emoji']} <b>Ответ:</b>\n{clean_response}",
             reply_markup=keyboard,
             parse_mode='HTML',
             delete_previous=True
         )
         
-        # Отправляем голосовой ответ
+        # ✅ ОТПРАВЛЯЕМ ГОЛОСОВОЙ ОТВЕТ ЧЕРЕЗ MAX API
         audio_text = clean_response
         if len(audio_text) > 500:
             audio_text = audio_text[:500] + "..."
         
+        logger.info(f"🎤 Синтезируем речь для ответа ({len(audio_text)} символов)...")
         audio_data = await text_to_speech(audio_text, mode_name)
+        
         if audio_data:
-            from maxibot.types import BufferedInputFile
-            audio_file = BufferedInputFile(audio_data, filename="response.ogg")
-            await message.answer_voice(
-                audio_file,
-                caption=f"🎙 Голосовой ответ ({mode_config['display_name']})"
-            )
+            logger.info(f"✅ Речь синтезирована: {len(audio_data)} байт")
+            
+            # Отправляем через MAX API
+            success = send_voice_message(message.chat.id, audio_data, "response.ogg")
+            
+            if success:
+                logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
+            else:
+                logger.error(f"❌ Не удалось отправить голосовой ответ через MAX API")
+        else:
+            logger.error(f"❌ Не удалось синтезировать речь")
+        
+        # Устанавливаем состояние
+        set_state(user_id, TestStates.awaiting_question)
         
     except Exception as e:
         logger.error(f"❌ Ошибка при обработке голосового сообщения: {e}")
@@ -502,28 +495,29 @@ async def handle_voice_message(message: Message, state):
 
 
 async def send_voice_response(message: Message, text: str, mode: str = "coach"):
-    """Отправляет голосовой ответ"""
+    """Отправляет голосовой ответ через MAX API"""
     try:
         import re
         clean_text = text
+        # Очищаем от Markdown и HTML
         clean_text = re.sub(r'<[^>]+>', '', clean_text)
         clean_text = re.sub(r'\*\*(.*?)\*\*', r'\1', clean_text)
         clean_text = re.sub(r'__(.*?)__', r'\1', clean_text)
         clean_text = re.sub(r'\*(.*?)\*', r'\1', clean_text)
         clean_text = re.sub(r'_(.*?)_', r'\1', clean_text)
         
+        # Ограничиваем длину
+        if len(clean_text) > 500:
+            clean_text = clean_text[:500] + "..."
+        
         audio_data = await text_to_speech(clean_text, mode)
         
         if audio_data:
-            from maxibot.types import BufferedInputFile
-            audio_file = BufferedInputFile(audio_data, filename="response.ogg")
-            
-            mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
-            await message.answer_voice(
-                audio_file,
-                caption=f"🎙 {mode_config['emoji']} {mode_config['name']}"
-            )
-            logger.info(f"✅ Голосовой ответ отправлен")
+            success = send_voice_message(message.chat.id, audio_data, "response.ogg")
+            if success:
+                logger.info(f"✅ Голосовой ответ отправлен через MAX API")
+            else:
+                logger.warning(f"⚠️ Не удалось отправить голос через MAX API")
         else:
             logger.warning(f"⚠️ Не удалось синтезировать речь")
             
