@@ -1434,6 +1434,11 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
     """
     Асинхронная обработка голосового сообщения пользователя
     """
+    # 🔥🔥🔥 МАРКЕР ДЛЯ ОТЛАДКИ 🔥🔥🔥
+    logger.info("=" * 80)
+    logger.info("🔥🔥🔥 ВЫЗВАНА ФУНКЦИЯ process_voice_message_async ИЗ ФАЙЛА questions.py 🔥🔥🔥")
+    logger.info("=" * 80)
+    
     user_data_dict = get_user_data_dict(user_id)
     
     # Проверяем, завершен ли тест
