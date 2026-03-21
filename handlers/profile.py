@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики профиля пользователя для MAX
-Версия 2.8 - ИСПРАВЛЕНО: синхронные вызовы БД через sync_db
+Версия 2.8 - ИСПРАВЛЕНО: синхронные вызовы БД через sync_db, добавлен импорт asyncio
 """
 
 import logging
-import asyncio
+import asyncio  # ✅ ДОБАВЛЕНО!
 import time
 import traceback
 from typing import Optional, List, Dict, Any
@@ -40,9 +40,6 @@ logger = logging.getLogger(__name__)
 # Флаг для предотвращения одновременной генерации для одного пользователя
 _profile_generation_in_progress = {}
 
-# ============================================
-# УДАЛЕНО: run_async_task - больше не нужна
-# ============================================
 
 # ============================================
 # ФУНКЦИЯ ДЛЯ РАЗБИВКИ ДЛИННЫХ СООБЩЕНИЙ
@@ -332,23 +329,6 @@ def show_preliminary_profile(message: Message, user_id: int):
     confidence = calculate_profile_confidence(data)
     confidence_bar = "█" * int(confidence * 10) + "░" * (10 - int(confidence * 10))
     
-    # Получаем информацию о слабом векторе для персонализации
-    if scores:
-        min_vector = min(scores.items(), key=lambda x: x[1])
-        weak_vector = min_vector[0]
-        weak_value = int(min_vector[1])
-        
-        vector_names = {
-            "СБ": "реакция на давление",
-            "ТФ": "отношение к деньгам",
-            "УБ": "понимание мира",
-            "ЧВ": "отношения с людьми"
-        }
-        weak_name = vector_names.get(weak_vector, weak_vector)
-    else:
-        weak_name = "некоторые аспекты"
-        weak_value = 3
-    
     text = f"""
 🧠 {bold('ПРЕДВАРИТЕЛЬНЫЙ ПОРТРЕТ')}
 
@@ -391,6 +371,7 @@ def show_preliminary_profile(message: Message, user_id: int):
     
     # Устанавливаем состояние подтверждения профиля
     set_state(user_id, TestStates.profile_confirmation)
+
 
 # ============================================
 # ✅ ИСПРАВЛЕНО: СИНХРОННАЯ ФУНКЦИЯ СОХРАНЕНИЯ ПРОФИЛЯ В БД
@@ -724,10 +705,8 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
             keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
             keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
             
-            # Сохраняем chat_id для последующих частей
             chat_id = message.chat.id
             
-            # Объединяем короткие части
             merged_parts = []
             current = ""
             
@@ -748,7 +727,6 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
             for i, part in enumerate(merged_parts):
                 try:
                     if i == len(merged_parts) - 1:
-                        # Последняя часть с кнопками
                         safe_send_message(
                             message if i == 0 else None,
                             part,
@@ -759,7 +737,6 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                         )
                         logger.info(f"✅ Отправлена последняя часть мысли {i+1} с кнопками")
                     else:
-                        # Промежуточные части
                         safe_send_message(
                             None,
                             part,
