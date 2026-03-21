@@ -224,6 +224,11 @@ async def handle_voice_message(message: Message, state):
     """
     Обработка голосового сообщения - С ДИАГНОСТИКОЙ
     """
+    # 🔥🔥🔥 МАРКЕР ДЛЯ ОТЛАДКИ 🔥🔥🔥
+    logger.info("=" * 80)
+    logger.info("🔥🔥🔥 ВЫЗВАНА ФУНКЦИЯ handle_voice_message ИЗ ФАЙЛА voice.py 🔥🔥🔥")
+    logger.info("=" * 80)
+    
     user_id = message.from_user.id
     
     # 🔍 ОТЛАДКА: проверяем наличие голосового сообщения
