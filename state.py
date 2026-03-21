@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Модуль состояний и глобальных хранилищ для MAX
-ВЕРСИЯ 2.1 - ИСПРАВЛЕНО: синхронное автосохранение
+ВЕРСИЯ 2.2 - ДОБАВЛЕН ФЛАГ ОБРАБОТКИ ГОЛОСА
 """
 
 import logging
@@ -35,6 +35,14 @@ user_states: Dict[int, str] = {}
 
 # Маршруты пользователей (для навигации по целям)
 user_routes: Dict[int, Dict[str, Any]] = {}
+
+# ============================================
+# ФЛАГ ДЛЯ ОТСЛЕЖИВАНИЯ ОБРАБОТКИ ГОЛОСА
+# ============================================
+
+# Флаг для отслеживания обработки голоса (чтобы избежать дублирования)
+# Структура: {user_id: bool}
+_voice_processing: Dict[int, bool] = {}
 
 
 # ============================================
@@ -202,6 +210,31 @@ def get_user_data(user_id: int) -> Dict[str, Any]:
 
 
 # ============================================
+# ФУНКЦИИ ДЛЯ УПРАВЛЕНИЯ ФЛАГОМ ОБРАБОТКИ ГОЛОСА
+# ============================================
+
+def is_voice_processing(user_id: int) -> bool:
+    """Проверяет, обрабатывается ли голос пользователя в данный момент"""
+    return _voice_processing.get(user_id, False)
+
+
+def set_voice_processing(user_id: int, value: bool):
+    """Устанавливает флаг обработки голоса"""
+    if value:
+        _voice_processing[user_id] = True
+        logger.debug(f"🎤 Установлен флаг обработки голоса для {user_id}")
+    else:
+        if user_id in _voice_processing:
+            del _voice_processing[user_id]
+            logger.debug(f"🎤 Снят флаг обработки голоса для {user_id}")
+
+
+def clear_voice_processing(user_id: int):
+    """Очищает флаг обработки голоса (алиас для set_voice_processing(user_id, False))"""
+    set_voice_processing(user_id, False)
+
+
+# ============================================
 # ФУНКЦИИ ДЛЯ РАБОТЫ С БАЗОЙ ДАННЫХ
 # ============================================
 
@@ -335,6 +368,7 @@ def get_stats() -> Dict[str, Any]:
         'users_in_routes': len(user_routes),
         'users_in_states': len(user_states),
         'users_with_names': len(user_names),
+        'users_in_voice_processing': len(_voice_processing),
         'total_unique': len(set(
             list(user_data.keys()) + 
             list(user_contexts.keys()) + 
@@ -383,6 +417,12 @@ __all__ = [
     # Функции для получения данных пользователя
     'get_user_name',
     'get_user_data',
+    
+    # Функции для работы с флагом голоса
+    '_voice_processing',
+    'is_voice_processing',
+    'set_voice_processing',
+    'clear_voice_processing',
     
     # Функции для работы с БД
     'load_user_from_db',
