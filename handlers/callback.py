@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик всех callback-запросов для MAX
-Версия 2.3 - ИСПРАВЛЕНО: импорт сказок из tales.py
+Версия 2.4 - ИСПРАВЛЕНО: show_smart_questions с правильными аргументами
 """
 
 import logging
@@ -512,7 +512,6 @@ async def handle_sync_callback(call: CallbackQuery):
     
     elif data == "show_tale" or data == "ask_tale":
         logger.info(f"📚 show_tale для пользователя {user_id}")
-        # ✅ show_tale уже импортирован из tales.py
         show_tale(call)
     
     elif data == "weekend_ideas":
@@ -521,7 +520,18 @@ async def handle_sync_callback(call: CallbackQuery):
     
     elif data == "smart_questions":
         logger.info(f"🤔 smart_questions для пользователя {user_id}")
-        show_smart_questions(call)
+        from handlers.questions import show_smart_questions
+        from state import user_data, user_contexts
+        
+        # Получаем контекст пользователя
+        context_obj = user_contexts.get(user_id)
+        
+        # Функция проверки завершения теста
+        def check_test_completed(uid):
+            user_info = user_data.get(uid, {})
+            return bool(user_info.get("profile_data") or user_info.get("ai_generated_profile"))
+        
+        show_smart_questions(call, user_id, user_data, context_obj, check_test_completed)
     
     elif data.startswith("ask_"):
         # Проверяем, что вторая часть - это число (для умных вопросов)
@@ -548,7 +558,6 @@ async def handle_sync_callback(call: CallbackQuery):
     
     elif data == "ask_hypnosis":
         logger.info(f"🧠 ask_hypnosis для пользователя {user_id}")
-        # ✅ show_tale уже импортирован из tales.py
         show_tale(call)
     
     # ============================================
