@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик голосовых сообщений для MAX
-Версия 3.4 - С ДОБАВЛЕННОЙ ОТЛАДКОЙ РАСПОЗНАВАНИЯ
+Версия 3.5 - С ПОВТОРНЫМИ ПОПЫТКАМИ И УВЕЛИЧЕННЫМИ ТАЙМАУТАМИ
 """
 
 import logging
@@ -33,28 +33,26 @@ _voice_cache_time = {}
 
 def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.ogg") -> bool:
     """
-    Отправляет голосовое сообщение через API MAX
+    Отправляет голосовое сообщение через API MAX с повторными попытками
     """
-    try:
-        if not MAX_TOKEN:
-            logger.error("❌ MAX_TOKEN не задан в .env файле")
-            return False
-        
-        # Пробуем разные форматы авторизации
-        auth_methods = [
-            {"name": "X-API-Key", "headers": {"X-API-Key": MAX_TOKEN}},
-            {"name": "Bearer", "headers": {"Authorization": f"Bearer {MAX_TOKEN}"}},
-            {"name": "query_param", "headers": {}, "use_param": True}
-        ]
-        
-        upload_url = None
-        upload_method = None
-        
-        # ШАГ 1: Получаем URL для загрузки
-        logger.info("📡 ШАГ 1: запрашиваем URL для загрузки...")
-        
+    if not MAX_TOKEN:
+        logger.error("❌ MAX_TOKEN не задан в .env файле")
+        return False
+    
+    # Пробуем разные форматы авторизации
+    auth_methods = [
+        {"name": "X-API-Key", "headers": {"X-API-Key": MAX_TOKEN}},
+        {"name": "Bearer", "headers": {"Authorization": f"Bearer {MAX_TOKEN}"}},
+        {"name": "query_param", "headers": {}, "use_param": True}
+    ]
+    
+    # 3 попытки
+    for attempt in range(3):
         for method in auth_methods:
             try:
+                logger.info(f"📡 Попытка {attempt + 1}/3, метод: {method['name']}")
+                
+                # ШАГ 1: Получаем URL для загрузки
                 if method.get("use_param"):
                     response = requests.post(
                         "https://api.max.ru/v1/voice/upload",
@@ -65,7 +63,7 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
                             "size": len(audio_data),
                             "type": "voice"
                         },
-                        timeout=10
+                        timeout=30
                     )
                 else:
                     response = requests.post(
@@ -77,7 +75,7 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
                             "size": len(audio_data),
                             "type": "voice"
                         },
-                        timeout=10
+                        timeout=30
                     )
                 
                 logger.info(f"📡 Статус ответа ({method['name']}): {response.status_code}")
@@ -85,81 +83,85 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
                 if response.status_code == 200:
                     data = response.json()
                     upload_url = data.get("upload_url")
-                    upload_method = method["name"]
+                    
+                    if not upload_url:
+                        logger.error("❌ Нет upload_url в ответе")
+                        continue
+                    
                     logger.info(f"✅ Получен URL для загрузки через {method['name']}")
-                    break
+                    
+                    # ШАГ 2: Загружаем аудио
+                    logger.info(f"📡 Загружаем аудио ({len(audio_data)} байт)...")
+                    
+                    put_response = requests.put(
+                        upload_url,
+                        data=audio_data,
+                        headers={
+                            "Content-Type": "audio/ogg",
+                            "Content-Length": str(len(audio_data))
+                        },
+                        timeout=60
+                    )
+                    
+                    if put_response.status_code not in [200, 201]:
+                        logger.error(f"❌ Ошибка загрузки: {put_response.status_code}")
+                        continue
+                    
+                    logger.info(f"✅ Аудио успешно загружено")
+                    
+                    # ШАГ 3: Отправляем сообщение
+                    logger.info(f"📡 Отправляем сообщение с голосом...")
+                    
+                    if method["name"] == "X-API-Key":
+                        headers = {"X-API-Key": MAX_TOKEN}
+                    elif method["name"] == "Bearer":
+                        headers = {"Authorization": f"Bearer {MAX_TOKEN}"}
+                    else:
+                        headers = {}
+                    
+                    send_response = requests.post(
+                        "https://api.max.ru/v1/voice/send",
+                        headers=headers,
+                        json={
+                            "chat_id": chat_id,
+                            "voice_file": upload_url,
+                            "type": "voice"
+                        },
+                        timeout=30
+                    )
+                    
+                    if send_response.status_code == 200:
+                        logger.info(f"✅ Голосовое сообщение отправлено")
+                        return True
+                    else:
+                        logger.error(f"❌ Ошибка отправки: {send_response.status_code} - {send_response.text}")
+                        continue
+                        
                 elif response.status_code == 401:
-                    logger.warning(f"⚠️ Ошибка 401 для метода {method['name']}: {response.text}")
+                    logger.warning(f"⚠️ Ошибка 401 для метода {method['name']}")
+                    continue
+                else:
+                    logger.warning(f"⚠️ Неожиданный статус {response.status_code} для {method['name']}")
                     continue
                     
+            except requests.exceptions.Timeout as e:
+                logger.warning(f"⚠️ Таймаут для метода {method['name']} (попытка {attempt + 1}/3): {e}")
+                continue
+            except requests.exceptions.ConnectionError as e:
+                logger.warning(f"⚠️ Ошибка соединения для {method['name']} (попытка {attempt + 1}/3): {e}")
+                continue
             except Exception as e:
                 logger.error(f"❌ Ошибка при запросе через {method['name']}: {e}")
                 continue
         
-        if not upload_url:
-            logger.error("❌ Не удалось получить URL для загрузки")
-            return False
-        
-        # ШАГ 2: Загружаем аудио
-        logger.info(f"📡 ШАГ 2: загружаем аудио ({len(audio_data)} байт)...")
-        
-        try:
-            response = requests.put(
-                upload_url,
-                data=audio_data,
-                headers={
-                    "Content-Type": "audio/ogg",
-                    "Content-Length": str(len(audio_data))
-                },
-                timeout=30
-            )
-            
-            if response.status_code not in [200, 201]:
-                logger.error(f"❌ Ошибка загрузки: {response.status_code}")
-                return False
-                
-            logger.info(f"✅ Аудио успешно загружено")
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка при загрузке аудио: {e}")
-            return False
-        
-        # ШАГ 3: Отправляем сообщение
-        logger.info(f"📡 ШАГ 3: отправляем сообщение с голосом...")
-        
-        try:
-            if upload_method == "X-API-Key":
-                headers = {"X-API-Key": MAX_TOKEN}
-            elif upload_method == "Bearer":
-                headers = {"Authorization": f"Bearer {MAX_TOKEN}"}
-            else:
-                headers = {}
-            
-            response = requests.post(
-                "https://api.max.ru/v1/voice/send",
-                headers=headers,
-                json={
-                    "chat_id": chat_id,
-                    "voice_file": upload_url,
-                    "type": "voice"
-                },
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                logger.info(f"✅ Голосовое сообщение отправлено")
-                return True
-            else:
-                logger.error(f"❌ Ошибка отправки: {response.status_code}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ Ошибка при отправке: {e}")
-            return False
-            
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка: {e}")
-        return False
+        # Если все методы не сработали, ждём перед следующей попыткой
+        if attempt < 2:
+            wait_time = 2 ** attempt
+            logger.info(f"🔄 Пауза {wait_time}с перед следующей попыткой...")
+            time.sleep(wait_time)
+    
+    logger.error("❌ Не удалось отправить голосовое сообщение после 3 попыток")
+    return False
 
 
 # ✅ ДОБАВЛЯЕМ АЛИАС ДЛЯ СОВМЕСТИМОСТИ
@@ -167,7 +169,7 @@ send_voice_to_max = send_voice_message
 
 
 def get_voice_message_url(message_id: int) -> Optional[str]:
-    """Получает URL голосового сообщения"""
+    """Получает URL голосового сообщения с повторными попытками"""
     try:
         if not MAX_TOKEN:
             return None
@@ -177,24 +179,37 @@ def get_voice_message_url(message_id: int) -> Optional[str]:
             {"name": "Bearer", "headers": {"Authorization": f"Bearer {MAX_TOKEN}"}}
         ]
         
-        for method in auth_methods:
-            try:
-                response = requests.get(
-                    f"https://api.max.ru/v1/voice/message/{message_id}",
-                    headers=method["headers"],
-                    timeout=10
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    voice_url = data.get("voice_url") or data.get("audio_url")
-                    if voice_url:
-                        logger.info(f"✅ Получен URL голоса")
-                        return voice_url
+        for attempt in range(3):
+            for method in auth_methods:
+                try:
+                    response = requests.get(
+                        f"https://api.max.ru/v1/voice/message/{message_id}",
+                        headers=method["headers"],
+                        timeout=30
+                    )
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        voice_url = data.get("voice_url") or data.get("audio_url")
+                        if voice_url:
+                            logger.info(f"✅ Получен URL голоса через {method['name']}")
+                            return voice_url
+                    elif response.status_code == 401:
+                        logger.warning(f"⚠️ Ошибка 401 для {method['name']}")
+                        continue
                         
-            except Exception as e:
-                logger.error(f"❌ Ошибка: {e}")
-                continue
+                except requests.exceptions.Timeout:
+                    logger.warning(f"⚠️ Таймаут для {method['name']} (попытка {attempt + 1}/3)")
+                    continue
+                except requests.exceptions.ConnectionError as e:
+                    logger.warning(f"⚠️ Ошибка соединения для {method['name']} (попытка {attempt + 1}/3): {e}")
+                    continue
+                except Exception as e:
+                    logger.error(f"❌ Ошибка: {e}")
+                    continue
+            
+            if attempt < 2:
+                time.sleep(2 ** attempt)
         
         return None
         
