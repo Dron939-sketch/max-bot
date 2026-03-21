@@ -5,6 +5,7 @@
 """
 
 import logging
+import time  # ✅ ДОБАВЛЕНО
 import threading
 from typing import Optional
 
@@ -26,7 +27,7 @@ def log_tale_event(user_id: int, tale_title: str, issue: str):
             {
                 'tale_title': tale_title,
                 'issue': issue,
-                'timestamp': time.time()
+                'timestamp': time.time()  # ✅ теперь time импортирован
             }
         )
     except Exception as e:
