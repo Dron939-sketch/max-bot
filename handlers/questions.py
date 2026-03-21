@@ -1378,25 +1378,25 @@ def process_text_question_sync(
         )
         
         # Генерируем и отправляем голосовой ответ
-try:
-    # Создаем новый event loop для асинхронной операции
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        audio_data = loop.run_until_complete(text_to_speech(response, mode_name))
-        if audio_data:
-            # ✅ send_voice_to_max - СИНХРОННАЯ функция (без await)
-            success = send_voice_to_max(message.chat.id, audio_data)
-            if success:
-                logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
-            else:
-                logger.warning(f"⚠️ Не удалось отправить голос пользователю {user_id}")
-        else:
-            logger.warning(f"⚠️ Не удалось сгенерировать голос для пользователя {user_id}")
-    finally:
-        loop.close()
-except Exception as e:
-    logger.error(f"❌ Ошибка при отправке голоса: {e}", exc_info=True)
+        try:
+            # Создаем новый event loop для асинхронной операции
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                audio_data = loop.run_until_complete(text_to_speech(response, mode_name))
+                if audio_data:
+                    # ✅ send_voice_to_max - СИНХРОННАЯ функция (без await)
+                    success = send_voice_to_max(message.chat.id, audio_data)
+                    if success:
+                        logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
+                    else:
+                        logger.warning(f"⚠️ Не удалось отправить голос пользователю {user_id}")
+                else:
+                    logger.warning(f"⚠️ Не удалось сгенерировать голос для пользователя {user_id}")
+            finally:
+                loop.close()
+        except Exception as e:
+            logger.error(f"❌ Ошибка при отправке голоса: {e}", exc_info=True)
         
         # Сбрасываем состояние
         set_state(user_id, TestStates.awaiting_question)
