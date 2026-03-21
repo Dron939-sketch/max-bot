@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик голосовых сообщений для MAX
-Версия 4.1 - ИСПРАВЛЕНО: добавлен chat_id при отправке сообщения
+Версия 4.2 - УНИВЕРСАЛЬНАЯ: автоопределение формата API
 """
 
 import logging
@@ -12,6 +12,7 @@ import asyncio
 import requests
 import time
 import traceback
+import json
 from typing import Optional, Dict, Any, List
 
 from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -32,111 +33,161 @@ _voice_cache_time = {}
 
 def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.ogg") -> bool:
     """
-    Отправляет голосовое сообщение через официальное API MAX
-    Документация: https://platform-api.max.ru/docs
+    Универсальная отправка голосового сообщения через API MAX
+    Автоматически пробует разные форматы
     """
     if not MAX_TOKEN:
         logger.error("❌ MAX_TOKEN не задан в .env файле")
         return False
     
-    # ✅ ПРАВИЛЬНЫЙ формат авторизации
     headers = {"Authorization": MAX_TOKEN}
     
-    # 3 попытки
-    for attempt in range(3):
-        try:
-            # ШАГ 1: Получаем URL для загрузки
-            logger.info(f"📡 Попытка {attempt + 1}/3: запрос URL для загрузки аудио")
-            response = requests.post(
-                f"{MAX_API_BASE_URL}/uploads?type=audio",
-                headers=headers,
-                timeout=30
-            )
-            
-            if response.status_code != 200:
-                logger.error(f"❌ Ошибка получения URL: {response.status_code} - {response.text}")
-                continue
-            
-            data = response.json()
-            upload_url = data.get("url")
-            upload_token = data.get("token")
-            
-            if not upload_url or not upload_token:
-                logger.error("❌ Нет url или token в ответе")
-                continue
-            
-            logger.info(f"✅ Получен URL для загрузки")
-            
-            # ШАГ 2: Загружаем аудио
-            logger.info(f"📡 Загрузка аудио ({len(audio_data)} байт)...")
-            
-            files = {
-                'data': (filename, audio_data, 'audio/ogg')
+    # Разные форматы отправки сообщения для перебора
+    message_formats = [
+        {
+            "name": "format_1 (chat_id как int)",
+            "data": {
+                "chat_id": chat_id,
+                "text": "",
+                "attachments": [{"type": "audio", "payload": {"token": None}}]
             }
-            
-            upload_response = requests.post(
-                upload_url,
-                files=files,
-                timeout=60
-            )
-            
-            if upload_response.status_code not in [200, 201]:
-                logger.error(f"❌ Ошибка загрузки: {upload_response.status_code} - {upload_response.text}")
-                continue
-            
-            logger.info(f"✅ Аудио успешно загружено")
-            
-            # Небольшая пауза для обработки файла на сервере
-            time.sleep(1)
-            
-            # ШАГ 3: Отправляем сообщение с вложением
-            logger.info(f"📡 Отправка сообщения")
-            
-            # ✅ ИСПРАВЛЕНО: добавлен chat_id
-            message_data = {
-                "chat_id": chat_id,  # ← КЛЮЧЕВОЕ ПОЛЕ!
-                "text": "",  # Пустой текст для голосового сообщения
-                "attachments": [
-                    {
-                        "type": "audio",
-                        "payload": {
-                            "token": upload_token
-                        }
-                    }
-                ]
+        },
+        {
+            "name": "format_2 (chat_id как string)",
+            "data": {
+                "chat_id": str(chat_id),
+                "text": "",
+                "attachments": [{"type": "audio", "payload": {"token": None}}]
             }
-            
-            send_response = requests.post(
-                f"{MAX_API_BASE_URL}/messages",
-                headers=headers,
-                json=message_data,
-                timeout=30
-            )
-            
-            if send_response.status_code == 200:
-                logger.info(f"✅ Голосовое сообщение отправлено")
-                return True
-            else:
-                logger.error(f"❌ Ошибка отправки: {send_response.status_code} - {send_response.text}")
-                continue
-                
-        except requests.exceptions.Timeout as e:
-            logger.warning(f"⚠️ Таймаут (попытка {attempt + 1}/3): {e}")
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-            continue
-        except requests.exceptions.ConnectionError as e:
-            logger.warning(f"⚠️ Ошибка соединения (попытка {attempt + 1}/3): {e}")
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-            continue
-        except Exception as e:
-            logger.error(f"❌ Ошибка (попытка {attempt + 1}/3): {e}")
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-            continue
+        },
+        {
+            "name": "format_3 (user_id)",
+            "data": {
+                "user_id": chat_id,
+                "text": "",
+                "attachments": [{"type": "audio", "payload": {"token": None}}]
+            }
+        },
+        {
+            "name": "format_4 (receiver)",
+            "data": {
+                "receiver": {"id": str(chat_id), "type": "user"},
+                "text": "",
+                "attachments": [{"type": "audio", "payload": {"token": None}}]
+            }
+        },
+        {
+            "name": "format_5 (recipient_id)",
+            "data": {
+                "recipient_id": str(chat_id),
+                "text": "",
+                "attachments": [{"type": "audio", "payload": {"token": None}}]
+            }
+        },
+        {
+            "name": "format_6 (to)",
+            "data": {
+                "to": str(chat_id),
+                "text": "",
+                "attachments": [{"type": "audio", "payload": {"token": None}}]
+            }
+        },
+        {
+            "name": "format_7 (peer_id)",
+            "data": {
+                "peer_id": chat_id,
+                "text": "",
+                "attachments": [{"type": "audio", "payload": {"token": None}}]
+            }
+        }
+    ]
     
-    logger.error("❌ Не удалось отправить голосовое сообщение после 3 попыток")
+    # Пробуем отправить голос с разными форматами
+    for attempt in range(3):
+        for fmt in message_formats:
+            try:
+                # ШАГ 1: Получаем URL для загрузки
+                logger.info(f"📡 Попытка {attempt + 1}/3, формат: {fmt['name']}")
+                
+                response = requests.post(
+                    f"{MAX_API_BASE_URL}/uploads?type=audio",
+                    headers=headers,
+                    timeout=30
+                )
+                
+                if response.status_code != 200:
+                    logger.error(f"❌ Ошибка получения URL: {response.status_code} - {response.text}")
+                    continue
+                
+                data = response.json()
+                upload_url = data.get("url")
+                upload_token = data.get("token")
+                
+                if not upload_url or not upload_token:
+                    logger.error("❌ Нет url или token в ответе")
+                    continue
+                
+                logger.info(f"✅ Получен URL для загрузки, token={upload_token[:20]}...")
+                
+                # ШАГ 2: Загружаем аудио
+                logger.info(f"📡 Загрузка аудио ({len(audio_data)} байт)...")
+                
+                files = {'data': (filename, audio_data, 'audio/ogg')}
+                upload_response = requests.post(upload_url, files=files, timeout=60)
+                
+                if upload_response.status_code not in [200, 201]:
+                    logger.error(f"❌ Ошибка загрузки: {upload_response.status_code} - {upload_response.text}")
+                    continue
+                
+                logger.info(f"✅ Аудио успешно загружено")
+                time.sleep(1)
+                
+                # ШАГ 3: Отправляем сообщение с текущим форматом
+                message_data = fmt["data"].copy()
+                # Вставляем token в attachments
+                for attachment in message_data.get("attachments", []):
+                    attachment["payload"]["token"] = upload_token
+                
+                # Добавляем type, если его нет
+                if "type" not in message_data and "chat_id" in message_data:
+                    message_data["type"] = "private"
+                
+                logger.info(f"📡 Отправка сообщения с форматом {fmt['name']}")
+                logger.info(f"📦 Данные: {json.dumps(message_data, ensure_ascii=False)[:500]}")
+                
+                send_response = requests.post(
+                    f"{MAX_API_BASE_URL}/messages",
+                    headers=headers,
+                    json=message_data,
+                    timeout=30
+                )
+                
+                logger.info(f"📡 Статус ответа: {send_response.status_code}")
+                logger.info(f"📄 Ответ сервера: {send_response.text[:500]}")
+                
+                if send_response.status_code == 200:
+                    logger.info(f"✅ Голосовое сообщение отправлено! Формат: {fmt['name']}")
+                    return True
+                else:
+                    logger.warning(f"⚠️ Формат {fmt['name']} не подошел: {send_response.status_code} - {send_response.text[:200]}")
+                    continue
+                
+            except requests.exceptions.Timeout as e:
+                logger.warning(f"⚠️ Таймаут в формате {fmt['name']}: {e}")
+                continue
+            except requests.exceptions.ConnectionError as e:
+                logger.warning(f"⚠️ Ошибка соединения в формате {fmt['name']}: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"❌ Ошибка в формате {fmt['name']}: {e}")
+                continue
+        
+        if attempt < 2:
+            wait_time = 2 ** attempt
+            logger.info(f"🔄 Пауза {wait_time}с перед следующей попыткой...")
+            time.sleep(wait_time)
+    
+    logger.error("❌ Не удалось отправить голосовое сообщение после всех попыток")
     return False
 
 
@@ -208,8 +259,7 @@ def download_voice_message(voice_url: str) -> Optional[bytes]:
 
 async def handle_voice_message(message: Message, state):
     """
-    Обработка голосового сообщения - ИСПРАВЛЕННАЯ ВЕРСИЯ
-    Использует правильное API MAX и передает system_prompt
+    Обработка голосового сообщения - ПОЛНАЯ ВЕРСИЯ
     """
     user_id = message.from_user.id
     
@@ -295,7 +345,6 @@ async def handle_voice_message(message: Message, state):
             )
             return
         
-        # ✅ ДОБАВЛЯЕМ ЛОГИ ПЕРЕД ВЫЗОВОМ
         logger.info(f"🎤 ДО ВЫЗОВА speech_to_text, temp_file={temp_file}")
         logger.info(f"🎤 Файл существует: {os.path.exists(temp_file)}")
         logger.info(f"🎤 Размер файла: {os.path.getsize(temp_file)} байт")
@@ -315,7 +364,6 @@ async def handle_voice_message(message: Message, state):
         logger.info(f"🎙 Вызов speech_to_text для файла: {temp_file}")
         recognized_text = await speech_to_text(temp_file)
         
-        # ✅ ДОБАВЛЯЕМ ЛОГИ ПОСЛЕ ВЫЗОВА
         logger.info(f"🎤 ПОСЛЕ ВЫЗОВА speech_to_text, recognized_text='{recognized_text}'")
         logger.info(f"🔍 РАСПОЗНАННЫЙ ТЕКСТ: '{recognized_text}'")
         logger.info(f"🔍 ТИП: {type(recognized_text)}")
