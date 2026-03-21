@@ -32,6 +32,7 @@ ADMIN_IDS = [532205848]
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 DEEPGRAM_API_URL = "https://api.deepgram.com/v1/listen"
 YANDEX_TTS_API_URL = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
+MAX_API_BASE_URL = "https://platform-api.max.ru"  # ПРАВИЛЬНЫЙ URL MAX API
 
 
 # ============================================
