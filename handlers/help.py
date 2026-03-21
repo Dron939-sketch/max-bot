@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Обработчики помощи и сказок для MAX
-ВЕРСИЯ 2.2 - ИСПРАВЛЕНО: используется sync_db
+Обработчики помощи для MAX
+ВЕРСИЯ 2.3 - УДАЛЕН show_tale (перенесен в tales.py)
 """
 
 import logging
@@ -18,7 +18,6 @@ from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 from config import COMMUNICATION_MODES
 from message_utils import safe_send_message, safe_edit_message
 from keyboards import get_back_keyboard
-from hypno_module import TherapeuticTales
 from formatters import bold
 
 # Импорты из state
@@ -31,12 +30,6 @@ from state import (
 from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
-
-# ============================================
-# ИНИЦИАЛИЗАЦИЯ ТЕРАПЕВТИЧЕСКИХ СКАЗОК
-# ============================================
-
-tales = TherapeuticTales()
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -91,22 +84,6 @@ def log_help_event(user_id: int, action: str, category: str = None):
         logger.debug(f"💾 Событие помощи {action} для {user_id} сохранено в БД")
     except Exception as e:
         logger.error(f"❌ Ошибка логирования события помощи для {user_id}: {e}")
-
-def log_tale_event(user_id: int, tale_title: str, issue: str):
-    """Синхронно логирует просмотр сказки в БД"""
-    try:
-        sync_db.log_event(
-            user_id,
-            'tale_viewed',
-            {
-                'tale_title': tale_title,
-                'issue': issue,
-                'timestamp': time.time()
-            }
-        )
-        logger.debug(f"💾 Просмотр сказки для {user_id} сохранен в БД")
-    except Exception as e:
-        logger.error(f"❌ Ошибка логирования просмотра сказки для {user_id}: {e}")
 
 def log_benefits_view(user_id: int):
     """Синхронно логирует просмотр преимуществ теста"""
@@ -338,77 +315,6 @@ def handle_help_category(call: CallbackQuery, category: str):
     user_state_data[user_id]["question_context"] = category
 
 # ============================================
-# ТЕРАПЕВТИЧЕСКИЕ СКАЗКИ
-# ============================================
-
-def show_tale(call: CallbackQuery):
-    """
-    Показывает случайную терапевтическую сказку
-    """
-    user_id = call.from_user.id
-    context = get_user_context_obj(user_id)
-    user_data_dict = get_user_data_dict(user_id)
-    
-    # Определяем текущую проблему на основе профиля
-    scores = {}
-    for k in ["СБ", "ТФ", "УБ", "ЧВ"]:
-        levels = user_data_dict.get("behavioral_levels", {}).get(k, [])
-        scores[k] = sum(levels) / len(levels) if levels else 3.0
-    
-    # Находим самый слабый вектор
-    if scores:
-        min_vector = min(scores.items(), key=lambda x: x[1])
-        vector = min_vector[0]
-        
-        # Маппинг векторов на проблемы для сказок
-        issue_map = {
-            "СБ": "страх",
-            "ТФ": "деньги",
-            "УБ": "понимание",
-            "ЧВ": "отношения"
-        }
-        issue = issue_map.get(vector, "рост")
-    else:
-        issue = "рост"
-    
-    # Получаем сказку
-    try:
-        tale = tales.get_tale_for_issue(issue)
-        tale_title = tale.get("title", "Сказка на ночь")
-    except:
-        tale = None
-        tale_title = "Сказка на ночь"
-    
-    if not tale:
-        # Если сказка не найдена, используем заглушку
-        tale = {
-            "title": "Сказка на ночь",
-            "text": "Жил-был человек, который искал ответы. Он ходил по миру, спрашивал мудрецов, читал книги. И однажды понял, что все ответы уже были внутри него. Просто нужно было время, чтобы их услышать."
-        }
-    
-    # ✅ ИСПРАВЛЕНО: синхронный вызов
-    threading.Thread(target=log_tale_event, args=(user_id, tale_title, issue), daemon=True).start()
-    
-    # Формируем текст
-    text = f"📖 <b>{tale['title']}</b>\n\n{tale['text']}"
-    
-    # Клавиатура
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(
-        InlineKeyboardButton("📖 ЕЩЁ СКАЗКУ", callback_data="show_tale"),
-        InlineKeyboardButton("🧠 К ПОРТРЕТУ", callback_data="show_results")
-    )
-    keyboard.row(InlineKeyboardButton("❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions"))
-    
-    safe_send_message(
-        call.message,
-        text,
-        reply_markup=keyboard,
-        parse_mode='HTML',
-        delete_previous=True
-    )
-
-# ============================================
 # ПОКАЗ ПРЕИМУЩЕСТВ ТЕСТА
 # ============================================
 
@@ -578,13 +484,13 @@ def process_help_question(message: Message, user_id: int, text: str, category: s
 __all__ = [
     'show_help',
     'handle_help_category',
-    'show_tale',
+    # 'show_tale',  # ✅ УДАЛЕНО - теперь в tales.py
     'show_benefits',
     'show_weekend_ideas',
     'process_help_question',
     'get_help_keyboard',
     'log_help_event',
-    'log_tale_event',
+    # 'log_tale_event',  # ✅ УДАЛЕНО - теперь в tales.py
     'log_benefits_view',
     'log_weekend_ideas_view'
 ]
