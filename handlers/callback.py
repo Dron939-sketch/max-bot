@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик всех callback-запросов для MAX
-Версия 2.5 - ИСПРАВЛЕНА ОШИБКА UnboundLocalError
+Версия 2.6 - ИСПРАВЛЕНЫ ВЫЗОВЫ ФУНКЦИЙ ЭТАПОВ
 """
 
 import logging
@@ -149,7 +149,8 @@ def restart_test(call: CallbackQuery):
     
     # Показываем введение в этап 1
     from handlers.stages import show_stage_1_intro
-    show_stage_1_intro(call.message)
+    state_data = get_state_data(user_id)
+    show_stage_1_intro(call.message, user_id, state_data)
 
 # ============================================
 # АСИНХРОННЫЙ ОСНОВНОЙ ОБРАБОТЧИК
@@ -228,11 +229,11 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "show_stage_1_intro":
         logger.info(f"📢 show_stage_1_intro для пользователя {user_id}")
-        show_stage_1_intro(call.message)  # ← исправлено: только message
+        show_stage_1_intro(call.message, user_id, state_data)
     
     elif data == "start_stage_1":
         logger.info(f"🎬 start_stage_1 для пользователя {user_id}")
-        start_stage_1(call.message)  # ← исправлено: только message
+        start_stage_1(call.message, user_id, state_data)
     
     elif data.startswith("stage1_"):
         logger.info(f"📥 stage1 ответ: {data}")
@@ -265,18 +266,18 @@ async def handle_sync_callback(call: CallbackQuery):
         
         # Показываем введение в этап 1
         from handlers.stages import show_stage_1_intro
-        show_stage_1_intro(call.message)
+        show_stage_1_intro(call.message, user_id, state_data)
     
     # ============================================
     # ЭТАП 2
     # ============================================
     elif data == "show_stage_2_intro":
         logger.info(f"📢 show_stage_2_intro для пользователя {user_id}")
-        show_stage_2_intro(call.message)  # ← исправлено: только message
+        show_stage_2_intro(call.message, user_id, state_data)
     
     elif data == "start_stage_2":
         logger.info(f"🎬 start_stage_2 для пользователя {user_id}")
-        start_stage_2(call.message)  # ← исправлено: только message
+        start_stage_2(call.message, user_id, state_data)
     
     elif data.startswith("stage2_"):
         logger.info(f"📥 stage2 ответ: {data}")
@@ -287,11 +288,11 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "show_stage_3_intro":
         logger.info(f"📢 show_stage_3_intro для пользователя {user_id}")
-        show_stage_3_intro(call.message)  # ← исправлено: только message
+        show_stage_3_intro(call.message, user_id, state_data)
     
     elif data == "start_stage_3":
         logger.info(f"🎬 start_stage_3 для пользователя {user_id}")
-        start_stage_3(call.message)  # ← исправлено: только message
+        start_stage_3(call.message, user_id, state_data)
     
     elif data.startswith("stage3_"):
         logger.info(f"📥 stage3 ответ: {data}")
@@ -302,11 +303,11 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "show_stage_4_intro":
         logger.info(f"📢 show_stage_4_intro для пользователя {user_id}")
-        show_stage_4_intro(call.message)  # ← исправлено: только message
+        show_stage_4_intro(call.message, user_id, state_data)
     
     elif data == "start_stage_4":
         logger.info(f"🎬 start_stage_4 для пользователя {user_id}")
-        start_stage_4(call.message)  # ← исправлено: только message
+        start_stage_4(call.message, user_id, state_data)
     
     elif data.startswith("stage4_"):
         logger.info(f"📥 stage4 ответ: {data}")
@@ -317,11 +318,11 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "show_stage_5_intro":
         logger.info(f"📢 show_stage_5_intro для пользователя {user_id}")
-        show_stage_5_intro(call.message)  # ← исправлено: только message
+        show_stage_5_intro(call.message, user_id, state_data)
     
     elif data == "start_stage_5":
         logger.info(f"🎬 start_stage_5 для пользователя {user_id}")
-        start_stage_5(call.message)  # ← исправлено: только message
+        start_stage_5(call.message, user_id, state_data)
     
     elif data.startswith("stage5_"):
         logger.info(f"📥 stage5 ответ: {data}")
