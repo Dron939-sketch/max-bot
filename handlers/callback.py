@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик всех callback-запросов для MAX
-Версия 2.2 - ИСПРАВЛЕНО: добавлен непустой ответ на callback
+Версия 2.3 - ИСПРАВЛЕНО: импорт сказок из tales.py
 """
 
 import logging
@@ -10,6 +10,7 @@ import asyncio
 import time
 import traceback
 from typing import Optional
+
 from maxibot.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 # Импорты из наших модулей
@@ -67,7 +68,9 @@ from handlers.questions import (
 )
 
 # Импорты обработчиков помощи
-from handlers.help import show_help, show_benefits, show_tale, show_weekend_ideas
+from handlers.help import show_help, show_benefits, show_weekend_ideas
+# ✅ show_tale теперь импортируется из tales.py
+from handlers.tales import show_tale
 
 # Импорты обработчиков профиля
 from handlers.profile import (
@@ -509,6 +512,7 @@ async def handle_sync_callback(call: CallbackQuery):
     
     elif data == "show_tale" or data == "ask_tale":
         logger.info(f"📚 show_tale для пользователя {user_id}")
+        # ✅ show_tale уже импортирован из tales.py
         show_tale(call)
     
     elif data == "weekend_ideas":
@@ -543,10 +547,9 @@ async def handle_sync_callback(call: CallbackQuery):
         show_question_input(call)
     
     elif data == "ask_hypnosis":
-    logger.info(f"🧠 ask_hypnosis для пользователя {user_id}")
-    # ✅ Импортируем из tales.py, а не из help.py
-    from handlers.tales import show_tale
-    show_tale(call)
+        logger.info(f"🧠 ask_hypnosis для пользователя {user_id}")
+        # ✅ show_tale уже импортирован из tales.py
+        show_tale(call)
     
     # ============================================
     # ПРОФИЛЬ (синхронные версии)
