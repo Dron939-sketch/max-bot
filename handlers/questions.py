@@ -3,8 +3,7 @@
 """
 ОБЪЕДИНЕННЫЙ ФАЙЛ: Обработчики вопросов тестирования И умных вопросов
 Версия для MAX - ПОЛНАЯ с голосовой поддержкой
-ИСПРАВЛЕНО: убраны HTML-теги, используется Markdown, исправлено дублирование сообщений, добавлена блокировка
-ИСПРАВЛЕНО (v2.2): Добавлена поддержка БД, исправлены асинхронные вызовы
+ИСПРАВЛЕНО: добавлена передача system_prompt в DeepSeek
 """
 
 import logging
@@ -1293,24 +1292,19 @@ def process_text_question_sync(
         context_obj = get_user_context_obj(user_id)
         mode_name = context_obj.communication_mode if context_obj else "coach"
         
-        # Формируем промпт для ИИ
+        # ✅ ПОЛУЧАЕМ system_prompt ИЗ КОНФИГА
+        mode_config = COMMUNICATION_MODES.get(mode_name, COMMUNICATION_MODES["coach"])
+        system_prompt = mode_config.get("system_prompt", "")
+        
+        logger.info("=" * 80)
+        logger.info(f"🔍 ДИАГНОСТИКА process_text_question_sync:")
+        logger.info(f"📝 Текст вопроса: {text[:100]}...")
+        logger.info(f"📝 mode_name: {mode_name}")
+        logger.info(f"📝 system_prompt (первые 200 символов): {system_prompt[:200]}...")
+        logger.info("=" * 80)
+        
+        # Формируем УПРОЩЕННЫЙ промпт (стиль уже в system_prompt)
         prompt = f"""
-Ты - {COMMUNICATION_MODES[mode_name]['name']} Фреди. Ты общаешься с пользователем.
-
-❗️ВАЖНЕЙШИЕ ПРАВИЛА ДЛЯ ТВОИХ ОТВЕТОВ:
-
-1. Твой текст БУДЕТ ОЗВУЧЕН, поэтому:
-   - НЕ ИСПОЛЬЗУЙ НИКАКИЕ СИМВОЛЫ: * # _ - • → [ ] ( ) 
-   - НЕ ИСПОЛЬЗУЙ НУМЕРАЦИЮ (1., 2., 3.)
-   - НЕ ИСПОЛЬЗУЙ МАРКИРОВАННЫЕ СПИСКИ
-   - Пиши ТОЛЬКО ТЕКСТ, как в разговоре
-
-2. Стиль речи - теплый, эмпатичный психологический разговор:
-   - Используй имя пользователя: {get_user_name(user_id)}
-   - Говори короткими предложениями
-   - Добавляй паузы с помощью многоточий...
-   - Задавай риторические вопросы
-
 Вопрос пользователя: {text}
 
 Информация о пользователе:
@@ -1321,13 +1315,21 @@ def process_text_question_sync(
 Напиши свой ответ ТОЛЬКО ТЕКСТОМ, готовым для озвучивания.
 """
         
-        # Получаем ответ от ИИ (синхронная обертка)
+        logger.info(f"📝 Промпт для DeepSeek:\n{prompt}")
+        
+        # ✅ ПРАВИЛЬНЫЙ ВЫЗОВ С system_prompt
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            response = loop.run_until_complete(call_deepseek(prompt, max_tokens=1000))
+            response = loop.run_until_complete(call_deepseek(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                max_tokens=1000
+            ))
         finally:
             loop.close()
+        
+        logger.info(f"📝 Ответ от DeepSeek: {response[:200]}..." if response else "❌ Ответ пустой")
         
         if not response:
             response = "Извините, я немного задумался. Можете повторить вопрос?"
@@ -1453,6 +1455,8 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
     try:
         # Распознаём речь
         recognized_text = await speech_to_text(file_path)
+        
+        logger.info(f"🎤 process_voice_message_async: распознанный текст = '{recognized_text}'")
         
         if not recognized_text:
             if status_msg:
