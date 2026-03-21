@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик голосовых сообщений для MAX
-Версия 4.3 - ИСПРАВЛЕНО: правильный формат API MAX из документации
+Версия 4.4 - ИСПРАВЛЕНО: увеличенная пауза и обработка attachment.not.ready
 """
 
 import logging
@@ -79,7 +79,9 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
                 continue
             
             logger.info(f"✅ Аудио успешно загружено")
-            time.sleep(1)
+            
+            # ✅ УВЕЛИЧЕННАЯ ПАУЗА для обработки файла на сервере
+            time.sleep(2)
             
             # ШАГ 3: Отправляем сообщение (правильный формат из документации)
             logger.info(f"📡 Отправка сообщения")
@@ -107,6 +109,22 @@ def send_voice_message(chat_id: int, audio_data: bytes, filename: str = "voice.o
             
             logger.info(f"📡 Статус ответа: {send_response.status_code}")
             logger.info(f"📄 Ответ сервера: {send_response.text[:500]}")
+            
+            # ✅ ОБРАБОТКА ОШИБКИ: файл еще не готов
+            if send_response.status_code == 400 and "attachment.not.ready" in send_response.text:
+                logger.warning("⚠️ Аудио еще обрабатывается на сервере, ждем 2 секунды и повторяем...")
+                time.sleep(2)
+                
+                # Повторная отправка с тем же токеном
+                send_response = requests.post(
+                    f"{MAX_API_BASE_URL}/messages?chat_id={chat_id}",
+                    headers=headers,
+                    json=message_data,
+                    timeout=30
+                )
+                
+                logger.info(f"📡 Повторная отправка, статус: {send_response.status_code}")
+                logger.info(f"📄 Ответ: {send_response.text[:500]}")
             
             if send_response.status_code == 200:
                 logger.info(f"✅ Голосовое сообщение отправлено!")
