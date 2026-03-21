@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Сервисные функции для работы с API и генерации ответов
-Версия 9.8.2 - ИСПРАВЛЕНО: проблемы с циклом событий в Python 3.14
+Версия 9.8.3 - С ДИАГНОСТИКОЙ speech_to_text
 """
 
 import os
@@ -278,13 +278,18 @@ async def call_deepseek(
 
 
 # ============================================
-# DEEPGRAM API (РАСПОЗНАВАНИЕ РЕЧИ)
+# DEEPGRAM API (РАСПОЗНАВАНИЕ РЕЧИ) - С ДИАГНОСТИКОЙ
 # ============================================
 
 async def speech_to_text(audio_file_path: str) -> Optional[str]:
     """
     Распознает речь из аудиофайла через Deepgram API
     """
+    logger.info("=" * 80)
+    logger.info("🔍 ДИАГНОСТИКА speech_to_text:")
+    logger.info(f"📁 audio_file_path: {audio_file_path}")
+    logger.info(f"🔑 DEEPGRAM_API_KEY: {'✅ есть' if DEEPGRAM_API_KEY else '❌ НЕТ'}")
+    
     if not DEEPGRAM_API_KEY:
         logger.error("❌ DEEPGRAM_API_KEY не настроен")
         return None
@@ -294,11 +299,23 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
         return None
     
     file_size = os.path.getsize(audio_file_path)
-    logger.info(f"🎤 Распознавание речи из файла: {audio_file_path} ({file_size} байт)")
+    logger.info(f"📊 Размер файла: {file_size} байт")
     
     if file_size == 0:
         logger.error("❌ Файл пустой")
         return None
+    
+    # Проверяем заголовок файла
+    try:
+        with open(audio_file_path, 'rb') as f:
+            header = f.read(4)
+            logger.info(f"📊 Заголовок файла (hex): {header.hex()}")
+            if header == b'OggS':
+                logger.info("✅ Файл в формате OGG")
+            else:
+                logger.warning(f"⚠️ Файл НЕ в формате OGG! Заголовок: {header}")
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось прочитать заголовок: {e}")
     
     headers = {
         "Authorization": f"Token {DEEPGRAM_API_KEY}",
@@ -317,7 +334,7 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
         with open(audio_file_path, 'rb') as audio_file:
             audio_data = audio_file.read()
         
-        logger.info(f"📊 Аудио данные: {len(audio_data)} байт")
+        logger.info(f"📊 Аудио данные прочитаны: {len(audio_data)} байт")
         
         client = await get_http_client()
         if client is None:
@@ -325,6 +342,10 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
             return None
         
         logger.info("📡 Отправка запроса в Deepgram...")
+        logger.info(f"📡 URL: {DEEPGRAM_API_URL}")
+        logger.info(f"📡 Headers: Authorization: Token ***, Content-Type: audio/ogg")
+        logger.info(f"📡 Params: {params}")
+        
         response = await client.post(
             DEEPGRAM_API_URL,
             headers=headers,
@@ -337,9 +358,29 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
         
         if response.status_code == 200:
             data = response.json()
-            transcript = data['results']['channels'][0]['alternatives'][0]['transcript']
-            logger.info(f"✅ Речь распознана: '{transcript}' ({len(transcript)} символов)")
-            return transcript
+            logger.info(f"📄 Deepgram ответ (первые 500 символов): {json.dumps(data, ensure_ascii=False)[:500]}")
+            
+            # Проверяем структуру ответа
+            try:
+                transcript = data['results']['channels'][0]['alternatives'][0].get('transcript', '')
+                confidence = data['results']['channels'][0]['alternatives'][0].get('confidence', 0)
+                
+                logger.info(f"🎤 Распознанный текст: '{transcript}'")
+                logger.info(f"🎤 Уверенность: {confidence}")
+                logger.info(f"🎤 Длина текста: {len(transcript)}")
+                logger.info("=" * 80)
+                
+                if transcript and transcript.strip():
+                    return transcript
+                else:
+                    logger.warning("⚠️ Deepgram вернул пустой текст")
+                    return None
+                    
+            except (KeyError, IndexError) as e:
+                logger.error(f"❌ Ошибка парсинга ответа Deepgram: {e}")
+                logger.error(f"📄 Полный ответ: {json.dumps(data, ensure_ascii=False)}")
+                return None
+                
         else:
             logger.error(f"❌ Deepgram API error {response.status_code}: {response.text[:500]}")
             return None
@@ -634,7 +675,7 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
 
 async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[str]:
     """
-    Генерирует мысли психолога на основе конфайнмент-модели
+    Генерирует мысли психолога на основе конфайнтмент-модели
     """
     logger.info(f"🧠 Генерация мыслей психолога для пользователя {user_id}")
     logger.info(f"📊 Размер входных данных: {len(str(data))} символов")
@@ -689,7 +730,7 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
         profile_json = str(profile_data)[:1000]
         confinement_json = str(confinement_data)[:1000]
     
-    prompt = f"""Проанализируй пользователя через конфайнмент-модель и дай 3 глубинные мысли.
+    prompt = f"""Проанализируй пользователя через конфайнтмент-модель и дай 3 глубинные мысли.
 
 ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:
 {profile_json}
@@ -725,7 +766,7 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
 ВАЖНО:
 - Не используй Markdown, только обычный текст
 - Не ставь лишних символов вроде "###"
-- Каждая мысль должна быть связана с конфайнмент-моделью
+- Каждая мысль должна быть связана с конфайнтмент-моделью
 - Пиши на русском, живым языком
 """
     
