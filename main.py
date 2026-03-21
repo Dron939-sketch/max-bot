@@ -142,6 +142,45 @@ from profiles import VECTORS
 from services import generate_psychologist_thought
 from weekend_planner import WeekendPlanner
 
+# ============================================
+# 🔥🔥🔥 ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ ФАЙЛОВ МИНИ-ПРИЛОЖЕНИЯ 🔥🔥🔥
+# ============================================
+
+import subprocess
+
+def ensure_miniapp_files():
+    """Скачивает файлы мини-приложения при запуске"""
+    miniapp_path = os.path.join(os.path.dirname(__file__), 'miniapp')
+    os.makedirs(miniapp_path, exist_ok=True)
+    
+    files = {
+        'index.html': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/index.html',
+        'styles.css': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/styles.css',
+        'script.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/script.js',
+        'api.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/api.js',
+        'context.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/context.js',
+        'onboarding.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/onboarding.js',
+        'test.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/test.js',
+    }
+    
+    for filename, url in files.items():
+        filepath = os.path.join(miniapp_path, filename)
+        if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+            try:
+                subprocess.run(['wget', '-O', filepath, url], check=True, capture_output=True)
+                print(f"✅ Скачан {filename} ({os.path.getsize(filepath)} байт)")
+            except Exception as e:
+                print(f"⚠️ Не удалось скачать {filename}: {e}")
+    
+    # Создаем папку для аудио
+    audio_path = os.path.join(miniapp_path, 'audio')
+    os.makedirs(audio_path, exist_ok=True)
+    print(f"✅ Папка audio создана")
+
+# Вызываем функцию загрузки файлов
+ensure_miniapp_files()
+
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
