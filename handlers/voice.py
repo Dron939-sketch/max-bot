@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик голосовых сообщений для MAX
-Версия 4.4 - ИСПРАВЛЕНО: увеличенная пауза и обработка attachment.not.ready
+Версия 4.5 - С ДИАГНОСТИКОЙ ПРОМПТА
 """
 
 import logging
@@ -222,8 +222,7 @@ def download_voice_message(voice_url: str) -> Optional[bytes]:
 
 async def handle_voice_message(message: Message, state):
     """
-    Обработка голосового сообщения - ИСПРАВЛЕННАЯ ВЕРСИЯ
-    Использует правильное API MAX и передает system_prompt
+    Обработка голосового сообщения - С ДИАГНОСТИКОЙ
     """
     user_id = message.from_user.id
     
@@ -408,6 +407,21 @@ async def handle_voice_message(message: Message, state):
             "🧠 Формирую ответ с учётом твоего профиля..."
         )
         
+        # ============================================
+        # 🔥 ДИАГНОСТИКА: ВЫВОДИМ ВСЕ ДАННЫЕ ПЕРЕД ОТПРАВКОЙ
+        # ============================================
+        logger.info("=" * 80)
+        logger.info("🔍 ДИАГНОСТИКА ПЕРЕД ОТПРАВКОЙ В DEEPSEEK:")
+        logger.info(f"📝 recognized_text: '{recognized_text}'")
+        logger.info(f"📝 mode_name: {mode_name}")
+        logger.info(f"📝 system_prompt (первые 300 символов):\n{system_prompt[:300]}...")
+        logger.info(f"📝 profile: {profile_data.get('display_name', 'не определен')}")
+        logger.info(f"📝 perception: {data.get('perception_type', 'не определен')}")
+        logger.info(f"📝 thinking_level: {data.get('thinking_level', 5)}")
+        logger.info(f"📝 context_text: {context_text[:500]}...")
+        logger.info("=" * 80)
+        # ============================================
+        
         # Формируем промпт для DeepSeek
         prompt = f"""
 Вопрос пользователя: {recognized_text}
@@ -417,6 +431,11 @@ async def handle_voice_message(message: Message, state):
 Ответь пользователю в соответствии с твоей ролью.
 """
         
+        # 🔥 ВЫВОДИМ ПОЛНЫЙ ПРОМПТ
+        logger.info("=" * 80)
+        logger.info(f"📝 ПОЛНЫЙ ПРОМПТ ДЛЯ DEEPSEEK:\n{prompt}")
+        logger.info("=" * 80)
+        
         # ✅ ВЫЗЫВАЕМ DeepSeek С system_prompt
         logger.info(f"📝 Вызов DeepSeek с system_prompt ({len(system_prompt)} символов)")
         response = await call_deepseek(
@@ -425,6 +444,12 @@ async def handle_voice_message(message: Message, state):
             max_tokens=1000,
             temperature=0.7
         )
+        
+        # 🔥 ВЫВОДИМ ОТВЕТ
+        logger.info("=" * 80)
+        logger.info(f"📝 ОТВЕТ ОТ DEEPSEEK: '{response}'")
+        logger.info(f"📏 Длина ответа: {len(response) if response else 0}")
+        logger.info("=" * 80)
         
         if not response:
             response = "Извините, я немного задумался. Можете повторить вопрос?"
