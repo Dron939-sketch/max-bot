@@ -6,9 +6,10 @@
 """
 
 import logging
-import asyncio  # ✅ ДОБАВЛЕНО!
+import asyncio
 import time
 import traceback
+import threading
 from typing import Optional, List, Dict, Any
 
 from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -304,6 +305,7 @@ def calculate_profile_confidence(profile: dict) -> float:
     
     return min(1.0, confidence)
 
+
 # ============================================
 # НОВАЯ ФУНКЦИЯ: ПОКАЗ ПРЕДВАРИТЕЛЬНОГО ПРОФИЛЯ
 # ============================================
@@ -577,16 +579,35 @@ async def show_ai_profile_async(message: Message, user_id: int):
                     profile_data = data.get("profile_data", {})
                     user_name_for_morning = get_user_name(user_id) or "друг"
                     
-                    # Планируем серию из 3 утренних сообщений
-                    await morning_manager.schedule_morning_message(
-                        user_id=user_id,
-                        user_name=user_name_for_morning,
-                        scores=scores,
-                        profile_data=profile_data
-                    )
-                    logger.info(f"📅 Запланированы утренние сообщения для пользователя {user_id}")
+                    def schedule_in_background():
+                        try:
+                            # Создаем новый event loop для этого потока
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                loop.run_until_complete(
+                                    morning_manager.schedule_morning_message(
+                                        user_id=user_id,
+                                        user_name=user_name_for_morning,
+                                        scores=scores,
+                                        profile_data=profile_data
+                                    )
+                                )
+                                logger.info(f"📅 Утренние сообщения запланированы для пользователя {user_id}")
+                            finally:
+                                loop.close()
+                        except Exception as e:
+                            logger.error(f"❌ Ошибка в фоне при планировании: {e}")
+                            import traceback
+                            traceback.print_exc()
+                    
+                    # Запускаем в отдельном потоке
+                    threading.Thread(target=schedule_in_background, daemon=True).start()
+                    
             except Exception as e:
                 logger.error(f"❌ Ошибка при планировании утренних сообщений: {e}")
+                import traceback
+                traceback.print_exc()
             # ===== КОНЕЦ БЛОКА =====
             
             return
