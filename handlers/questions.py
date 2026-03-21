@@ -1434,6 +1434,13 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
     """
     Асинхронная обработка голосового сообщения пользователя
     """
+    # ✅ ПРОВЕРКА ФЛАГА - ЕСЛИ ГОЛОС УЖЕ ОБРАБАТЫВАЕТСЯ, ПРОПУСКАЕМ
+    from state import is_voice_processing
+    
+    if is_voice_processing(user_id):
+        logger.info(f"⏳ Голос для {user_id} уже обрабатывается в voice.py, пропускаем обработку в questions.py")
+        return
+    
     # 🔥🔥🔥 МАРКЕР ДЛЯ ОТЛАДКИ 🔥🔥🔥
     logger.info("=" * 80)
     logger.info("🔥🔥🔥 ВЫЗВАНА ФУНКЦИЯ process_voice_message_async ИЗ ФАЙЛА questions.py 🔥🔥🔥")
