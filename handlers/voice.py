@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик голосовых сообщений для MAX
-Версия 5.0 - МАКСИМАЛЬНАЯ ДИАГНОСТИКА
+Версия 5.1 - МАКСИМАЛЬНАЯ ДИАГНОСТИКА ВСЕХ ЭТАПОВ
 """
 
 import logging
@@ -45,8 +45,8 @@ def log_stage(stage_name: str, data: Dict[str, Any] = None):
     if data:
         for key, value in data.items():
             # Обрезаем слишком длинные значения
-            if isinstance(value, str) and len(value) > 200:
-                value = value[:200] + "..."
+            if isinstance(value, str) and len(value) > 500:
+                value = value[:500] + "... [обрезано]"
             logger.info(f"   📌 {key}: {value}")
     logger.info("█" * 100)
     logger.info("")
@@ -346,6 +346,7 @@ async def handle_voice_message(message: Message, state=None):
     
     temp_file = None
     recognized_text = None
+    response = None
     
     try:
         # ========== ЭТАП 1: СКАЧИВАНИЕ ФАЙЛА ==========
@@ -392,7 +393,7 @@ async def handle_voice_message(message: Message, state=None):
         except Exception as e:
             log_error("STEP1_HEADER_READ", e, {})
         
-        # ========== ЭТАП 2: РАСПОЗНАВАНИЕ РЕЧИ ==========
+        # ========== ЭТАП 2: РАСПОЗНАВАНИЕ РЕЧИ (DEEPGRAM) ==========
         log_stage("STEP2_STT_START", {
             "api_key_configured": bool(DEEPGRAM_API_KEY),
             "temp_file": temp_file
@@ -409,6 +410,14 @@ async def handle_voice_message(message: Message, state=None):
         stt_start = time.time()
         recognized_text = await speech_to_text(temp_file)
         stt_duration = time.time() - stt_start
+        
+        # 🔥 ДИАГНОСТИКА: ЧТО ПРИШЛО С DEEPGRAM
+        log_stage("DEEPGRAM_OUTPUT", {
+            "raw_text": recognized_text,
+            "text_length": len(recognized_text) if recognized_text else 0,
+            "is_empty": not recognized_text,
+            "first_100_chars": recognized_text[:100] if recognized_text else "None"
+        })
         
         log_stage("STEP2_STT_COMPLETE", {
             "text": recognized_text,
@@ -486,7 +495,8 @@ async def handle_voice_message(message: Message, state=None):
             "profile": profile_data.get('display_name', 'не определен'),
             "perception": data.get('perception_type', 'не определен'),
             "thinking_level": data.get('thinking_level', 5),
-            "context_text_length": len(context_text)
+            "context_text_length": len(context_text),
+            "system_prompt_length": len(system_prompt)
         })
         
         # ========== ЭТАП 5: ВЫЗОВ DEEPSEEK ==========
@@ -507,7 +517,8 @@ async def handle_voice_message(message: Message, state=None):
             "prompt_length": len(prompt),
             "system_prompt_length": len(system_prompt),
             "max_tokens": 1000,
-            "temperature": 0.7
+            "temperature": 0.7,
+            "prompt_preview": prompt[:300] + "..."
         })
         
         deepseek_start = time.time()
@@ -519,8 +530,16 @@ async def handle_voice_message(message: Message, state=None):
         )
         deepseek_duration = time.time() - deepseek_start
         
+        # 🔥 ДИАГНОСТИКА: ЧТО ПРИШЛО С DEEPSEEK
+        log_stage("DEEPSEEK_OUTPUT", {
+            "raw_response": response,
+            "response_length": len(response) if response else 0,
+            "is_empty": not response,
+            "first_200_chars": response[:200] if response else "None"
+        })
+        
         log_stage("STEP5_DEEPSEEK_COMPLETE", {
-            "response": response[:200] + "..." if response and len(response) > 200 else response,
+            "response_preview": response[:200] + "..." if response and len(response) > 200 else response,
             "response_length": len(response) if response else 0,
             "duration_seconds": round(deepseek_duration, 2),
             "success": response is not None
@@ -563,7 +582,8 @@ async def handle_voice_message(message: Message, state=None):
         
         log_stage("STEP6_TEXT_SEND", {
             "text_length": len(response),
-            "user_id": user_id
+            "user_id": user_id,
+            "text_to_send": response
         })
         
         await safe_send_message(
@@ -577,10 +597,19 @@ async def handle_voice_message(message: Message, state=None):
         
         log_stage("STEP6_TEXT_SENT", {"success": True})
         
-        # ========== ЭТАП 7: СИНТЕЗ РЕЧИ ==========
+        # ========== ЭТАП 7: СИНТЕЗ РЕЧИ (YANDEX TTS) ==========
         audio_text = response
         if len(audio_text) > 500:
             audio_text = audio_text[:500] + "..."
+        
+        # 🔥 ДИАГНОСТИКА: ЧТО ОТПРАВЛЯЕМ НА ОЗВУЧКУ
+        log_stage("TTS_INPUT", {
+            "text_for_tts": audio_text,
+            "text_length": len(audio_text),
+            "mode": mode_name,
+            "voice": mode_config.get("voice", "filipp"),
+            "emotion": mode_config.get("voice_emotion", "neutral")
+        })
         
         log_stage("STEP7_TTS_START", {
             "text_length": len(audio_text),
@@ -601,7 +630,8 @@ async def handle_voice_message(message: Message, state=None):
         if audio_data:
             # ========== ЭТАП 8: ОТПРАВКА ГОЛОСОВОГО ОТВЕТА ==========
             log_stage("STEP8_VOICE_SEND_START", {
-                "audio_size": len(audio_data)
+                "audio_size": len(audio_data),
+                "chat_id": message.chat.id
             })
             
             voice_send_start = time.time()
@@ -619,13 +649,17 @@ async def handle_voice_message(message: Message, state=None):
                     "stt_duration": round(stt_duration, 2),
                     "deepseek_duration": round(deepseek_duration, 2),
                     "tts_duration": round(tts_duration, 2),
-                    "send_duration": round(voice_send_duration, 2)
+                    "send_duration": round(voice_send_duration, 2),
+                    "recognized_text": recognized_text,
+                    "deepseek_response": response,
+                    "tts_text": audio_text
                 })
             else:
                 log_error("STEP8_VOICE_SEND_FAILED", Exception("send_voice_message returned False"), {})
         else:
             log_error("STEP7_TTS_FAILED", Exception("text_to_speech returned None"), {
-                "text": audio_text[:100]
+                "text": audio_text[:100],
+                "mode": mode_name
             })
         
         # Устанавливаем состояние
@@ -635,7 +669,8 @@ async def handle_voice_message(message: Message, state=None):
         log_error("VOICE_PROCESSING", e, {
             "user_id": user_id,
             "temp_file": temp_file,
-            "recognized_text": recognized_text[:100] if recognized_text else None
+            "recognized_text": recognized_text[:100] if recognized_text else None,
+            "response": response[:100] if response else None
         })
         
         if status_msg:
@@ -668,7 +703,8 @@ async def send_voice_response(message: Message, text: str, mode: str = "coach"):
         
         log_stage("SEND_VOICE_RESPONSE_START", {
             "text_length": len(clean_text),
-            "mode": mode
+            "mode": mode,
+            "original_text": text[:100]
         })
         
         audio_data = await text_to_speech(clean_text, mode)
@@ -680,7 +716,9 @@ async def send_voice_response(message: Message, text: str, mode: str = "coach"):
                 "audio_size": len(audio_data)
             })
         else:
-            log_error("SEND_VOICE_RESPONSE", Exception("text_to_speech failed"), {})
+            log_error("SEND_VOICE_RESPONSE", Exception("text_to_speech failed"), {
+                "text": clean_text[:100]
+            })
             
     except Exception as e:
         log_error("SEND_VOICE_RESPONSE", e, {})
