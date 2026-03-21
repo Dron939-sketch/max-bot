@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Сервисные функции для работы с API и генерации ответов
-Версия 9.8.1 - ИСПРАВЛЕНО: добавлен traceback, улучшена обработка ошибок
+Версия 9.8.2 - ИСПРАВЛЕНО: проблемы с циклом событий в Python 3.14
 """
 
 import os
@@ -11,7 +11,7 @@ import logging
 import asyncio
 import re
 import sys
-import traceback  # <--- ДОБАВЛЕНО
+import traceback
 import httpx
 from typing import Optional, Dict, List, Any, Tuple
 from datetime import datetime
@@ -32,47 +32,79 @@ logger = logging.getLogger(__name__)
 # ========== ГЛОБАЛЬНЫЙ КЛИЕНТ ДЛЯ HTTPX ==========
 _http_client = None
 _client_lock = asyncio.Lock()
+_current_loop_id = None
 
 async def get_http_client():
-    """Возвращает глобальный HTTPX клиент для всех API-вызовов"""
-    global _http_client
-    if _http_client is None:
-        async with _client_lock:
-            if _http_client is None:
-                logger.info("🔄 Создаём новый глобальный HTTPX клиент")
-                
-                # Настройки лимитов соединений
-                limits = httpx.Limits(
-                    max_keepalive_connections=20,
-                    max_connections=100,
-                    keepalive_expiry=30
-                )
-                
-                # Настройки таймаутов
-                timeouts = httpx.Timeout(
-                    connect=30.0,    # 30 секунд на подключение
-                    read=60.0,       # 60 секунд на чтение
-                    write=30.0,      # 30 секунд на запись
-                    pool=None
-                )
-                
-                # Создаём клиент
-                _http_client = httpx.AsyncClient(
-                    limits=limits,
-                    timeout=timeouts,
-                    follow_redirects=True
-                )
-                logger.info("✅ Глобальный HTTPX клиент создан")
+    """
+    Возвращает глобальный HTTPX клиент для всех API-вызовов.
+    Создает новый клиент, если цикл изменился.
+    """
+    global _http_client, _current_loop_id
+    
+    try:
+        current_loop = asyncio.get_running_loop()
+        current_loop_id = id(current_loop)
+    except RuntimeError:
+        # Нет запущенного цикла - создаем временный
+        current_loop_id = None
+    
+    # Если клиент существует и цикл не изменился - используем его
+    if _http_client is not None and _current_loop_id == current_loop_id:
+        return _http_client
+    
+    # Иначе создаем новый клиент
+    async with _client_lock:
+        # Проверяем еще раз после получения блокировки
+        if _http_client is not None and _current_loop_id == current_loop_id:
+            return _http_client
+        
+        # Закрываем старый клиент, если есть
+        if _http_client is not None:
+            try:
+                await _http_client.aclose()
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка при закрытии старого клиента: {e}")
+        
+        logger.info(f"🔄 Создаём новый HTTPX клиент для цикла {current_loop_id}")
+        
+        # Настройки лимитов соединений
+        limits = httpx.Limits(
+            max_keepalive_connections=10,
+            max_connections=50,
+            keepalive_expiry=30
+        )
+        
+        # Настройки таймаутов
+        timeouts = httpx.Timeout(
+            connect=30.0,
+            read=60.0,
+            write=30.0,
+            pool=None
+        )
+        
+        # Создаём клиент
+        _http_client = httpx.AsyncClient(
+            limits=limits,
+            timeout=timeouts,
+            follow_redirects=True
+        )
+        _current_loop_id = current_loop_id
+        logger.info("✅ Глобальный HTTPX клиент создан")
+    
     return _http_client
 
 
 async def close_http_client():
     """Закрывает глобальный HTTPX клиент при завершении работы"""
-    global _http_client
+    global _http_client, _current_loop_id
     if _http_client:
         logger.info("🔒 Закрываем глобальный HTTPX клиент")
-        await _http_client.aclose()
+        try:
+            await _http_client.aclose()
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка при закрытии клиента: {e}")
         _http_client = None
+        _current_loop_id = None
 # =================================================
 
 
@@ -129,8 +161,16 @@ async def call_deepseek(
 ) -> Optional[str]:
     """
     Вызов DeepSeek API с использованием httpx
-    httpx не имеет проблем с таймаутами в Python 3.14
     """
+    # Гарантируем наличие цикла событий
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # Нет цикла - создаем новый
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        logger.info("🔄 Создан новый цикл событий для DeepSeek")
+    
     logger.info(f"📞 Вызов DeepSeek API (httpx)")
     logger.info(f"📏 Длина промпта: {len(prompt)} символов")
     logger.info(f"🎯 max_tokens: {max_tokens}, temperature: {temperature}")
@@ -177,7 +217,7 @@ async def call_deepseek(
                 DEEPSEEK_API_URL,
                 headers=headers,
                 json=payload,
-                timeout=60.0  # Явный таймаут
+                timeout=60.0
             )
             
             elapsed = (datetime.now() - start_time).total_seconds()
@@ -249,12 +289,16 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
         logger.error("❌ DEEPGRAM_API_KEY не настроен")
         return None
     
-    # Проверяем существование файла
     if not os.path.exists(audio_file_path):
         logger.error(f"❌ Файл не найден: {audio_file_path}")
         return None
     
-    logger.info(f"🎤 Распознавание речи из файла: {audio_file_path}")
+    file_size = os.path.getsize(audio_file_path)
+    logger.info(f"🎤 Распознавание речи из файла: {audio_file_path} ({file_size} байт)")
+    
+    if file_size == 0:
+        logger.error("❌ Файл пустой")
+        return None
     
     headers = {
         "Authorization": f"Token {DEEPGRAM_API_KEY}",
@@ -273,14 +317,14 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
         with open(audio_file_path, 'rb') as audio_file:
             audio_data = audio_file.read()
         
-        logger.info(f"📊 Размер аудиофайла: {len(audio_data)} байт")
+        logger.info(f"📊 Аудио данные: {len(audio_data)} байт")
         
-        # Используем глобальный HTTPX клиент
         client = await get_http_client()
         if client is None:
             logger.error("❌ Не удалось получить HTTPX клиент")
             return None
         
+        logger.info("📡 Отправка запроса в Deepgram...")
         response = await client.post(
             DEEPGRAM_API_URL,
             headers=headers,
@@ -289,15 +333,20 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
             timeout=30.0
         )
         
+        logger.info(f"📡 Статус Deepgram: {response.status_code}")
+        
         if response.status_code == 200:
             data = response.json()
             transcript = data['results']['channels'][0]['alternatives'][0]['transcript']
-            logger.info(f"✅ Речь распознана: {len(transcript)} символов")
+            logger.info(f"✅ Речь распознана: '{transcript}' ({len(transcript)} символов)")
             return transcript
         else:
-            logger.error(f"❌ Deepgram API error {response.status_code}: {response.text[:200]}")
+            logger.error(f"❌ Deepgram API error {response.status_code}: {response.text[:500]}")
             return None
             
+    except httpx.TimeoutException as e:
+        logger.error(f"❌ Таймаут Deepgram: {e}")
+        return None
     except Exception as e:
         logger.error(f"❌ Ошибка распознавания речи: {e}")
         logger.error(traceback.format_exc())
@@ -331,7 +380,7 @@ async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
         "Content-Type": "application/x-www-form-urlencoded"
     }
     
-    # Ограничиваем длину текста (Yandex ограничение)
+    # Ограничиваем длину текста
     original_length = len(text)
     if len(text) > 5000:
         text = text[:5000] + "..."
@@ -347,7 +396,6 @@ async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
     }
     
     try:
-        # Используем глобальный HTTPX клиент
         client = await get_http_client()
         if client is None:
             logger.error("❌ Не удалось получить HTTPX клиент")
@@ -408,7 +456,6 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
         
         if isinstance(confinement, dict):
             logger.info(f"   - ключи: {list(confinement.keys())}")
-            # Проверяем элементы внутри
             if "elements" in confinement:
                 elements = confinement["elements"]
                 logger.info(f"   - elements: тип {type(elements)}")
@@ -416,7 +463,6 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
                     logger.info(f"   - elements ключи: {list(elements.keys())}")
         else:
             logger.warning(f"⚠️ confinement_model не словарь: {type(confinement)}")
-            # Пробуем преобразовать
             try:
                 data["confinement_model"] = make_json_serializable(confinement)
                 logger.info("✅ Преобразовали через make_json_serializable()")
@@ -462,7 +508,7 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
         "deep_patterns": data.get("deep_patterns", {})
     }
     
-    # Добавляем конфайнмент-модель, если есть (преобразуем в JSON-сериализуемый формат)
+    # Добавляем конфайнмент-модель, если есть
     if data.get("confinement_model"):
         try:
             profile_data["confinement_model"] = make_json_serializable(data["confinement_model"])
@@ -478,7 +524,6 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
         profile_json = json.dumps(profile_data, ensure_ascii=False, indent=2, default=str)
     except Exception as e:
         logger.error(f"❌ Ошибка сериализации profile_data: {e}")
-        # Упрощаем данные при ошибке
         simplified = {}
         for k, v in profile_data.items():
             try:
@@ -503,19 +548,19 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
 СТРУКТУРА ПОРТРЕТА (обязательно соблюдай):
 
 БЛОК 1: КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА
-(Опиши главную особенность личности пользователя одной яркой фразой или метафорой. Что определяет его способ взаимодействия с миром? Например: «Вы — архитектор, который строит системы, но забывает в них жить» или «Вы — разведчик, который всегда сканирует опасность, даже когда вокруг безопасно». Используй эмодзи 🔑 в начале блока.)
+(Опиши главную особенность личности пользователя одной яркой фразой или метафорой. Что определяет его способ взаимодействия с миром? Используй эмодзи 🔑)
 
 БЛОК 2: СИЛЬНЫЕ СТОРОНЫ
-(Распиши 3-4 сильные стороны. Не просто перечисли, а покажи, как они проявляются в жизни. Например: «Ваша способность замечать детали позволяет вам находить неочевидные решения...» Используй эмодзи 💪 в начале блока.)
+(Распиши 3-4 сильные стороны. Не просто перечисли, а покажи, как они проявляются в жизни. Используй эмодзи 💪)
 
 БЛОК 3: ЗОНЫ РОСТА
-(Опиши, что мешает, какие паттерны повторяются. Укажи цену, которую человек платит за эти паттерны — энергией, отношениями, деньгами, временем. Например: «Стремление всё контролировать съедает вашу энергию и не даёт расслабиться даже в безопасной обстановке». Используй эмодзи 🎯 в начале блока.)
+(Опиши, что мешает, какие паттерны повторяются. Укажи цену, которую человек платит за эти паттерны. Используй эмодзи 🎯)
 
 БЛОК 4: КАК ЭТО СФОРМИРОВАЛОСЬ
-(Свяжи текущие паттерны с прошлым опытом, воспитанием, средой. Будь деликатен. Например: «Скорее всего, такая гиперответственность сформировалась, потому что в детстве вам приходилось быть «взрослым» раньше времени...» Используй эмодзи 🌱 в начале блока.)
+(Свяжи текущие паттерны с прошлым опытом, воспитанием, средой. Будь деликатен. Используй эмодзи 🌱)
 
 БЛОК 5: ГЛАВНАЯ ЛОВУШКА
-(Опиши цикл, в котором застревает пользователь. Как его сильные стороны превращаются в слабости, а попытки решить проблему её усугубляют. Например: «Вы боитесь ошибок → поэтому тщательно планируете → тратите на планирование всю энергию → на действие сил не остаётся → вы не достигаете цели → убеждаетесь, что «опять не получилось» → страх ошибок усиливается». Замкнутый круг. Используй эмодзи ⚠️ в начале блока.)
+(Опиши цикл, в котором застревает пользователь. Как его сильные стороны превращаются в слабости. Используй эмодзи ⚠️)
 
 ТОН И СТИЛЬ:
 - Представь, что ты разговариваешь с человеком в уютной комнате за чашкой чая.
@@ -533,9 +578,8 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
     
     logger.info(f"📝 Промпт создан, длина: {len(prompt)} символов")
     
-    # Проверяем длину промпта
     if len(prompt) > 15000:
-        logger.warning(f"⚠️ Промпт очень длинный: {len(prompt)} символов. Может быть проблема с API.")
+        logger.warning(f"⚠️ Промпт очень длинный: {len(prompt)} символов")
     
     response = await call_deepseek(
         prompt=prompt,
@@ -547,7 +591,6 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
     if response:
         logger.info(f"✅ AI-профиль сгенерирован ({len(response)} символов)")
         
-        # Проверяем структуру ответа
         if "🔑" in response and "💪" in response and "🎯" in response:
             logger.info("✅ Ответ содержит все необходимые эмодзи")
         else:
@@ -558,7 +601,6 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
     else:
         logger.error("❌ Не удалось сгенерировать AI-профиль (пустой ответ)")
         
-        # Для отладки: создаем тестовый профиль
         logger.info("🔄 Создаем тестовый профиль для отладки")
         test_profile = f"""
 🧠 **ВАШ ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ** (ТЕСТОВАЯ ВЕРСИЯ)
@@ -605,8 +647,6 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
     
     if isinstance(confinement_data, dict):
         logger.info(f"🔍 confinement_data ключи: {list(confinement_data.keys())}")
-        
-        # Проверяем наличие ключевых элементов
         if "key_confinement" in confinement_data:
             logger.info(f"✅ key_confinement: {confinement_data['key_confinement']}")
         if "elements" in confinement_data:
@@ -617,7 +657,6 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
             logger.info(f"✅ loops: {len(loops) if isinstance(loops, list) else 'не список'}")
     else:
         logger.warning(f"⚠️ confinement_data не словарь: {type(confinement_data)}")
-        # Пробуем преобразовать
         try:
             confinement_data = make_json_serializable(confinement_data)
             logger.info("✅ Преобразовали через make_json_serializable()")
@@ -642,7 +681,6 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
     
     logger.info(f"📊 profile_data подготовлен: {list(profile_data.keys())}")
     
-    # Сериализуем данные
     try:
         profile_json = json.dumps(profile_data, ensure_ascii=False, indent=2, default=str)
         confinement_json = json.dumps(confinement_data, ensure_ascii=False, indent=2, default=str)
@@ -651,7 +689,6 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
         profile_json = str(profile_data)[:1000]
         confinement_json = str(confinement_data)[:1000]
     
-    # Полный промт для мыслей психолога
     prompt = f"""Проанализируй пользователя через конфайнмент-модель и дай 3 глубинные мысли.
 
 ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:
@@ -721,35 +758,32 @@ async def generate_route_ai(user_id: int, data: dict, goal: dict) -> Optional[Di
     
     mode = data.get("communication_mode", "coach")
     
-    # Описания режимов
     mode_descriptions = {
         "coach": {
             "name": "КОУЧ",
             "emoji": "🔮",
-            "style": "Ты — коуч. Задаешь открытые вопросы, помогаешь найти ответы внутри себя. Не даешь готовых решений, но направляешь. Твой стиль — партнерский, поддерживающий, но не директивный.",
-            "tone": "используй вопросы, размышления, метафоры. Избегай прямых указаний."
+            "style": "Ты — коуч. Задаешь открытые вопросы, помогаешь найти ответы внутри себя. Не даешь готовых решений, но направляешь.",
+            "tone": "используй вопросы, размышления, метафоры."
         },
         "psychologist": {
             "name": "ПСИХОЛОГ",
             "emoji": "🧠",
-            "style": "Ты — психолог. Исследуешь глубинные паттерны, защитные механизмы, прошлый опыт. Работаешь с причинами, а не следствиями.",
-            "tone": "будь эмпатичным, но профессиональным. Используй терапевтические техники, задавай вопросы о прошлом, чувствах."
+            "style": "Ты — психолог. Исследуешь глубинные паттерны, защитные механизмы, прошлый опыт.",
+            "tone": "будь эмпатичным, но профессиональным."
         },
         "trainer": {
             "name": "ТРЕНЕР",
             "emoji": "⚡",
-            "style": "Ты — тренер. Даешь четкие инструкции, упражнения, ставишь дедлайны. Формируешь навыки и требуешь выполнения.",
-            "tone": "будь конкретным, структурированным, требовательным. Используй списки, алгоритмы, чек-листы."
+            "style": "Ты — тренер. Даешь четкие инструкции, упражнения, ставишь дедлайны.",
+            "tone": "будь конкретным, структурированным, требовательным."
         }
     }
     
     mode_info = mode_descriptions.get(mode, mode_descriptions["coach"])
     
-    # Получаем данные профиля
     profile_data = data.get("profile_data", {})
     profile_code = profile_data.get("display_name", "СБ-4_ТФ-4_УБ-4_ЧВ-4")
     
-    # Парсим профиль для более детального анализа
     sb_level = profile_data.get("sb_level", 4)
     tf_level = profile_data.get("tf_level", 4)
     ub_level = profile_data.get("ub_level", 4)
@@ -757,57 +791,19 @@ async def generate_route_ai(user_id: int, data: dict, goal: dict) -> Optional[Di
     
     logger.info(f"📊 Профиль: {profile_code}, СБ={sb_level}, ТФ={tf_level}, УБ={ub_level}, ЧВ={chv_level}")
     
-    # Полный промт для генерации маршрута
-    prompt = f"""Ты — {mode_info['emoji']} {mode_info['name']}, виртуальный помощник. Твоя задача — создать пошаговый маршрут для пользователя к его цели.
+    prompt = f"""Ты — {mode_info['emoji']} {mode_info['name']}, виртуальный помощник. Создай пошаговый маршрут для пользователя к его цели.
 
-ЦЕЛЬ ПОЛЬЗОВАТЕЛЯ: {goal.get('name', 'цель')}
-ОПИСАНИЕ ЦЕЛИ: {goal.get('description', '')}
-СЛОЖНОСТЬ: {goal.get('difficulty', 'medium')}
-ОРИЕНТИРОВОЧНОЕ ВРЕМЯ: {goal.get('time', '3-6 месяцев')}
+ЦЕЛЬ: {goal.get('name', 'цель')}
+ВРЕМЯ: {goal.get('time', '3-6 месяцев')}
+ПРОФИЛЬ: {profile_code}
 
-ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ: {profile_code}
-РАСШИФРОВКА ПРОФИЛЯ:
-• СБ-{sb_level} — реакция на угрозу (1-2: замирает/избегает, 3-4: внешне спокоен, 5-6: защищает/атакует)
-• ТФ-{tf_level} — деньги/ресурсы (1-2: хаотично, 3-4: стабильно, 5-6: системно/инвестиции)
-• УБ-{ub_level} — понимание мира (1-2: верит в знаки, 3-4: доверяет экспертам, 5-6: анализирует сам)
-• ЧВ-{chv_level} — отношения (1-2: привязывается, 3-4: хочет нравиться, 5-6: строит партнерство)
-
-РЕЖИМ: {mode_info['emoji']} {mode_info['name']}
-СТИЛЬ В ЭТОМ РЕЖИМЕ: {mode_info['style']}
-ТОН: {mode_info['tone']}
-
-ЗАДАЧА:
-Создай маршрут из 3 ПОСЛЕДОВАТЕЛЬНЫХ ЭТАПОВ. Каждый этап должен быть конкретным, выполнимым и вести к следующему.
-
-ДЛЯ КАЖДОГО ЭТАПА УКАЖИ:
+Создай маршрут из 3 последовательных этапов. Для каждого этапа укажи:
 📍 ЭТАП X: [НАЗВАНИЕ]
-   • Что делаем: [конкретные действия, обсуждения, размышления]
+   • Что делаем: [конкретные действия]
    • 📝 Домашнее задание: [что нужно сделать между сессиями]
    • ✅ Критерий выполнения: [как понять, что этап пройден]
 
-ВАЖНО:
-1. Учитывай профиль пользователя:
-   - Если СБ низкий (1-2) — будь мягче, избегай давления, давай техники заземления
-   - Если ТФ низкий (1-2) — фокусируйся на маленьких шагах, базовой финансовой грамотности
-   - Если УБ низкий (1-2) — давай больше структуры, объясняй простыми словами
-   - Если ЧВ низкий (1-2) — работай с привязанностью, страхом отвержения
-
-2. Адаптируй сложность под уровень пользователя:
-   - Уровни 1-2: базовые, поддерживающие шаги
-   - Уровни 3-4: развивающие, укрепляющие шаги
-   - Уровни 5-6: продвинутые, масштабирующие шаги
-
-3. Делай шаги маленькими и реалистичными:
-   - Каждый этап должен занимать 1-2 недели
-   - Домашнее задание — не более 15-20 минут в день
-   - Критерии должны быть измеримыми
-
-4. Используй метафоры и образы, соответствующие режиму:
-   - Коуч: "путешествие", "карта", "компас"
-   - Психолог: "глубина", "корни", "исцеление"
-   - Тренер: "тренировка", "мышцы", "рекорды"
-
-ФОРМАТ ОТВЕТА (строго соблюдай):
+ФОРМАТ ОТВЕТА:
 
 📍 ЭТАП 1: [НАЗВАНИЕ]
    • Что делаем: [описание]
@@ -823,8 +819,7 @@ async def generate_route_ai(user_id: int, data: dict, goal: dict) -> Optional[Di
    • Что делаем: [описание]
    • 📝 Домашнее задание: [задание]
    • ✅ Критерий: [критерий]
-
-Напиши маршрут, соблюдая все инструкции."""
+"""
     
     logger.info(f"📝 Промпт для маршрута создан, длина: {len(prompt)} символов")
     
@@ -864,7 +859,6 @@ async def generate_response_with_full_context(
     logger.info(f"🧠 Генерация ответа для пользователя {user_id}, режим: {mode}")
     logger.info(f"📝 Сообщение пользователя: {user_message[:100]}...")
     
-    # Описания режимов
     mode_prompts = {
         "coach": {
             "role": "коуч",
@@ -872,32 +866,28 @@ async def generate_response_with_full_context(
 
 ПРАВИЛА КОУЧА:
 1. НЕ давай готовых ответов и советов
-2. Задавай открытые вопросы: "Что ты чувствуешь?", "Как ты видишь эту ситуацию?", "Какие есть варианты?"
+2. Задавай открытые вопросы
 3. Отражай и перефразируй мысли человека
 4. Помогай структурировать размышления
-5. Верь, что человек сам знает ответы
 
 ПРИМЕРЫ:
 - "Расскажи подробнее об этой ситуации..."
 - "Что для тебя самое важное в этом?"
-- "Как бы ты хотел, чтобы это выглядело в идеале?"
-- "Какие маленькие шаги ты можешь сделать уже сегодня?" """
+- "Как бы ты хотел, чтобы это выглядело в идеале?" """
         },
         "psychologist": {
             "role": "психолог",
             "style": """Ты — психолог. Твоя задача — исследовать глубинные паттерны, прошлый опыт, защитные механизмы.
 
 ПРАВИЛА ПСИХОЛОГА:
-1. Исследуй чувства и эмоции: "Что ты чувствуешь, когда думаешь об этом?"
-2. Ищи связи с прошлым: "Было ли похожее раньше? Откуда это могло взяться?"
+1. Исследуй чувства и эмоции
+2. Ищи связи с прошлым
 3. Обращай внимание на повторяющиеся сценарии
-4. Работай с сопротивлением и защитами
-5. Создавай безопасное пространство для исследования
+4. Создавай безопасное пространство для исследования
 
 ПРИМЕРЫ:
 - "Когда ты впервые почувствовал это?"
 - "Что для тебя самое страшное в этой ситуации?"
-- "Если бы твоя тревога могла говорить, что бы она сказала?"
 - "Как эта ситуация связана с твоим детством?" """
         },
         "trainer": {
@@ -906,22 +896,18 @@ async def generate_response_with_full_context(
 
 ПРАВИЛА ТРЕНЕРА:
 1. Давай конкретные, выполнимые задания
-2. Структурируй процесс: "Сначала делаем А, потом Б, затем В"
+2. Структурируй процесс
 3. Ставь дедлайны и требуй отчета
 4. Формируй навыки через повторение
-5. Измеряй прогресс
 
 ПРИМЕРЫ:
 - "Вот конкретное упражнение на эту неделю..."
-- "Сделай это до следующей встречи и напиши результат"
-- "Давай разберем это по шагам..."
-- "Твоя задача на сегодня — сделать первый шаг" """
+- "Сделай это до следующей встречи"
+- "Давай разберем это по шагам..." """
         }
     }
     
     mode_info = mode_prompts.get(mode, mode_prompts["coach"])
-    
-    # Формируем контекст
     profile_code = profile_data.get("display_name", "СБ-4_ТФ-4_УБ-4_ЧВ-4")
     
     context_text = ""
@@ -941,35 +927,24 @@ async def generate_response_with_full_context(
     
     logger.info(f"📊 Контекст: профиль {profile_code}, история {len(history) if history else 0} сообщений")
     
-    # Полный промт для ответа на вопрос
     prompt = f"""Ты — {mode_info['role']}, виртуальный помощник. Ответь на вопрос пользователя с учетом его профиля и контекста.
 
-ВОПРОС ПОЛЬЗОВАТЕЛЯ:
-{user_message}
+ВОПРОС: {user_message}
 
-ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ: {profile_code}
-ДЕТАЛИ ПРОФИЛЯ:
-{json.dumps(profile_data, ensure_ascii=False, indent=2, default=str)[:500]}
+ПРОФИЛЬ: {profile_code}
 
-КОНТЕКСТ (время, погода, личные данные):
-{context_text if context_text else "Контекст не указан"}
+КОНТЕКСТ: {context_text if context_text else "Контекст не указан"}
 
-ИСТОРИЯ ДИАЛОГА (последние сообщения):
-{history_text if history_text else "Нет истории"}
+ИСТОРИЯ: {history_text if history_text else "Нет истории"}
 
-ТВОЙ СТИЛЬ КАК {mode_info['role'].upper()}:
 {mode_info['style']}
 
-ИНСТРУКЦИИ ПО ОТВЕТУ:
-1. Учитывай профиль пользователя — его сильные стороны и зоны роста
-2. Отвечай в стиле, соответствующем режиму ({mode_info['role']})
-3. Используй эмодзи для эмоциональной окраски, но не перебарщивай
-4. Не используй Markdown (**, __, и т.д.) — только обычный текст
-5. Если нужно выделить важное, используй эмодзи или просто заглавные буквы
-6. Ответ должен быть полезным и конкретным
-7. Длина ответа: 3-5 предложений для простых вопросов, до 10 для сложных
+ИНСТРУКЦИИ:
+- Не используй Markdown (**, __, и т.д.)
+- Используй эмодзи для эмоциональной окраски
+- Длина ответа: 3-5 предложений для простых вопросов
 
-ТВОЙ ОТВЕТ (без Markdown, с эмодзи где уместно):
+ТВОЙ ОТВЕТ:
 """
     
     logger.info(f"📝 Промпт для ответа создан, длина: {len(prompt)} символов")
@@ -981,7 +956,6 @@ async def generate_response_with_full_context(
         temperature=0.7
     )
     
-    # Генерируем предложения для дальнейшего диалога
     suggestions = await generate_suggestions(user_message, response, profile_code, mode)
     
     result = {
@@ -1014,9 +988,8 @@ async def generate_suggestions(question: str, answer: str, profile_code: str, mo
 Требования:
 - Каждый вариант не длиннее 7 слов
 - Варианты должны быть связаны с темой
-- Учитывай режим общения
 
-Формат ответа: просто список, каждый вариант с новой строки, без нумерации
+Формат ответа: просто список, каждый вариант с новой строки
 """
     
     response = await call_deepseek(
@@ -1030,7 +1003,7 @@ async def generate_suggestions(question: str, answer: str, profile_code: str, mo
         logger.info(f"✅ Сгенерировано {len(suggestions)} предложений")
         return suggestions[:3]
     
-    logger.warning("⚠️ Не удалось сгенерировать предложения, используем стандартные")
+    logger.warning("⚠️ Не удалось сгенерировать предложения")
     return [
         "Расскажи подробнее",
         "Что ты чувствуешь?",
