@@ -1742,7 +1742,7 @@ def cmd_dbstats(message: types.Message):
 # ============================================
 
 async def test_yandex_async(message: types.Message):
-    status_msg = await safe_send_message(message, "🎧 Тестирую Yandex TTS...", delete_previous=True)
+    status_msg = safe_send_message(message, "🎧 Тестирую Yandex TTS...", delete_previous=True)
     test_text = "Привет! Это тестовое голосовое сообщение."
     results = []
     for mode in ["coach", "psychologist", "trainer"]:
@@ -1752,15 +1752,15 @@ async def test_yandex_async(message: types.Message):
         else:
             results.append(f"❌ {COMMUNICATION_MODES[mode]['display_name']}")
         await asyncio.sleep(0.5)
-    await safe_delete_message(message.chat.id, status_msg.message_id)
-    await safe_send_message(message, "📊 Результаты тестирования Yandex TTS:\n" + "\n".join(results), delete_previous=True)
+    safe_delete_message(message.chat.id, status_msg.message_id)
+    safe_send_message(message, "📊 Результаты тестирования Yandex TTS:\n" + "\n".join(results), delete_previous=True)
 
 async def test_weather_async(message: types.Message):
     if not OPENWEATHER_API_KEY:
-        await safe_send_message(message, "❌ OPENWEATHER_API_KEY не настроен", delete_previous=True)
+        safe_send_message(message, "❌ OPENWEATHER_API_KEY не настроен", delete_previous=True)
         return
     test_city = "Москва"
-    status_msg = await safe_send_message(message, f"🌍 Тестирую погоду для города {test_city}...", delete_previous=True)
+    status_msg = safe_send_message(message, f"🌍 Тестирую погоду для города {test_city}...", delete_previous=True)
     try:
         from services import get_http_client
         url = f"http://api.openweathermap.org/data/2.5/weather?q={test_city}&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
@@ -1774,21 +1774,21 @@ async def test_weather_async(message: types.Message):
             humidity = data['main']['humidity']
             wind = data['wind']['speed']
             text = f"✅ Погода работает!\n\n📍 Город: {test_city}\n🌡 Температура: {temp}°C (ощущается как {feels_like}°C)\n☁️ Описание: {desc}\n💧 Влажность: {humidity}%\n💨 Ветер: {wind} м/с"
-            await safe_delete_message(message.chat.id, status_msg.message_id)
-            await safe_send_message(message, text, delete_previous=True)
+            safe_delete_message(message.chat.id, status_msg.message_id)
+            safe_send_message(message, text, delete_previous=True)
         else:
             error_text = response.text
-            await safe_delete_message(message.chat.id, status_msg.message_id)
-            await safe_send_message(message, f"❌ Ошибка {response.status_code}: {error_text[:200]}", delete_previous=True)
+            safe_delete_message(message.chat.id, status_msg.message_id)
+            safe_send_message(message, f"❌ Ошибка {response.status_code}: {error_text[:200]}", delete_previous=True)
     except Exception as e:
-        await safe_delete_message(message.chat.id, status_msg.message_id)
-        await safe_send_message(message, f"❌ Ошибка: {e}", delete_previous=True)
+        safe_delete_message(message.chat.id, status_msg.message_id)
+        safe_send_message(message, f"❌ Ошибка: {e}", delete_previous=True)
 
 async def test_voices_async(message: types.Message):
-    await safe_send_message(message, "🎙 Функция тестирования голосов в разработке", delete_previous=True)
+    safe_send_message(message, "🎙 Функция тестирования голосов в разработке", delete_previous=True)
 
 async def test_voice_send_async(message: types.Message):
-    status_msg = await safe_send_message(message, "🎧 Тестирую отправку голоса...", delete_previous=True)
+    status_msg = safe_send_message(message, "🎧 Тестирую отправку голоса...", delete_previous=True)
     test_text = "Привет! Это тестовое голосовое сообщение."
     results = []
     for mode in ["coach", "psychologist", "trainer"]:
@@ -1802,8 +1802,8 @@ async def test_voice_send_async(message: types.Message):
         else:
             results.append(f"❌ {COMMUNICATION_MODES[mode]['display_name']} (не сгенерирован)")
         await asyncio.sleep(1)
-    await safe_delete_message(message.chat.id, status_msg.message_id)
-    await safe_send_message(message, "📊 Результаты тестирования отправки голоса:\n" + "\n".join(results), delete_previous=True)
+    safe_delete_message(message.chat.id, status_msg.message_id)
+    safe_send_message(message, "📊 Результаты тестирования отправки голоса:\n" + "\n".join(results), delete_previous=True)
 
 async def show_weekend_ideas(message: types.Message, user_id: int):
     data = user_data.get(user_id, {})
@@ -1814,7 +1814,7 @@ async def show_weekend_ideas(message: types.Message, user_id: int):
         levels = data.get("behavioral_levels", {}).get(k, [])
         scores[k] = sum(levels) / len(levels) if levels else 3.0
     profile_data = data.get("profile_data", {})
-    status_msg = await safe_send_message(message, "🎨 Генерирую идеи специально для тебя...\n\nЭто займёт несколько секунд.", delete_previous=True)
+    status_msg = safe_send_message(message, "🎨 Генерирую идеи специально для тебя...\n\nЭто займёт несколько секунд.", delete_previous=True)
     try:
         ideas_text = await weekend_planner.get_weekend_ideas(
             user_id=user_id,
@@ -1823,14 +1823,13 @@ async def show_weekend_ideas(message: types.Message, user_id: int):
             profile_data=profile_data,
             context=context
         )
-        await safe_delete_message(message.chat.id, status_msg.message_id)
+        safe_delete_message(message.chat.id, status_msg.message_id)
         keyboard = get_weekend_ideas_keyboard()
-        await safe_send_message(message, ideas_text, reply_markup=keyboard, delete_previous=True)
+        safe_send_message(message, ideas_text, reply_markup=keyboard, delete_previous=True)
     except Exception as e:
         logger.error(f"Ошибка генерации идей: {e}")
-        await safe_delete_message(message.chat.id, status_msg.message_id)
-        await safe_send_message(message, "😔 Что-то пошло не так. Попробуй позже.", delete_previous=True)
-
+        safe_delete_message(message.chat.id, status_msg.message_id)
+        safe_send_message(message, "😔 Что-то пошло не так. Попробуй позже.", delete_previous=True)
 # ============================================
 # CALLBACK-ОБРАБОТЧИК
 # ============================================
