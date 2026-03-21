@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Синхронные обертки для работы с БД - для вызовов из любого потока
-ВЕРСИЯ 2.2 - ИСПРАВЛЕНО: передача корутин, а не результатов
+ВЕРСИЯ 2.3 - ИСПРАВЛЕНО: добавлен импорт save_test_result_to_db
 """
 
 import logging
@@ -12,6 +12,8 @@ import traceback
 from typing import Optional, Dict, Any, List
 
 from db_instance import db_loop_manager, db, save_user_to_db as db_save_user
+from db_instance import save_telegram_user as db_save_telegram_user
+from db_instance import save_test_result_to_db as async_save_test_result  # ✅ ДОБАВЛЕНО
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +26,6 @@ class SyncDB:
         """Синхронная проверка соединения с БД"""
         try:
             from db_instance import ensure_db_connection
-            # ✅ ИСПРАВЛЕНО: передаем корутину, а не результат
             result = db_loop_manager.run_coro(ensure_db_connection, timeout=10)
             return result if result is not None else False
         except Exception as e:
@@ -41,7 +42,6 @@ class SyncDB:
     ) -> bool:
         """Синхронное сохранение пользователя"""
         try:
-            # ✅ ИСПРАВЛЕНО: передаем корутину
             result = db_loop_manager.run_coro(
                 db.save_telegram_user,
                 user_id, username, first_name, last_name, language_code,
@@ -56,7 +56,6 @@ class SyncDB:
     def save_user_data(user_id: int, data: Dict) -> bool:
         """Синхронное сохранение данных пользователя"""
         try:
-            # ✅ ИСПРАВЛЕНО: передаем корутину
             result = db_loop_manager.run_coro(
                 db.save_user_data,
                 user_id, data,
@@ -82,7 +81,6 @@ class SyncDB:
     def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
         """Синхронное логирование события"""
         try:
-            # ✅ ИСПРАВЛЕНО: передаем корутину
             result = db_loop_manager.run_coro(
                 db.log_event,
                 user_id, event_type, event_data,
@@ -97,7 +95,6 @@ class SyncDB:
     def add_reminder(user_id: int, reminder_type: str, remind_at, data: Dict = None) -> Optional[int]:
         """Синхронное добавление напоминания"""
         try:
-            # ✅ ИСПРАВЛЕНО: передаем корутину
             result = db_loop_manager.run_coro(
                 db.add_reminder,
                 user_id, reminder_type, remind_at, data,
@@ -114,7 +111,6 @@ class SyncDB:
     def get_pending_reminders(limit: int = 100) -> List[Dict]:
         """Синхронное получение неотправленных напоминаний"""
         try:
-            # ✅ ИСПРАВЛЕНО: передаем корутину
             result = db_loop_manager.run_coro(
                 db.get_pending_reminders,
                 limit,
@@ -129,7 +125,6 @@ class SyncDB:
     def mark_reminder_sent(reminder_id: int) -> bool:
         """Синхронная отметка напоминания как отправленного"""
         try:
-            # ✅ ИСПРАВЛЕНО: передаем корутину
             result = db_loop_manager.run_coro(
                 db.mark_reminder_sent,
                 reminder_id,
@@ -144,7 +139,6 @@ class SyncDB:
     def get_user_test_results(user_id: int, limit: int = 10, test_type: str = None) -> List[Dict]:
         """Синхронное получение результатов тестов пользователя"""
         try:
-            # ✅ ИСПРАВЛЕНО: передаем корутину
             result = db_loop_manager.run_coro(
                 db.get_user_test_results,
                 user_id, limit, test_type,
@@ -170,10 +164,9 @@ class SyncDB:
     ) -> Optional[int]:
         """Синхронное сохранение результата теста"""
         try:
-            from db_instance import save_test_result_to_db as async_save_test
-            # ✅ ИСПРАВЛЕНО: передаем корутину
+            # ✅ Используем импортированную функцию async_save_test_result
             result = db_loop_manager.run_coro(
-                async_save_test,
+                async_save_test_result,  # ← функция из db_instance
                 user_id, test_type, results, profile_code,
                 perception_type, thinking_level, vectors,
                 behavioral_levels, deep_patterns, confinement_model,
@@ -203,7 +196,6 @@ class SyncDB:
     ) -> bool:
         """Синхронное сохранение ответа на тест"""
         try:
-            # ✅ ИСПРАВЛЕНО: передаем корутину
             result = db_loop_manager.run_coro(
                 db.save_test_answer,
                 user_id, test_result_id, stage, question_index,
@@ -220,7 +212,6 @@ class SyncDB:
     def get_cached_weekend_ideas(user_id: int) -> Optional[str]:
         """Синхронное получение кэшированных идей"""
         try:
-            # ✅ ИСПРАВЛЕНО: передаем корутину
             return db_loop_manager.run_coro(
                 db.get_cached_weekend_ideas,
                 user_id,
@@ -234,7 +225,6 @@ class SyncDB:
     def cache_weekend_ideas(user_id: int, ideas_text: str, main_vector: str, main_level: int) -> bool:
         """Синхронное сохранение идей в кэш"""
         try:
-            # ✅ ИСПРАВЛЕНО: передаем корутину
             result = db_loop_manager.run_coro(
                 db.cache_weekend_ideas,
                 user_id, ideas_text, main_vector, main_level,
@@ -249,7 +239,6 @@ class SyncDB:
     def get_user_reminders(user_id: int, include_sent: bool = False) -> List[Dict]:
         """Синхронное получение напоминаний пользователя"""
         try:
-            # ✅ ИСПРАВЛЕНО: передаем корутину
             result = db_loop_manager.run_coro(
                 db.get_user_reminders,
                 user_id, include_sent,
@@ -264,7 +253,6 @@ class SyncDB:
     def get_user_context(user_id: int) -> Optional[Dict[str, Any]]:
         """Синхронное получение контекста пользователя"""
         try:
-            # ✅ ИСПРАВЛЕНО: передаем корутину
             result = db_loop_manager.run_coro(
                 db.load_user_context,
                 user_id,
@@ -279,7 +267,6 @@ class SyncDB:
     def get_user_data(user_id: int) -> Optional[Dict[str, Any]]:
         """Синхронное получение данных пользователя"""
         try:
-            # ✅ ИСПРАВЛЕНО: передаем корутину
             result = db_loop_manager.run_coro(
                 db.load_user_data,
                 user_id,
@@ -294,7 +281,6 @@ class SyncDB:
     def get_telegram_user(user_id: int) -> Optional[Dict[str, Any]]:
         """Синхронное получение информации о пользователе Telegram"""
         try:
-            # ✅ ИСПРАВЛЕНО: передаем корутину
             result = db_loop_manager.run_coro(
                 db.get_telegram_user,
                 user_id,
