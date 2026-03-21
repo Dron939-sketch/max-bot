@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик голосовых сообщений для MAX
-Версия 3.5 - С ПОВТОРНЫМИ ПОПЫТКАМИ И УВЕЛИЧЕННЫМИ ТАЙМАУТАМИ
+Версия 3.6 - С ДИАГНОСТИКОЙ speech_to_text
 """
 
 import logging
@@ -310,7 +310,11 @@ async def handle_voice_message(message: Message, state):
                 )
                 return
         
-        # Распознаём речь
+        # ============================================
+        # ДИАГНОСТИКА ПЕРЕД РАСПОЗНАВАНИЕМ
+        # ============================================
+        logger.info(f"🔑 DEEPGRAM_API_KEY настроен: {'✅' if DEEPGRAM_API_KEY else '❌'}")
+        
         if not DEEPGRAM_API_KEY:
             logger.error("❌ DEEPGRAM_API_KEY не настроен")
             await status_msg.edit_text(
@@ -319,11 +323,30 @@ async def handle_voice_message(message: Message, state):
             )
             return
         
+        # ✅ ДОБАВЛЯЕМ ЛОГИ ПЕРЕД ВЫЗОВОМ
+        logger.info(f"🎤 ДО ВЫЗОВА speech_to_text, temp_file={temp_file}")
+        logger.info(f"🎤 Файл существует: {os.path.exists(temp_file)}")
+        logger.info(f"🎤 Размер файла: {os.path.getsize(temp_file)} байт")
+        
+        # Проверяем заголовок файла (первые 4 байта)
+        try:
+            with open(temp_file, 'rb') as f:
+                header = f.read(4)
+                logger.info(f"📊 Заголовок файла (hex): {header.hex()}")
+                if header == b'OggS':
+                    logger.info("✅ Файл в формате OGG")
+                else:
+                    logger.warning(f"⚠️ Файл НЕ в формате OGG! Заголовок: {header}")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось прочитать заголовок файла: {e}")
+        
         logger.info(f"🎙 Вызов speech_to_text для файла: {temp_file}")
         recognized_text = await speech_to_text(temp_file)
         
-        # 🔍 ОТЛАДКА: что распозналось
+        # ✅ ДОБАВЛЯЕМ ЛОГИ ПОСЛЕ ВЫЗОВА
+        logger.info(f"🎤 ПОСЛЕ ВЫЗОВА speech_to_text, recognized_text='{recognized_text}'")
         logger.info(f"🔍 РАСПОЗНАННЫЙ ТЕКСТ: '{recognized_text}'")
+        logger.info(f"🔍 ТИП: {type(recognized_text)}")
         logger.info(f"🔍 ДЛИНА ТЕКСТА: {len(recognized_text) if recognized_text else 0}")
         
         # Удаляем временный файл
@@ -433,6 +456,9 @@ async def handle_voice_message(message: Message, state):
         
         # Отправляем текстовый ответ
         mode_config = COMMUNICATION_MODES.get(mode_name, COMMUNICATION_MODES["coach"])
+        
+        # ✅ ЛОГИРУЕМ, ЧТО ОТПРАВЛЯЕМ
+        logger.info(f"📝 Отправляем текстовый ответ с текстом: '{recognized_text}'")
         
         await safe_send_message(
             message,
