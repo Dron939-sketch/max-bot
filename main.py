@@ -1885,6 +1885,11 @@ def handle_pretest_question(message: types.Message):
 
 @bot.message_handler(content_types=['voice'])
 def handle_voice_wrapper(message: types.Message):
+    user_id = message.from_user.id
+    logger.info(f"🎤🔥 ВХОД В handle_voice_wrapper от {user_id}")
+    logger.info(f"🎤🔥 message.voice: {message.voice}")
+    logger.info(f"🎤🔥 content_type: {message.content_type}")
+    
     def run_async():
         asyncio.run(handle_voice_message(message))
     threading.Thread(target=run_async, daemon=True).start()
