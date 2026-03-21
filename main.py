@@ -1857,33 +1857,7 @@ def handle_context_message_wrapper(message: types.Message):
     if not handled:
         safe_send_message(message, "Пожалуйста, ответьте на вопрос или используйте кнопки", delete_previous=True, keep_last=1)
 
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_question)
-def handle_question_message(message: types.Message):
-    user_id = message.from_user.id
-    text = message.text
-    logger.info(f"❓ Получен вопрос от пользователя {user_id} в состоянии awaiting_question: {text[:50]}...")
-    def run_sync():
-        from handlers.questions import process_text_question_sync
-        process_text_question_sync(message, user_id, text)
-    threading.Thread(target=run_sync, daemon=True).start()
-
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_custom_goal)
-def handle_custom_goal_message(message: types.Message):
-    user_id = message.from_user.id
-    text = message.text
-    logger.info(f"🎯 Получена пользовательская цель от пользователя {user_id}: {text[:50]}...")
-    def run_async():
-        asyncio.run(process_custom_goal_async(message, user_id, text))
-    threading.Thread(target=run_async, daemon=True).start()
-
-@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.pretest_question)
-def handle_pretest_question(message: types.Message):
-    user_id = message.from_user.id
-    text = message.text
-    logger.info(f"❓ Получен вопрос до теста от пользователя {user_id}")
-    safe_send_message(message, "Спасибо за вопрос. Чтобы ответить точнее, мне нужно знать ваш профиль. Пройдите тест — это займёт 15 минут.", delete_previous=True)
-    clear_state(user_id)
-
+# ✅ ПЕРВЫЙ ОБРАБОТЧИК ДЛЯ ГОЛОСА (чтобы перехватывал до текстового)
 @bot.message_handler(content_types=['voice'])
 def handle_voice_wrapper(message: types.Message):
     user_id = message.from_user.id
@@ -1902,6 +1876,34 @@ def handle_voice_wrapper(message: types.Message):
         asyncio.run(handle_voice_message(message))
     threading.Thread(target=run_async, daemon=True).start()
 
+# ✅ ИСПРАВЛЕНО: ТОЛЬКО ТЕКСТОВЫЕ СООБЩЕНИЯ (content_type == 'text')
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_question and message.content_type == 'text')
+def handle_question_message(message: types.Message):
+    user_id = message.from_user.id
+    text = message.text
+    logger.info(f"❓ Получен текст от пользователя {user_id} в состоянии awaiting_question: {text[:50]}...")
+    def run_sync():
+        from handlers.questions import process_text_question_sync
+        process_text_question_sync(message, user_id, text)
+    threading.Thread(target=run_sync, daemon=True).start()
+
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_custom_goal and message.content_type == 'text')
+def handle_custom_goal_message(message: types.Message):
+    user_id = message.from_user.id
+    text = message.text
+    logger.info(f"🎯 Получена пользовательская цель от пользователя {user_id}: {text[:50]}...")
+    def run_async():
+        asyncio.run(process_custom_goal_async(message, user_id, text))
+    threading.Thread(target=run_async, daemon=True).start()
+
+@bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.pretest_question and message.content_type == 'text')
+def handle_pretest_question(message: types.Message):
+    user_id = message.from_user.id
+    text = message.text
+    logger.info(f"❓ Получен вопрос до теста от пользователя {user_id}")
+    safe_send_message(message, "Спасибо за вопрос. Чтобы ответить точнее, мне нужно знать ваш профиль. Пройдите тест — это займёт 15 минут.", delete_previous=True)
+    clear_state(user_id)
+
 @bot.message_handler(func=lambda message: True)
 def handle_unknown_message(message: types.Message):
     user_id = message.from_user.id
@@ -1915,7 +1917,6 @@ def handle_unknown_message(message: types.Message):
     )
     keyboard.row(InlineKeyboardButton("❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions"))
     safe_send_message(message, "Используйте кнопки для навигации:", reply_markup=keyboard, keep_last=1)
-
 # ============================================
 # АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ ОБРАБОТКИ СООБЩЕНИЙ
 # ============================================
