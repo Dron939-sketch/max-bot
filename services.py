@@ -284,39 +284,61 @@ async def call_deepseek(
 async def speech_to_text(audio_file_path: str) -> Optional[str]:
     """
     Распознает речь из аудиофайла через Deepgram API
+    С ПОЛНЫМ ЛОГИРОВАНИЕМ ДЛЯ ОТЛАДКИ
     """
-    logger.info("=" * 80)
-    logger.info("🔍 ДИАГНОСТИКА speech_to_text:")
-    logger.info(f"📁 audio_file_path: {audio_file_path}")
-    logger.info(f"🔑 DEEPGRAM_API_KEY: {'✅ есть' if DEEPGRAM_API_KEY else '❌ НЕТ'}")
+    import json
     
+    logger.info("=" * 100)
+    logger.info("🎤🎤🎤 НАЧАЛО speech_to_text 🎤🎤🎤")
+    logger.info("=" * 100)
+    logger.info(f"⏰ Время: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+    logger.info(f"📁 audio_file_path: {audio_file_path}")
+    logger.info(f"🔑 DEEPGRAM_API_KEY: {'✅ ЕСТЬ' if DEEPGRAM_API_KEY else '❌ НЕТ'}")
+    logger.info(f"🌐 DEEPGRAM_API_URL: {DEEPGRAM_API_URL}")
+    
+    # ============================================
+    # ПРОВЕРКА 1: Существует ли файл?
+    # ============================================
     if not DEEPGRAM_API_KEY:
-        logger.error("❌ DEEPGRAM_API_KEY не настроен")
+        logger.error("❌ DEEPGRAM_API_KEY не настроен в config")
+        logger.info("=" * 100)
         return None
     
     if not os.path.exists(audio_file_path):
-        logger.error(f"❌ Файл не найден: {audio_file_path}")
+        logger.error(f"❌ Файл НЕ СУЩЕСТВУЕТ: {audio_file_path}")
+        logger.info("=" * 100)
         return None
     
     file_size = os.path.getsize(audio_file_path)
-    logger.info(f"📊 Размер файла: {file_size} байт")
+    logger.info(f"📊 Размер файла: {file_size} байт ({round(file_size/1024, 2)} KB)")
     
     if file_size == 0:
-        logger.error("❌ Файл пустой")
+        logger.error("❌ Файл ПУСТОЙ (0 байт)")
+        logger.info("=" * 100)
         return None
     
-    # Проверяем заголовок файла
+    # ============================================
+    # ПРОВЕРКА 2: Что за формат файла?
+    # ============================================
     try:
         with open(audio_file_path, 'rb') as f:
-            header = f.read(4)
+            header = f.read(16)
             logger.info(f"📊 Заголовок файла (hex): {header.hex()}")
-            if header == b'OggS':
-                logger.info("✅ Файл в формате OGG")
+            
+            if header[:4] == b'OggS':
+                logger.info("✅ Файл ОПОЗНАН как OGG (Opus/Vorbis)")
+            elif header[:4] == b'RIFF':
+                logger.info("✅ Файл ОПОЗНАН как WAV")
+            elif header[:3] == b'ID3':
+                logger.info("✅ Файл ОПОЗНАН как MP3")
             else:
-                logger.warning(f"⚠️ Файл НЕ в формате OGG! Заголовок: {header}")
+                logger.warning(f"⚠️ НЕИЗВЕСТНЫЙ формат: {header[:4]}")
     except Exception as e:
         logger.warning(f"⚠️ Не удалось прочитать заголовок: {e}")
     
+    # ============================================
+    # ПОДГОТОВКА ЗАПРОСА
+    # ============================================
     headers = {
         "Authorization": f"Token {DEEPGRAM_API_KEY}",
         "Content-Type": "audio/ogg"
@@ -325,26 +347,47 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
     params = {
         "model": "nova-2",
         "language": "ru",
-        "punctuate": True,
-        "diarize": False,
-        "smart_format": True
+        "punctuate": "true",
+        "diarize": "false",
+        "smart_format": "true"
     }
     
+    logger.info("📡 ПОДГОТОВЛЕН ЗАПРОС К DEEPGRAM:")
+    logger.info(f"   Headers: Authorization: Token ***, Content-Type: audio/ogg")
+    logger.info(f"   Params: {json.dumps(params, ensure_ascii=False)}")
+    
+    # ============================================
+    # ЧТЕНИЕ ФАЙЛА
+    # ============================================
     try:
         with open(audio_file_path, 'rb') as audio_file:
             audio_data = audio_file.read()
         
         logger.info(f"📊 Аудио данные прочитаны: {len(audio_data)} байт")
         
+        # СОХРАНЯЕМ КОПИЮ ДЛЯ ОТЛАДКИ
+        debug_path = f"/tmp/debug_voice_{int(time.time())}.ogg"
+        try:
+            with open(debug_path, 'wb') as f:
+                f.write(audio_data)
+            logger.info(f"💾 СОХРАНЕНА КОПИЯ ДЛЯ ОТЛАДКИ: {debug_path}")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось сохранить копию: {e}")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка чтения файла: {e}")
+        return None
+    
+    # ============================================
+    # ОТПРАВКА ЗАПРОСА
+    # ============================================
+    try:
         client = await get_http_client()
         if client is None:
             logger.error("❌ Не удалось получить HTTPX клиент")
             return None
         
-        logger.info("📡 Отправка запроса в Deepgram...")
-        logger.info(f"📡 URL: {DEEPGRAM_API_URL}")
-        logger.info(f"📡 Headers: Authorization: Token ***, Content-Type: audio/ogg")
-        logger.info(f"📡 Params: {params}")
+        logger.info("📡 ОТПРАВКА ЗАПРОСА В DEEPGRAM...")
         
         response = await client.post(
             DEEPGRAM_API_URL,
@@ -354,35 +397,70 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
             timeout=30.0
         )
         
-        logger.info(f"📡 Статус Deepgram: {response.status_code}")
+        logger.info(f"📡 ПОЛУЧЕН ОТВЕТ ОТ DEEPGRAM:")
+        logger.info(f"   Статус: {response.status_code}")
+        logger.info(f"   Заголовки: {dict(response.headers)}")
+        
+        # Получаем текст ответа
+        response_text = response.text
+        logger.info(f"📄 Текст ответа (первые 1000 символов):")
+        logger.info(f"{response_text[:1000]}")
         
         if response.status_code == 200:
-            data = response.json()
-            logger.info(f"📄 Deepgram ответ (первые 500 символов): {json.dumps(data, ensure_ascii=False)[:500]}")
-            
-            # Проверяем структуру ответа
+            # Парсим JSON
             try:
-                transcript = data['results']['channels'][0]['alternatives'][0].get('transcript', '')
-                confidence = data['results']['channels'][0]['alternatives'][0].get('confidence', 0)
+                data = response.json()
+                logger.info(f"✅ JSON успешно распарсен")
+                logger.info(f"📊 Структура ответа: {list(data.keys())}")
                 
-                logger.info(f"🎤 Распознанный текст: '{transcript}'")
-                logger.info(f"🎤 Уверенность: {confidence}")
-                logger.info(f"🎤 Длина текста: {len(transcript)}")
-                logger.info("=" * 80)
+                # Извлекаем транскрипт
+                transcript = None
+                confidence = 0
+                
+                try:
+                    transcript = data['results']['channels'][0]['alternatives'][0].get('transcript', '')
+                    confidence = data['results']['channels'][0]['alternatives'][0].get('confidence', 0)
+                    logger.info(f"🎤 РАСПОЗНАННЫЙ ТЕКСТ: '{transcript}'")
+                    logger.info(f"🎤 УВЕРЕННОСТЬ: {confidence}")
+                    logger.info(f"🎤 ДЛИНА ТЕКСТА: {len(transcript)}")
+                    
+                except (KeyError, IndexError) as e:
+                    logger.error(f"❌ Не удалось извлечь транскрипт: {e}")
+                    logger.info(f"📄 Полная структура data: {json.dumps(data, ensure_ascii=False, indent=2)[:2000]}")
+                
+                logger.info("=" * 100)
+                logger.info(f"🎤🎤🎤 РЕЗУЛЬТАТ speech_to_text: {transcript if transcript else 'НЕТ ТЕКСТА'} 🎤🎤🎤")
+                logger.info("=" * 100)
                 
                 if transcript and transcript.strip():
-                    return transcript
+                    return transcript.strip()
                 else:
                     logger.warning("⚠️ Deepgram вернул пустой текст")
                     return None
                     
-            except (KeyError, IndexError) as e:
-                logger.error(f"❌ Ошибка парсинга ответа Deepgram: {e}")
-                logger.error(f"📄 Полный ответ: {json.dumps(data, ensure_ascii=False)}")
+            except json.JSONDecodeError as e:
+                logger.error(f"❌ Ошибка парсинга JSON: {e}")
+                logger.error(f"❌ Текст ответа: {response_text[:500]}")
                 return None
                 
+        elif response.status_code == 400:
+            logger.error("❌ Deepgram вернул 400 Bad Request")
+            logger.error(f"❌ Сообщение: {response_text[:500]}")
+            logger.error("❌ Возможные причины:")
+            logger.error("   • Неподдерживаемый формат аудио")
+            logger.error("   • Аудио повреждено")
+            logger.error("   • Неправильные параметры")
+            return None
+        elif response.status_code == 401:
+            logger.error("❌ Deepgram вернул 401 Unauthorized")
+            logger.error("❌ Неверный API ключ")
+            return None
+        elif response.status_code == 429:
+            logger.error("❌ Deepgram вернул 429 Too Many Requests")
+            logger.error("❌ Превышен лимит запросов")
+            return None
         else:
-            logger.error(f"❌ Deepgram API error {response.status_code}: {response.text[:500]}")
+            logger.error(f"❌ Deepgram API error {response.status_code}: {response_text[:500]}")
             return None
             
     except httpx.TimeoutException as e:
@@ -392,7 +470,6 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
         logger.error(f"❌ Ошибка распознавания речи: {e}")
         logger.error(traceback.format_exc())
         return None
-
 
 # ============================================
 # YANDEX TTS (СИНТЕЗ РЕЧИ)
