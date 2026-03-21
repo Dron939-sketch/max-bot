@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик голосовых сообщений для MAX
-Версия 5.2 - С ФЛАГОМ ЗАЩИТЫ ОТ ДУБЛИРОВАНИЯ
+Версия 5.3 - С ДИАГНОСТИКОЙ ДЛЯ ОТЛАДКИ
 """
 
 import logging
@@ -272,7 +272,7 @@ def download_voice_message(voice_url: str) -> Optional[bytes]:
 
 async def handle_voice_message(message: Message, state=None):
     """
-    Обработка голосового сообщения - С ФЛАГОМ ЗАЩИТЫ ОТ ДУБЛИРОВАНИЯ
+    Обработка голосового сообщения - С ДИАГНОСТИКОЙ
     """
     start_time = time.time()
     user_id = message.from_user.id
@@ -423,6 +423,16 @@ async def handle_voice_message(message: Message, state=None):
             recognized_text = await speech_to_text(temp_file)
             stt_duration = time.time() - stt_start
             
+            # 🔥🔥🔥 КРИТИЧЕСКАЯ ДИАГНОСТИКА ДЛЯ ОТЛАДКИ
+            logger.error("=" * 80)
+            logger.error("🔥🔥🔥 РЕЗУЛЬТАТ speech_to_text:")
+            logger.error(f"   recognized_text = '{recognized_text}'")
+            logger.error(f"   тип recognized_text = {type(recognized_text)}")
+            logger.error(f"   длина recognized_text = {len(recognized_text) if recognized_text else 0}")
+            logger.error(f"   recognized_text is None: {recognized_text is None}")
+            logger.error(f"   recognized_text пустой: {not recognized_text or len(recognized_text.strip()) < 2}")
+            logger.error("=" * 80)
+            
             # 🔥 ДИАГНОСТИКА: ЧТО ПРИШЛО С DEEPGRAM
             log_stage("DEEPGRAM_OUTPUT", {
                 "raw_text": recognized_text,
@@ -445,10 +455,12 @@ async def handle_voice_message(message: Message, state=None):
             except Exception as e:
                 log_error("STEP2_TEMP_CLEANUP_ERROR", e, {"file": temp_file})
             
+            # 🔥🔥🔥 ПРОВЕРКА С ПРИНУДИТЕЛЬНЫМ ВЫХОДОМ
             if not recognized_text or len(recognized_text.strip()) < 2:
+                logger.error("🔥🔥🔥 ОТПРАВЛЯЮ ВШИТУЮ ФРАЗУ! recognized_text пустой или None")
                 log_stage("STEP2_STT_FAILED", {"recognized_text": recognized_text})
                 await status_msg.edit_text(
-                    "❌ Не удалось распознать речь\n\n"
+                    "❌ [КОД: STT_FAILED] Не удалось распознать речь\n\n"
                     "Возможные причины:\n"
                     "• Говорите чётче и громче\n"
                     "• Убедитесь, что микрофон работает\n"
