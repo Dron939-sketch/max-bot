@@ -157,7 +157,7 @@ def ensure_miniapp_files():
         'index.html': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/index.html',
         'styles.css': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/styles.css',
         'script.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/script.js',
-        'api.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/api.js',
+        'app.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/app.js',
         'context.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/context.js',
         'onboarding.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/onboarding.js',
         'test.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/test.js',
