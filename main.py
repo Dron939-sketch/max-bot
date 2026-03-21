@@ -1843,6 +1843,7 @@ def handle_callback(call: types.CallbackQuery):
 # ОБРАБОТЧИКИ СООБЩЕНИЙ
 # ============================================
 
+# 1. Сначала обработчики специфических состояний
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.collecting_life_context)
 def handle_life_context_wrapper(message: types.Message):
     process_life_context(message)
@@ -1857,36 +1858,32 @@ def handle_context_message_wrapper(message: types.Message):
     if not handled:
         safe_send_message(message, "Пожалуйста, ответьте на вопрос или используйте кнопки", delete_previous=True, keep_last=1)
 
-# ✅ ПЕРВЫЙ ОБРАБОТЧИК ДЛЯ ГОЛОСА (чтобы перехватывал до текстового)
+# 2. Обработчик голосовых сообщений (ДОЛЖЕН БЫТЬ ВЫШЕ ТЕКСТОВОГО)
 @bot.message_handler(content_types=['voice'])
 def handle_voice_wrapper(message: types.Message):
     user_id = message.from_user.id
     logger.info("=" * 80)
     logger.info("🔥🔥🔥 ВХОД В handle_voice_wrapper (main.py) 🔥🔥🔥")
     logger.info(f"📝 user_id: {user_id}")
-    logger.info(f"📝 message: {message}")
     logger.info(f"📝 message.voice: {message.voice}")
-    logger.info(f"📝 message.voice.file_id: {message.voice.file_id if message.voice else 'None'}")
-    logger.info(f"📝 message.voice.duration: {message.voice.duration if message.voice else 'None'}")
-    logger.info(f"📝 content_type: {message.content_type}")
     logger.info("=" * 80)
     
     def run_async():
-        logger.info("🔥🔥🔥 ЗАПУСКАЕМ asyncio.run(handle_voice_message) 🔥🔥🔥")
         asyncio.run(handle_voice_message(message))
     threading.Thread(target=run_async, daemon=True).start()
 
-# ✅ ИСПРАВЛЕНО: ТОЛЬКО ТЕКСТОВЫЕ СООБЩЕНИЯ (content_type == 'text')
+# 3. Обработчик текстовых вопросов (ТОЛЬКО ДЛЯ ТЕКСТА)
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_question and message.content_type == 'text')
 def handle_question_message(message: types.Message):
     user_id = message.from_user.id
     text = message.text
-    logger.info(f"❓ Получен текст от пользователя {user_id} в состоянии awaiting_question: {text[:50]}...")
+    logger.info(f"❓ Получен текст от пользователя {user_id}: {text[:50]}...")
     def run_sync():
         from handlers.questions import process_text_question_sync
         process_text_question_sync(message, user_id, text)
     threading.Thread(target=run_sync, daemon=True).start()
 
+# 4. Обработчик пользовательской цели
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.awaiting_custom_goal and message.content_type == 'text')
 def handle_custom_goal_message(message: types.Message):
     user_id = message.from_user.id
@@ -1896,6 +1893,7 @@ def handle_custom_goal_message(message: types.Message):
         asyncio.run(process_custom_goal_async(message, user_id, text))
     threading.Thread(target=run_async, daemon=True).start()
 
+# 5. Обработчик вопроса до теста
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.pretest_question and message.content_type == 'text')
 def handle_pretest_question(message: types.Message):
     user_id = message.from_user.id
@@ -1904,6 +1902,7 @@ def handle_pretest_question(message: types.Message):
     safe_send_message(message, "Спасибо за вопрос. Чтобы ответить точнее, мне нужно знать ваш профиль. Пройдите тест — это займёт 15 минут.", delete_previous=True)
     clear_state(user_id)
 
+# 6. Обработчик неизвестных сообщений (ВСЕГДА В КОНЦЕ)
 @bot.message_handler(func=lambda message: True)
 def handle_unknown_message(message: types.Message):
     user_id = message.from_user.id
