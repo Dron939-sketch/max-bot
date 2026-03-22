@@ -2982,5 +2982,98 @@ async def get_user_full_status(user_id: int):
             content={"success": False, "error": str(e)}
         )
 
+# ============================================
+# ЭНДПОИНТЫ ДЛЯ НОВЫХ ФАЙЛОВ МИНИ-ПРИЛОЖЕНИЯ (ПРОДОЛЖЕНИЕ)
+# ============================================
+
+@api_app.get("/static/animated-avatar.js")
+async def get_animated_avatar_js():
+    path = os.path.join(MINIAPP_PATH, "animated-avatar.js")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/javascript")
+    return JSONResponse(status_code=404, content={"error": "animated-avatar.js not found"})
+
+
+@api_app.get("/static/challenges.js")
+async def get_challenges_js():
+    path = os.path.join(MINIAPP_PATH, "challenges.js")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/javascript")
+    return JSONResponse(status_code=404, content={"error": "challenges.js not found"})
+
+
+@api_app.get("/static/notifications.js")
+async def get_notifications_js():
+    path = os.path.join(MINIAPP_PATH, "notifications.js")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/javascript")
+    return JSONResponse(status_code=404, content={"error": "notifications.js not found"})
+
+
+@api_app.get("/static/psychometric.js")
+async def get_psychometric_js():
+    path = os.path.join(MINIAPP_PATH, "psychometric.js")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/javascript")
+    return JSONResponse(status_code=404, content={"error": "psychometric.js not found"})
+
+
+@api_app.get("/static/dynamic-bg.js")
+async def get_dynamic_bg_js():
+    path = os.path.join(MINIAPP_PATH, "dynamic-bg.js")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/javascript")
+    return JSONResponse(status_code=404, content={"error": "dynamic-bg.js not found"})
+
+
+@api_app.get("/static/animations.js")
+async def get_animations_js():
+    path = os.path.join(MINIAPP_PATH, "animations.js")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/javascript")
+    return JSONResponse(status_code=404, content={"error": "animations.js not found"})
+
+
+@api_app.get("/sw.js")
+async def get_service_worker():
+    sw_path = os.path.join(MINIAPP_PATH, "service-worker.js")
+    if os.path.exists(sw_path):
+        return FileResponse(sw_path, media_type="application/javascript")
+    return JSONResponse(status_code=404, content={"error": "service-worker.js not found"})
+
+
+@api_app.get("/manifest.json")
+async def get_manifest():
+    manifest_path = os.path.join(MINIAPP_PATH, "manifest.json")
+    if os.path.exists(manifest_path):
+        return FileResponse(manifest_path, media_type="application/manifest+json")
+    return JSONResponse(status_code=404, content={"error": "manifest.json not found"})
+
+
+@api_app.get("/favicon.ico")
+async def favicon():
+    """Возвращает favicon (или пустой ответ, чтобы не было 404)"""
+    icon_path = os.path.join(MINIAPP_PATH, "favicon.ico")
+    if os.path.exists(icon_path):
+        return FileResponse(icon_path, media_type="image/x-icon")
+    return JSONResponse(status_code=204, content=None)
+
+
+@api_app.get("/icon-192.png")
+async def get_icon_192():
+    icon_path = os.path.join(MINIAPP_PATH, "icon-192.png")
+    if os.path.exists(icon_path):
+        return FileResponse(icon_path, media_type="image/png")
+    return JSONResponse(status_code=404, content={"error": "icon not found"})
+
+
+@api_app.get("/icon-512.png")
+async def get_icon_512():
+    icon_path = os.path.join(MINIAPP_PATH, "icon-512.png")
+    if os.path.exists(icon_path):
+        return FileResponse(icon_path, media_type="image/png")
+    return JSONResponse(status_code=404, content={"error": "icon not found"})
+
+
 if __name__ == "__main__":
     main()
