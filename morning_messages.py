@@ -3,7 +3,7 @@
 """
 Модуль для утренних вдохновляющих сообщений (3 дня)
 С ИИ-генерацией для Дней 2 и 3
-ВЕРСИЯ 2.0 - ИСПРАВЛЕНО: синхронные операции с БД
+ВЕРСИЯ 2.3 - ИСПРАВЛЕНО: добавлен asyncio, улучшен _get_user_morning_history
 """
 
 import logging
@@ -22,7 +22,7 @@ from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from profiles import VECTORS, LEVEL_PROFILES
 from services import call_deepseek, text_to_speech
 
-# ✅ ИСПРАВЛЕНО: используем sync_db
+# ✅ Используем sync_db
 from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ class MorningMessageManager:
         self.user_data = user_data
     
     # ============================================
-    # ✅ ИСПРАВЛЕНО: СИНХРОННЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С БД
+    # ФУНКЦИИ ДЛЯ РАБОТЫ С БД
     # ============================================
     
     def _save_message_to_db(self, user_id: int, day: int, message_text: str, message_type: str = "morning"):
@@ -98,13 +98,38 @@ class MorningMessageManager:
             logger.error(f"❌ Ошибка сохранения статистики генерации: {e}")
     
     def _get_user_morning_history(self, user_id: int) -> List[Dict]:
-        """Синхронно получает историю утренних сообщений пользователя"""
+        """
+        Синхронно получает историю утренних сообщений пользователя
+        ✅ УЛУЧШЕНО: теперь реально получает историю из БД
+        """
         try:
-            # Получаем из БД через sync_db (нужно добавить метод в sync_db)
-            # Пока возвращаем пустой список, так как этот метод используется только для статистики
-            return []
+            # Получаем все напоминания пользователя
+            reminders = sync_db.get_user_reminders(user_id, include_sent=True)
+            morning_history = []
+            
+            for r in reminders:
+                reminder_type = r.get('reminder_type', '')
+                # Фильтруем только утренние сообщения
+                if reminder_type.startswith('morning_'):
+                    data = r.get('data', {})
+                    # Если data в виде строки JSON, парсим
+                    if isinstance(data, str):
+                        try:
+                            data = json.loads(data)
+                        except:
+                            data = {}
+                    
+                    morning_history.append({
+                        'day': data.get('day'),
+                        'timestamp': r.get('remind_at'),
+                        'preview': data.get('message', '')[:100] if data.get('message') else data.get('message_preview', '')
+                    })
+            
+            logger.debug(f"📜 Получена история утренних сообщений для {user_id}: {len(morning_history)} записей")
+            return morning_history
+            
         except Exception as e:
-            logger.error(f"❌ Ошибка получения истории: {e}")
+            logger.error(f"❌ Ошибка получения истории для {user_id}: {e}")
             return []
     
     # ============================================
@@ -151,7 +176,7 @@ class MorningMessageManager:
                 f"   Через: {seconds_until_target/3600:.1f} часов"
             )
             
-            # ✅ ИСПРАВЛЕНО: Сохраняем запланированное сообщение синхронно
+            # Сохраняем запланированное сообщение
             def _save_reminder():
                 sync_db.add_reminder(
                     user_id=user_id,
@@ -205,7 +230,7 @@ class MorningMessageManager:
             mode = context.communication_mode if context else "coach"
             
             if context:
-                # Проверяем, является ли update_weather асинхронной функцией
+                # Обновляем погоду
                 if hasattr(context, 'update_weather'):
                     if asyncio.iscoroutinefunction(context.update_weather):
                         await context.update_weather()
@@ -239,11 +264,11 @@ class MorningMessageManager:
             # Клавиатура для дня
             keyboard = self._get_keyboard_for_day(day)
             
-            # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно в отдельном потоке
+            # Сохраняем в БД
             threading.Thread(target=self._save_message_to_db, args=(user_id, day, text), daemon=True).start()
             threading.Thread(target=self._save_generation_stats, args=(user_id, day, success, error_msg), daemon=True).start()
             
-            # ✅ Отправляем текст
+            # Отправляем текст
             try:
                 if hasattr(self.bot, 'send_message') and asyncio.iscoroutinefunction(self.bot.send_message):
                     await self.bot.send_message(
@@ -659,7 +684,7 @@ class MorningMessageManager:
                 logger.info(f"⏰ Отменён день {day} для пользователя {user_id}")
             del self.scheduled_tasks[user_id]
             
-            # ✅ ИСПРАВЛЕНО: Логируем отмену
+            # Логируем отмену
             threading.Thread(target=sync_db.log_event, args=(user_id, 'morning_cancelled', {}), daemon=True).start()
     
     async def get_user_morning_stats(self, user_id: int) -> Dict[str, Any]:
