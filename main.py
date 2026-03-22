@@ -3091,6 +3091,386 @@ async def get_icon_512():
         return FileResponse(icon_path, media_type="image/png")
     return JSONResponse(status_code=404, content={"error": "icon not found"})
 
+# ============================================
+# 🚀 НЕДОСТАЮЩИЕ API ЭНДПОИНТЫ ДЛЯ ДАШБОРДА 🚀
+# ============================================
+
+@api_app.get("/api/challenge/stats")
+async def get_challenge_stats(user_id: int):
+    """Получить статистику челленджей пользователя"""
+    try:
+        user_id = int(user_id)
+        
+        # Получаем данные пользователя
+        user_info = user_data.get(user_id, {})
+        
+        # Пока возвращаем заглушку
+        return JSONResponse({
+            "success": True,
+            "stats": {
+                "total": 0,
+                "completed": 0,
+                "points": user_info.get('points', 0),
+                "streak": user_info.get('streak', 0),
+                "daily_completed": False,
+                "weekly_completed": False,
+                "level": 1,
+                "next_level_points": 100
+            }
+        })
+    except Exception as e:
+        logger.error(f"❌ Error in get_challenge_stats: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/challenges")
+async def get_challenges(user_id: int):
+    """Получить список активных челленджей"""
+    try:
+        user_id = int(user_id)
+        
+        # Получаем профиль пользователя
+        user_info = user_data.get(user_id, {})
+        profile_data = user_info.get('profile_data', {})
+        
+        # Базовые челленджи
+        challenges = [
+            {
+                "id": 1,
+                "name": "Ежедневное общение",
+                "description": "Напиши сообщение в чат",
+                "progress": 0,
+                "target": 1,
+                "reward": 10,
+                "emoji": "💬",
+                "type": "daily",
+                "completed": False
+            },
+            {
+                "id": 2,
+                "name": "Анализ мыслей",
+                "description": "Запиши 3 мысли в дневник",
+                "progress": 0,
+                "target": 3,
+                "reward": 30,
+                "emoji": "📝",
+                "type": "daily",
+                "completed": False
+            },
+            {
+                "id": 3,
+                "name": "Осознанность",
+                "description": "Практика осознанности",
+                "progress": 0,
+                "target": 1,
+                "reward": 20,
+                "emoji": "🧘",
+                "type": "daily",
+                "completed": False
+            }
+        ]
+        
+        # Добавляем персонализированные челленджи
+        if profile_data:
+            sb = profile_data.get('sb_level', 4)
+            tf = profile_data.get('tf_level', 4)
+            
+            if sb < 3:
+                challenges.append({
+                    "id": 4,
+                    "name": "Преодоление страхов",
+                    "description": "Сделай одно действие, которое пугает",
+                    "progress": 0,
+                    "target": 1,
+                    "reward": 50,
+                    "emoji": "🛡️",
+                    "type": "personalized",
+                    "completed": False
+                })
+            
+            if tf < 3:
+                challenges.append({
+                    "id": 5,
+                    "name": "Финансовая осознанность",
+                    "description": "Запиши все расходы",
+                    "progress": 0,
+                    "target": 1,
+                    "reward": 40,
+                    "emoji": "💰",
+                    "type": "personalized",
+                    "completed": False
+                })
+        
+        return JSONResponse({
+            "success": True,
+            "challenges": challenges
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_challenges: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e), "challenges": []}
+        )
+
+
+@api_app.get("/api/psychometric/find-doubles")
+async def find_doubles(user_id: int, limit: int = 10):
+    """Найти психометрических двойников"""
+    try:
+        user_id = int(user_id)
+        
+        # Получаем профиль пользователя
+        user_info = user_data.get(user_id, {})
+        profile_data = user_info.get('profile_data', {})
+        
+        if not profile_data:
+            return JSONResponse({
+                "success": True,
+                "doubles": [],
+                "total": 0,
+                "message": "Пройдите тест, чтобы найти двойников"
+            })
+        
+        # Ищем пользователей с похожим профилем
+        doubles = []
+        user_code = profile_data.get('display_name', '')
+        
+        # Проходим по всем пользователям в памяти
+        for other_id, other_info in user_data.items():
+            if other_id == user_id:
+                continue
+            
+            other_profile = other_info.get('profile_data', {})
+            if not other_profile:
+                continue
+            
+            other_code = other_profile.get('display_name', '')
+            
+            # Сравниваем коды профилей
+            if user_code and other_code and user_code == other_code:
+                other_context = user_contexts.get(other_id)
+                doubles.append({
+                    "user_id": other_id,
+                    "name": other_context.name if other_context else f"Пользователь {other_id}",
+                    "profile_code": other_code,
+                    "similarity": 0.85,
+                    "common_traits": ["Аналитическое мышление", "Эмоциональный интеллект"]
+                })
+        
+        # Ограничиваем количество
+        doubles = doubles[:limit]
+        
+        return JSONResponse({
+            "success": True,
+            "doubles": doubles,
+            "total": len(doubles),
+            "profile_code": user_code
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in find_doubles: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e), "doubles": []}
+        )
+
+
+@api_app.get("/api/notification/settings")
+async def get_notification_settings(user_id: int):
+    """Получить настройки уведомлений пользователя"""
+    try:
+        user_id = int(user_id)
+        
+        # Получаем настройки из БД или памяти
+        user_info = user_data.get(user_id, {})
+        notification_settings = user_info.get('notification_settings', {})
+        
+        return JSONResponse({
+            "success": True,
+            "settings": {
+                "push_enabled": notification_settings.get('push_enabled', True),
+                "email_enabled": notification_settings.get('email_enabled', False),
+                "daily_summary": notification_settings.get('daily_summary', True),
+                "weekly_report": notification_settings.get('weekly_report', True),
+                "challenge_reminders": notification_settings.get('challenge_reminders', True),
+                "quiet_hours_start": notification_settings.get('quiet_hours_start', 22),
+                "quiet_hours_end": notification_settings.get('quiet_hours_end', 8)
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_notification_settings: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/notification/vapid-key")
+async def get_vapid_key():
+    """Получить VAPID ключ для push-уведомлений"""
+    try:
+        # Пока возвращаем заглушку
+        # В будущем нужно будет сгенерировать реальный VAPID ключ
+        return JSONResponse({
+            "success": True,
+            "public_key": "BDc3ZqHx8YzW2XkL9mNpQrSvTyUwIeJfKgLhMiNjOkPlQmRnSoTpUqVrWsXtYuZvAxByCzD"
+        })
+    except Exception as e:
+        logger.error(f"❌ Error in get_vapid_key: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/notification/history")
+async def get_notification_history(user_id: int, limit: int = 20):
+    """Получить историю уведомлений"""
+    try:
+        user_id = int(user_id)
+        
+        # Получаем историю из БД
+        user_info = user_data.get(user_id, {})
+        notifications = user_info.get('notifications', [])
+        
+        # Если нет истории, возвращаем заглушку
+        if not notifications:
+            notifications = [
+                {
+                    "id": 1,
+                    "title": "Добро пожаловать!",
+                    "body": "Рады видеть вас в приложении",
+                    "type": "welcome",
+                    "read": True,
+                    "created_at": datetime.now().isoformat()
+                }
+            ]
+        
+        return JSONResponse({
+            "success": True,
+            "notifications": notifications[:limit],
+            "unread_count": sum(1 for n in notifications if not n.get('read', False))
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_notification_history: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e), "notifications": []}
+        )
+
+
+@api_app.post("/api/notification/mark-read")
+async def mark_notification_read(request: Request):
+    """Отметить уведомление как прочитанное"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        notification_id = data.get('notification_id')
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id required")
+        
+        user_id = int(user_id)
+        
+        # Обновляем статус в памяти
+        if user_id not in user_data:
+            user_data[user_id] = {}
+        
+        if 'notifications' not in user_data[user_id]:
+            user_data[user_id]['notifications'] = []
+        
+        for n in user_data[user_id]['notifications']:
+            if n.get('id') == notification_id:
+                n['read'] = True
+                break
+        
+        return JSONResponse({"success": True})
+        
+    except Exception as e:
+        logger.error(f"❌ Error in mark_notification_read: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.post("/api/notification/update-settings")
+async def update_notification_settings(request: Request):
+    """Обновить настройки уведомлений"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        settings = data.get('settings', {})
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id required")
+        
+        user_id = int(user_id)
+        
+        if user_id not in user_data:
+            user_data[user_id] = {}
+        
+        user_data[user_id]['notification_settings'] = settings
+        
+        # Сохраняем в БД
+        sync_db.save_user_to_db(user_id)
+        
+        return JSONResponse({"success": True})
+        
+    except Exception as e:
+        logger.error(f"❌ Error in update_notification_settings: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.post("/api/notification/register")
+async def register_push_notification(request: Request):
+    """Регистрирует устройство для push-уведомлений"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        subscription = data.get('subscription')
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id required")
+        
+        user_id = int(user_id)
+        
+        # Сохраняем подписку
+        if user_id not in user_data:
+            user_data[user_id] = {}
+        
+        if 'push_subscriptions' not in user_data[user_id]:
+            user_data[user_id]['push_subscriptions'] = []
+        
+        # Проверяем, нет ли уже такой подписки
+        exists = False
+        for sub in user_data[user_id]['push_subscriptions']:
+            if sub.get('endpoint') == subscription.get('endpoint'):
+                exists = True
+                break
+        
+        if not exists:
+            user_data[user_id]['push_subscriptions'].append(subscription)
+            sync_db.save_user_to_db(user_id)
+        
+        return JSONResponse({"success": True})
+        
+    except Exception as e:
+        logger.error(f"❌ Error in register_push_notification: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
 
 if __name__ == "__main__":
     main()
