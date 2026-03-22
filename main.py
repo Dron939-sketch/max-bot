@@ -1062,7 +1062,15 @@ async def chat_message(request: Request):
         user_info = user_data.get(user_id, {})
         
         from question_analyzer import QuestionAnalyzer
-        analyzer = QuestionAnalyzer(user_id, user_info)
+        from models import UserContext
+
+        # Получаем объект контекста пользователя
+        user_context_obj = user_contexts.get(user_id)
+        if not user_context_obj:
+            user_context_obj = UserContext(user_id)
+            user_contexts[user_id] = user_context_obj
+
+        analyzer = QuestionAnalyzer(user_context_obj, user_info)
         analysis = await analyzer.analyze_question_async(message_text)
         
         from services import call_deepseek_with_context
