@@ -85,7 +85,8 @@ class LoopAnalyzer:
         self._path: List[int] = []
         self._analysis_time: Optional[datetime] = None
         
-        logger.info(f"LoopAnalyzer инициализирован для модели пользователя {model.user_id}")
+        user_id = model.user_id if hasattr(model, 'user_id') else model
+        logger.info(f"LoopAnalyzer инициализирован для пользователя {user_id}")
     
     # ============================================
     # ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
