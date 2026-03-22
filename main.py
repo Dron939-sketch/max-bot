@@ -162,8 +162,16 @@ def ensure_miniapp_files():
         'context.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/context.js',
         'onboarding.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/onboarding.js',
         'test.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/test.js',
-        'api.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/api.js',           # НОВЫЙ
-        'dashboard.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/dashboard.js'  # НОВЫЙ
+        'api.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/api.js',
+        'dashboard.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/dashboard.js',
+        'animated-avatar.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/animated-avatar.js',
+        'challenges.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/challenges.js',
+        'notifications.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/notifications.js',
+        'psychometric.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/psychometric.js',
+        'dynamic-bg.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/dynamic-bg.js',
+        'animations.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/animations.js',
+        'service-worker.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/service-worker.js',
+        'manifest.json': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/manifest.json'
     }
     
     for filename, url in files.items():
