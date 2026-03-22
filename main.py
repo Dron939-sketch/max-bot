@@ -2656,6 +2656,8 @@ async def api_chat_action(request: Request):
 async def process_voice(request: Request):
     """Обработка голосового сообщения"""
     try:
+        import time  # ✅ ДОБАВИТЬ импорт
+        
         form = await request.form()
         user_id = form.get('user_id')
         voice_file = form.get('voice')
@@ -2666,7 +2668,14 @@ async def process_voice(request: Request):
                 content={"success": False, "error": "user_id and voice file required"}
             )
         
-        user_id = int(user_id)
+        # ✅ ПРЕОБРАЗУЕМ user_id В INT
+        try:
+            user_id = int(user_id)
+        except ValueError:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "invalid user_id"}
+            )
         
         # Сохраняем временно файл
         import tempfile
@@ -2678,8 +2687,18 @@ async def process_voice(request: Request):
         with open(tmp_path, 'wb') as f:
             f.write(content)
         
+        # Проверяем размер файла
+        file_size = os.path.getsize(tmp_path)
+        if file_size == 0:
+            os.unlink(tmp_path)
+            return JSONResponse({
+                "success": False,
+                "error": "Пустой аудиофайл",
+                "answer": "Не удалось записать голос. Попробуйте еще раз."
+            })
+        
         try:
-            # Распознаем речь через Deepgram
+            # ✅ ДЛЯ WEBM ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ CONTENT-TYPE
             from services import speech_to_text
             recognized_text = await speech_to_text(tmp_path)
             
@@ -2713,7 +2732,6 @@ async def process_voice(request: Request):
             
             audio_url = None
             if audio_response:
-                # Сохраняем аудио
                 audio_filename = f"voice_response_{user_id}_{int(time.time())}.ogg"
                 audio_path = os.path.join(MINIAPP_PATH, "audio", audio_filename)
                 os.makedirs(os.path.dirname(audio_path), exist_ok=True)
@@ -2731,7 +2749,6 @@ async def process_voice(request: Request):
             })
             
         finally:
-            # Удаляем временный файл
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
         
@@ -2741,7 +2758,7 @@ async def process_voice(request: Request):
         traceback.print_exc()
         return JSONResponse(
             status_code=500,
-            content={"success": False, "error": str(e)}
+            content={"success": False, "error": str(e), "answer": "Ошибка обработки голоса. Попробуйте позже."}
         )
 
 
