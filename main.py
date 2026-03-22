@@ -154,6 +154,7 @@ def ensure_miniapp_files():
     miniapp_path = os.path.join(os.path.dirname(__file__), 'miniapp')
     os.makedirs(miniapp_path, exist_ok=True)
     
+    # Только те файлы, которые реально существуют в репозитории
     files = {
         'index.html': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/index.html',
         'styles.css': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/styles.css',
@@ -168,6 +169,7 @@ def ensure_miniapp_files():
         'challenges.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/challenges.js',
         'notifications.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/notifications.js',
         'psychometric.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/psychometric.js',
+        'psychometric.css': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/psychometric.css',
         'dynamic-bg.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/dynamic-bg.js',
         'animations.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/animations.js',
         'service-worker.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/service-worker.js',
@@ -176,12 +178,56 @@ def ensure_miniapp_files():
     
     for filename, url in files.items():
         filepath = os.path.join(miniapp_path, filename)
-        if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
-            try:
-                subprocess.run(['wget', '-O', filepath, url], check=True, capture_output=True)
-                print(f"✅ Скачан {filename} ({os.path.getsize(filepath)} байт)")
-            except Exception as e:
-                print(f"⚠️ Не удалось скачать {filename}: {e}")
+        
+        # Проверяем, существует ли файл и не пустой ли он
+        if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+            print(f"✅ Файл {filename} уже существует ({os.path.getsize(filepath)} байт)")
+            continue
+        
+        try:
+            print(f"📥 Скачиваю {filename}...")
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            
+            with open(filepath, 'wb') as f:
+                f.write(response.content)
+            
+            print(f"✅ Скачан {filename} ({os.path.getsize(filepath)} байт)")
+        except Exception as e:
+            print(f"⚠️ Не удалось скачать {filename}: {e}")
+            # Создаем минимальную заглушку
+            if filename.endswith('.js'):
+                with open(filepath, 'w') as f:
+                    f.write(f"// {filename} - заглушка\nconsole.log('{filename} загружен (заглушка)');")
+                print(f"📄 Создан JS-заглушка {filename}")
+            elif filename.endswith('.css'):
+                with open(filepath, 'w') as f:
+                    f.write(f"/* {filename} - заглушка */")
+                print(f"📄 Создан CSS-заглушка {filename}")
+            elif filename.endswith('.html'):
+                with open(filepath, 'w') as f:
+                    f.write("""<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Фреди - Ваш психолог</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div id="app">
+        <div class="loading">Загрузка...</div>
+    </div>
+    <script src="/static/api.js"></script>
+    <script src="/static/dashboard.js"></script>
+    <script src="/static/script.js"></script>
+</body>
+</html>""")
+                print(f"📄 Создан HTML-заглушка {filename}")
+            elif filename.endswith('.json'):
+                with open(filepath, 'w') as f:
+                    f.write('{"name": "Фреди", "short_name": "Фреди", "start_url": "/", "display": "standalone"}')
+                print(f"📄 Создан JSON-заглушка {filename}")
     
     # Создаем папку для аудио
     audio_path = os.path.join(miniapp_path, 'audio')
