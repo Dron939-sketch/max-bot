@@ -3,7 +3,7 @@
 """
 МОДУЛЬ 7: АНАЛИЗ ВОПРОСОВ В КОНТЕКСТЕ КОНФАЙНМЕНТ-МОДЕЛИ
 Анализирует вопросы пользователя с учетом его психологического профиля
-ВЕРСИЯ 2.0 - ДОБАВЛЕНО КЭШИРОВАНИЕ В БД
+ВЕРСИЯ 2.1 - ИСПРАВЛЕНО: безопасное создание LoopAnalyzer
 """
 
 import re
@@ -138,19 +138,46 @@ class QuestionContextAnalyzer:
         ]
     }
     
-    def __init__(self, model: ConfinementModel9, user_name: str = "друг"):
+    def __init__(self, model, user_name: str = "друг"):
         """
         Инициализация анализатора
         
         Args:
-            model: конфайнмент-модель пользователя
+            model: конфайнтмент-модель пользователя (объект ConfinementModel9) или user_id
             user_name: имя пользователя
         """
-        self.model = model
+        # ✅ ИСПРАВЛЕНО: безопасное получение модели
+        from confinement_model import ConfinementModel9
+        
+        # Определяем, что передано
+        if isinstance(model, ConfinementModel9):
+            self.model = model
+        elif isinstance(model, int):
+            # Если передан user_id, создаем пустую модель
+            self.model = ConfinementModel9(user_id=model)
+            logger.warning(f"Создана пустая модель для user_id={model}")
+        elif hasattr(model, 'user_id'):
+            # Если передан объект с user_id
+            user_id = model.user_id
+            self.model = ConfinementModel9(user_id=user_id)
+            logger.warning(f"Создана пустая модель из объекта с user_id={user_id}")
+        else:
+            # По умолчанию - пустая модель
+            self.model = ConfinementModel9()
+            logger.warning("Создана пустая модель (неизвестный тип аргумента)")
+        
         self.user_name = user_name
-        self.reporter = ConfinementReporter(model, user_name)
-        self.loop_analyzer = LoopAnalyzer(model)
-        self.loops = self.loop_analyzer.analyze()
+        self.reporter = ConfinementReporter(self.model, user_name)
+        
+        # ✅ ИСПРАВЛЕНО: безопасное создание LoopAnalyzer
+        from loop_analyzer import LoopAnalyzer
+        try:
+            self.loop_analyzer = LoopAnalyzer(self.model)
+            self.loops = self.loop_analyzer.analyze()
+        except Exception as e:
+            logger.error(f"❌ Ошибка при создании LoopAnalyzer: {e}")
+            self.loop_analyzer = None
+            self.loops = []
         
         # Кэш для результатов анализа
         self._analysis_cache = {}
@@ -202,7 +229,7 @@ class QuestionContextAnalyzer:
         return analysis
     
     # ============================================
-    # ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
+    # ✅ ФУНКЦИИ ДЛЯ РАБОТЫ С БД
     # ============================================
     
     async def _cache_analysis_to_db(self, question: str, analysis: Dict[str, Any]):
@@ -319,7 +346,7 @@ class QuestionContextAnalyzer:
             return {}
     
     # ============================================
-    # МЕТОДЫ АНАЛИЗА (без изменений)
+    # МЕТОДЫ АНАЛИЗА
     # ============================================
     
     def _analyze_vectors(self, question: str) -> List[Dict[str, Any]]:
@@ -781,7 +808,7 @@ def create_analyzer_from_user_data(user_data: Dict, user_name: str = "друг")
     model_data = user_data.get('confinement_model')
     if not model_data:
         logger.warning(f"Нет конфайнмент-модели для пользователя {user_name}")
-        return None
+        return QuestionContextAnalyzer(None, user_name)  # Создаем с пустой моделью
     
     try:
         from confinement_model import ConfinementModel9
@@ -794,7 +821,7 @@ def create_analyzer_from_user_data(user_data: Dict, user_name: str = "друг")
         return QuestionContextAnalyzer(model, user_name)
     except Exception as e:
         logger.error(f"Ошибка при создании анализатора: {e}")
-        return None
+        return QuestionContextAnalyzer(None, user_name)  # Создаем с пустой моделью
 
 
 # ============================================
