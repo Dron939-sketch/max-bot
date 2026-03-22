@@ -3579,45 +3579,5 @@ async def force_load_user(request: Request):
             content={"success": False, "error": str(e)}
         )
 
-@api_app.post("/api/notification/register")
-async def register_push_notification(request: Request):
-    """Регистрирует устройство для push-уведомлений"""
-    try:
-        data = await request.json()
-        user_id = data.get('user_id')
-        subscription = data.get('subscription')
-        
-        if not user_id:
-            raise HTTPException(status_code=400, detail="user_id required")
-        
-        user_id = int(user_id)
-        
-        # Сохраняем подписку
-        if user_id not in user_data:
-            user_data[user_id] = {}
-        
-        if 'push_subscriptions' not in user_data[user_id]:
-            user_data[user_id]['push_subscriptions'] = []
-        
-        # Проверяем, нет ли уже такой подписки
-        exists = False
-        for sub in user_data[user_id]['push_subscriptions']:
-            if sub.get('endpoint') == subscription.get('endpoint'):
-                exists = True
-                break
-        
-        if not exists:
-            user_data[user_id]['push_subscriptions'].append(subscription)
-            sync_db.save_user_to_db(user_id)
-        
-        return JSONResponse({"success": True})
-        
-    except Exception as e:
-        logger.error(f"❌ Error in register_push_notification: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
-
 if __name__ == "__main__":
     main()
