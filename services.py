@@ -369,29 +369,20 @@ async def call_deepseek_with_context(
 async def speech_to_text(audio_file_path: str) -> Optional[str]:
     """
     Распознает речь из аудиофайла через Deepgram API
-    С ПОЛНЫМ ЛОГИРОВАНИЕМ ДЛЯ ОТЛАДКИ
     """
+    import time
     import json
     
     logger.info("=" * 100)
     logger.info("🎤🎤🎤 НАЧАЛО speech_to_text 🎤🎤🎤")
     logger.info("=" * 100)
-    logger.info(f"⏰ Время: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
-    logger.info(f"📁 audio_file_path: {audio_file_path}")
-    logger.info(f"🔑 DEEPGRAM_API_KEY: {'✅ ЕСТЬ' if DEEPGRAM_API_KEY else '❌ НЕТ'}")
-    logger.info(f"🌐 DEEPGRAM_API_URL: {DEEPGRAM_API_URL}")
     
-    # ============================================
-    # ПРОВЕРКА 1: Существует ли файл?
-    # ============================================
     if not DEEPGRAM_API_KEY:
-        logger.error("❌ DEEPGRAM_API_KEY не настроен в config")
-        logger.info("=" * 100)
+        logger.error("❌ DEEPGRAM_API_KEY не настроен")
         return None
     
     if not os.path.exists(audio_file_path):
         logger.error(f"❌ Файл НЕ СУЩЕСТВУЕТ: {audio_file_path}")
-        logger.info("=" * 100)
         return None
     
     file_size = os.path.getsize(audio_file_path)
@@ -399,7 +390,76 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
     
     if file_size == 0:
         logger.error("❌ Файл ПУСТОЙ (0 байт)")
-        logger.info("=" * 100)
+        return None
+    
+    # Определяем MIME тип по расширению
+    if audio_file_path.endswith('.webm'):
+        content_type = 'audio/webm'
+    elif audio_file_path.endswith('.ogg'):
+        content_type = 'audio/ogg'
+    elif audio_file_path.endswith('.wav'):
+        content_type = 'audio/wav'
+    elif audio_file_path.endswith('.mp3'):
+        content_type = 'audio/mpeg'
+    else:
+        content_type = 'audio/ogg'  # по умолчанию
+    
+    logger.info(f"📁 Content-Type: {content_type}")
+    
+    headers = {
+        "Authorization": f"Token {DEEPGRAM_API_KEY}",
+        "Content-Type": content_type
+    }
+    
+    params = {
+        "model": "nova-2",
+        "language": "ru",
+        "punctuate": "true",
+        "diarize": "false",
+        "smart_format": "true"
+    }
+    
+    try:
+        with open(audio_file_path, 'rb') as audio_file:
+            audio_data = audio_file.read()
+        
+        logger.info(f"📊 Аудио данные прочитаны: {len(audio_data)} байт")
+        
+        client = await get_http_client()
+        
+        response = await client.post(
+            DEEPGRAM_API_URL,
+            headers=headers,
+            params=params,
+            content=audio_data,
+            timeout=30.0
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            try:
+                transcript = data['results']['channels'][0]['alternatives'][0].get('transcript', '')
+                confidence = data['results']['channels'][0]['alternatives'][0].get('confidence', 0)
+                logger.info(f"🎤 РАСПОЗНАННЫЙ ТЕКСТ: '{transcript}'")
+                logger.info(f"🎤 УВЕРЕННОСТЬ: {confidence}")
+                
+                if transcript and transcript.strip():
+                    return transcript.strip()
+                else:
+                    logger.warning("⚠️ Deepgram вернул пустой текст")
+                    return None
+                    
+            except (KeyError, IndexError) as e:
+                logger.error(f"❌ Не удалось извлечь транскрипт: {e}")
+                return None
+                
+        else:
+            logger.error(f"❌ Deepgram API error {response.status_code}: {response.text[:500]}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка распознавания речи: {e}")
         return None
     
     # ============================================
