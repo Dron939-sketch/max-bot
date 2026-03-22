@@ -1071,7 +1071,7 @@ async def chat_message(request: Request):
             user_contexts[user_id] = user_context_obj
 
         analyzer = QuestionAnalyzer(user_context_obj, user_info)
-        analysis = await analyzer.analyze_question_async(message_text)
+        analysis = analyzer.analyze(message_text)
         
         from services import call_deepseek_with_context
         
