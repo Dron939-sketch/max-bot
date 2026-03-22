@@ -376,6 +376,10 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
     logger.info("=" * 100)
     logger.info("🎤🎤🎤 НАЧАЛО speech_to_text 🎤🎤🎤")
     logger.info("=" * 100)
+    logger.info(f"⏰ Время: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+    logger.info(f"📁 audio_file_path: {audio_file_path}")
+    logger.info(f"🔑 DEEPGRAM_API_KEY: {'✅ ЕСТЬ' if DEEPGRAM_API_KEY else '❌ НЕТ'}")
+    logger.info(f"🌐 DEEPGRAM_API_URL: {DEEPGRAM_API_URL}")
     
     if not DEEPGRAM_API_KEY:
         logger.error("❌ DEEPGRAM_API_KEY не настроен")
@@ -392,20 +396,36 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
         logger.error("❌ Файл ПУСТОЙ (0 байт)")
         return None
     
-    # Определяем MIME тип по расширению
-    if audio_file_path.endswith('.webm'):
-        content_type = 'audio/webm'
-    elif audio_file_path.endswith('.ogg'):
-        content_type = 'audio/ogg'
-    elif audio_file_path.endswith('.wav'):
-        content_type = 'audio/wav'
-    elif audio_file_path.endswith('.mp3'):
-        content_type = 'audio/mpeg'
-    else:
-        content_type = 'audio/ogg'  # по умолчанию
+    # ============================================
+    # ПРОВЕРКА ФОРМАТА ФАЙЛА
+    # ============================================
+    try:
+        with open(audio_file_path, 'rb') as f:
+            header = f.read(16)
+            logger.info(f"📊 Заголовок файла (hex): {header.hex()}")
+            
+            if header[:4] == b'OggS':
+                logger.info("✅ Файл ОПОЗНАН как OGG (Opus/Vorbis)")
+                content_type = 'audio/ogg'
+            elif header[:4] == b'RIFF':
+                logger.info("✅ Файл ОПОЗНАН как WAV")
+                content_type = 'audio/wav'
+            elif header[:3] == b'ID3':
+                logger.info("✅ Файл ОПОЗНАН как MP3")
+                content_type = 'audio/mpeg'
+            elif header[:4] == b'\x1aE\xdf\xa3':
+                logger.info("✅ Файл ОПОЗНАН как WebM")
+                content_type = 'audio/webm'
+            else:
+                logger.warning(f"⚠️ НЕИЗВЕСТНЫЙ формат: {header[:4]}, пробуем audio/webm")
+                content_type = 'audio/webm'
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось прочитать заголовок: {e}")
+        content_type = 'audio/webm'  # по умолчанию
     
-    logger.info(f"📁 Content-Type: {content_type}")
-    
+    # ============================================
+    # ПОДГОТОВКА ЗАПРОСА
+    # ============================================
     headers = {
         "Authorization": f"Token {DEEPGRAM_API_KEY}",
         "Content-Type": content_type
@@ -419,86 +439,8 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
         "smart_format": "true"
     }
     
-    try:
-        with open(audio_file_path, 'rb') as audio_file:
-            audio_data = audio_file.read()
-        
-        logger.info(f"📊 Аудио данные прочитаны: {len(audio_data)} байт")
-        
-        client = await get_http_client()
-        
-        response = await client.post(
-            DEEPGRAM_API_URL,
-            headers=headers,
-            params=params,
-            content=audio_data,
-            timeout=30.0
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            
-            try:
-                transcript = data['results']['channels'][0]['alternatives'][0].get('transcript', '')
-                confidence = data['results']['channels'][0]['alternatives'][0].get('confidence', 0)
-                logger.info(f"🎤 РАСПОЗНАННЫЙ ТЕКСТ: '{transcript}'")
-                logger.info(f"🎤 УВЕРЕННОСТЬ: {confidence}")
-                
-                if transcript and transcript.strip():
-                    return transcript.strip()
-                else:
-                    logger.warning("⚠️ Deepgram вернул пустой текст")
-                    return None
-                    
-            except (KeyError, IndexError) as e:
-                logger.error(f"❌ Не удалось извлечь транскрипт: {e}")
-                return None
-                
-        else:
-            logger.error(f"❌ Deepgram API error {response.status_code}: {response.text[:500]}")
-            return None
-            
-    except Exception as e:
-        logger.error(f"❌ Ошибка распознавания речи: {e}")
-        return None
-    
-    # ============================================
-    # ПРОВЕРКА 2: Что за формат файла?
-    # ============================================
-    try:
-        with open(audio_file_path, 'rb') as f:
-            header = f.read(16)
-            logger.info(f"📊 Заголовок файла (hex): {header.hex()}")
-            
-            if header[:4] == b'OggS':
-                logger.info("✅ Файл ОПОЗНАН как OGG (Opus/Vorbis)")
-            elif header[:4] == b'RIFF':
-                logger.info("✅ Файл ОПОЗНАН как WAV")
-            elif header[:3] == b'ID3':
-                logger.info("✅ Файл ОПОЗНАН как MP3")
-            else:
-                logger.warning(f"⚠️ НЕИЗВЕСТНЫЙ формат: {header[:4]}")
-    except Exception as e:
-        logger.warning(f"⚠️ Не удалось прочитать заголовок: {e}")
-    
-    # ============================================
-    # ПОДГОТОВКА ЗАПРОСА
-    # ============================================
-    headers = {
-        "Authorization": f"Token {DEEPGRAM_API_KEY}",
-        "Content-Type": "audio/ogg"
-    }
-    
-    params = {
-        "model": "nova-2",
-        "language": "ru",
-        "punctuate": "true",
-        "diarize": "false",
-        "smart_format": "true"
-    }
-    
     logger.info("📡 ПОДГОТОВЛЕН ЗАПРОС К DEEPGRAM:")
-    logger.info(f"   Headers: Authorization: Token ***, Content-Type: audio/ogg")
+    logger.info(f"   Headers: Authorization: Token ***, Content-Type: {content_type}")
     logger.info(f"   Params: {json.dumps(params, ensure_ascii=False)}")
     
     # ============================================
@@ -511,7 +453,7 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
         logger.info(f"📊 Аудио данные прочитаны: {len(audio_data)} байт")
         
         # СОХРАНЯЕМ КОПИЮ ДЛЯ ОТЛАДКИ
-        debug_path = f"/tmp/debug_voice_{int(time.time())}.ogg"
+        debug_path = f"/tmp/debug_voice_{int(time.time())}.webm"
         try:
             with open(debug_path, 'wb') as f:
                 f.write(audio_data)
@@ -546,19 +488,16 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
         logger.info(f"   Статус: {response.status_code}")
         logger.info(f"   Заголовки: {dict(response.headers)}")
         
-        # Получаем текст ответа
         response_text = response.text
         logger.info(f"📄 Текст ответа (первые 1000 символов):")
         logger.info(f"{response_text[:1000]}")
         
         if response.status_code == 200:
-            # Парсим JSON
             try:
                 data = response.json()
                 logger.info(f"✅ JSON успешно распарсен")
                 logger.info(f"📊 Структура ответа: {list(data.keys())}")
                 
-                # Извлекаем транскрипт
                 transcript = None
                 confidence = 0
                 
