@@ -28,6 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
+import requests
 # =========================================
 
 # ========== ИМПОРТЫ ДЛЯ БАЗЫ ДАННЫХ ==========
