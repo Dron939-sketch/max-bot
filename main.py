@@ -2664,8 +2664,8 @@ async def process_voice(request: Request):
         
         try:
             # Распознаем речь через Deepgram
-            from services import transcribe_audio
-            recognized_text = await transcribe_audio(tmp_path)
+            from services import speech_to_text
+            recognized_text = await speech_to_text(tmp_path)
             
             if not recognized_text:
                 return JSONResponse({
