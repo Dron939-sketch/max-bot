@@ -162,6 +162,8 @@ def ensure_miniapp_files():
         'context.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/context.js',
         'onboarding.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/onboarding.js',
         'test.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/test.js',
+        'api.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/api.js',           # НОВЫЙ
+        'dashboard.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/dashboard.js'  # НОВЫЙ
     }
     
     for filename, url in files.items():
@@ -2810,6 +2812,158 @@ async def api_ideas(user_id: int):
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": str(e), "ideas": []}
+        )
+
+# ============================================
+# ЭНДПОИНТЫ ДЛЯ НОВЫХ ФАЙЛОВ МИНИ-ПРИЛОЖЕНИЯ
+# ============================================
+
+@api_app.get("/static/dashboard.js")
+async def get_dashboard_js():
+    """Возвращает файл dashboard.js"""
+    dashboard_path = os.path.join(MINIAPP_PATH, "dashboard.js")
+    if os.path.exists(dashboard_path):
+        return FileResponse(dashboard_path, media_type="application/javascript")
+    return JSONResponse(
+        status_code=404,
+        content={"error": "dashboard.js not found"}
+    )
+
+
+@api_app.get("/static/api.js")
+async def get_api_js():
+    """Возвращает файл api.js"""
+    api_path = os.path.join(MINIAPP_PATH, "api.js")
+    if os.path.exists(api_path):
+        return FileResponse(api_path, media_type="application/javascript")
+    return JSONResponse(
+        status_code=404,
+        content={"error": "api.js not found"}
+    )
+
+
+@api_app.get("/static/test.js")
+async def get_test_js():
+    """Возвращает файл test.js"""
+    test_path = os.path.join(MINIAPP_PATH, "test.js")
+    if os.path.exists(test_path):
+        return FileResponse(test_path, media_type="application/javascript")
+    return JSONResponse(
+        status_code=404,
+        content={"error": "test.js not found"}
+    )
+
+
+@api_app.get("/static/context.js")
+async def get_context_js():
+    """Возвращает файл context.js"""
+    context_path = os.path.join(MINIAPP_PATH, "context.js")
+    if os.path.exists(context_path):
+        return FileResponse(context_path, media_type="application/javascript")
+    return JSONResponse(
+        status_code=404,
+        content={"error": "context.js not found"}
+    )
+
+
+@api_app.get("/static/onboarding.js")
+async def get_onboarding_js():
+    """Возвращает файл onboarding.js"""
+    onboarding_path = os.path.join(MINIAPP_PATH, "onboarding.js")
+    if os.path.exists(onboarding_path):
+        return FileResponse(onboarding_path, media_type="application/javascript")
+    return JSONResponse(
+        status_code=404,
+        content={"error": "onboarding.js not found"}
+    )
+
+
+@api_app.get("/static/script.js")
+async def get_script_js():
+    """Возвращает файл script.js"""
+    script_path = os.path.join(MINIAPP_PATH, "script.js")
+    if os.path.exists(script_path):
+        return FileResponse(script_path, media_type="application/javascript")
+    return JSONResponse(
+        status_code=404,
+        content={"error": "script.js not found"}
+    )
+
+
+@api_app.get("/static/app.js")
+async def get_app_js():
+    """Возвращает файл app.js"""
+    app_path = os.path.join(MINIAPP_PATH, "app.js")
+    if os.path.exists(app_path):
+        return FileResponse(app_path, media_type="application/javascript")
+    return JSONResponse(
+        status_code=404,
+        content={"error": "app.js not found"}
+    )
+
+
+@api_app.get("/static/styles.css")
+async def get_styles_css():
+    """Возвращает файл styles.css"""
+    css_path = os.path.join(MINIAPP_PATH, "styles.css")
+    if os.path.exists(css_path):
+        return FileResponse(css_path, media_type="text/css")
+    return JSONResponse(
+        status_code=404,
+        content={"error": "styles.css not found"}
+    )
+
+
+@api_app.get("/static/audio/{filename}")
+async def get_audio_file(filename: str):
+    """Возвращает аудиофайл"""
+    audio_path = os.path.join(MINIAPP_PATH, "audio", filename)
+    if os.path.exists(audio_path):
+        return FileResponse(audio_path, media_type="audio/ogg")
+    return JSONResponse(
+        status_code=404,
+        content={"error": "Audio file not found"}
+    )
+
+
+# ============================================
+# ДОПОЛНИТЕЛЬНЫЙ ЭНДПОИНТ ДЛЯ СТАТУСА ПОЛЬЗОВАТЕЛЯ (уже есть, но оставляем для совместимости)
+# ============================================
+
+# Обратите внимание: эндпоинт /api/user-status уже есть выше
+# Этот нужен для единообразия
+@api_app.get("/api/user-full-status")
+async def get_user_full_status(user_id: int):
+    """Полный статус пользователя (для дашборда)"""
+    try:
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        context = user_contexts.get(user_id)
+        
+        return JSONResponse({
+            "success": True,
+            "user_id": user_id,
+            "user_name": context.name if context else user_names.get(user_id, "друг"),
+            "has_profile": bool(user_info.get('profile_data')) or bool(user_info.get('ai_generated_profile')),
+            "has_interpretation": bool(user_info.get('ai_generated_profile')),
+            "test_completed": user_info.get('test_completed', False),
+            "interpretation_ready": bool(user_info.get('ai_generated_profile')),
+            "profile_code": user_info.get('profile_data', {}).get('display_name'),
+            "profile_scores": {
+                "sb": user_info.get('profile_data', {}).get('sb_level', 4),
+                "tf": user_info.get('profile_data', {}).get('tf_level', 4),
+                "ub": user_info.get('profile_data', {}).get('ub_level', 4),
+                "chv": user_info.get('profile_data', {}).get('chv_level', 4)
+            },
+            "days_active": 3,  # можно вычислить из БД
+            "sessions_count": len(user_info.get('all_answers', [])) // 3  # примерная статистика
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_user_full_status: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
         )
 
 if __name__ == "__main__":
