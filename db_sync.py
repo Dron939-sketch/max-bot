@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Синхронные обертки для работы с БД - для вызовов из любого потока
-ВЕРСИЯ 2.3 - ИСПРАВЛЕНО: добавлен импорт save_test_result_to_db
+ВЕРСИЯ 2.4 - ИСПРАВЛЕНО: правильный импорт и вызов функций
 """
 
 import logging
@@ -11,9 +11,16 @@ import asyncio
 import traceback
 from typing import Optional, Dict, Any, List
 
-from db_instance import db_loop_manager, db, save_user_to_db as db_save_user
-from db_instance import save_telegram_user as db_save_telegram_user
-from db_instance import save_test_result_to_db as async_save_test_result
+# ✅ ИСПРАВЛЕНО: импортируем правильные функции
+from db_instance import (
+    db_loop_manager, 
+    db, 
+    save_user_to_db as db_save_user,
+    save_telegram_user as db_save_telegram_user,
+    save_test_result_to_db,      # ← это синхронная функция
+    log_event as db_log_event,
+    ensure_db_connection as ensure_db_connection_async
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +32,7 @@ class SyncDB:
     def ensure_connection() -> bool:
         """Синхронная проверка соединения с БД"""
         try:
-            from db_instance import ensure_db_connection
-            result = db_loop_manager.run_coro(ensure_db_connection, timeout=10)
+            result = db_loop_manager.run_coro(ensure_db_connection_async, timeout=10)
             return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка ensure_connection: {e}")
@@ -42,10 +48,9 @@ class SyncDB:
     ) -> bool:
         """Синхронное сохранение пользователя"""
         try:
-            result = db_loop_manager.run_coro(
-                db.save_telegram_user,
-                user_id, username, first_name, last_name, language_code,
-                timeout=10
+            # ✅ ИСПРАВЛЕНО: используем синхронную версию
+            result = db_save_telegram_user(
+                user_id, username, first_name, last_name, language_code
             )
             return result if result is not None else False
         except Exception as e:
@@ -81,11 +86,8 @@ class SyncDB:
     def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
         """Синхронное логирование события"""
         try:
-            result = db_loop_manager.run_coro(
-                db.log_event,
-                user_id, event_type, event_data,
-                timeout=5
-            )
+            # ✅ ИСПРАВЛЕНО: используем синхронную версию
+            result = db_log_event(user_id, event_type, event_data)
             return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка log_event: {e}")
@@ -164,15 +166,13 @@ class SyncDB:
     ) -> Optional[int]:
         """Синхронное сохранение результата теста"""
         try:
-            # ✅ Используем импортированную функцию async_save_test_result
-            result = db_loop_manager.run_coro(
-                async_save_test_result,  # ← функция из db_instance
+            # ✅ ИСПРАВЛЕНО: используем синхронную версию из db_instance
+            result = save_test_result_to_db(
                 user_id, test_type, results, profile_code,
                 perception_type, thinking_level, vectors,
-                behavioral_levels, deep_patterns, confinement_model,
-                timeout=30
+                behavioral_levels, deep_patterns, confinement_model
             )
-            return result if result is not None else None
+            return result
         except Exception as e:
             logger.error(f"❌ Ошибка save_test_result: {e}")
             traceback.print_exc()
