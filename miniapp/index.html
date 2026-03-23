@@ -1358,7 +1358,7 @@
     <script src="/static/api.js?v=3"></script>
     <script src="/static/dashboard.js?v=3"></script>
 
-    <!-- ===== ОСНОВНАЯ ИНИЦИАЛИЗАЦИЯ ===== -->
+        <!-- ===== ОСНОВНАЯ ИНИЦИАЛИЗАЦИЯ ===== -->
     <script>
         window.dashboard = null;
         window.api = new FrediAPI();
@@ -1388,7 +1388,6 @@
                 await window.dashboard.loadUserData();
                 window.dashboard.renderDashboard();
                 
-                // Инициализация анимированного аватара после загрузки дашборда
                 setTimeout(() => {
                     if (window.dashboard && window.dashboard.isTestCompleted && window.dashboard.initAnimatedAvatar) {
                         window.dashboard.initAnimatedAvatar();
@@ -1409,91 +1408,119 @@
         }
 
         (function() {
-    let userId = null;
-    
-    // 1. ПРОВЕРКА ХЭША (где MAX передаёт данные)
-    const hash = window.location.hash.substring(1);
-    const hashParams = new URLSearchParams(hash);
-    let webAppData = hashParams.get('WebAppData');
-    
-    if (webAppData) {
-        try {
-            // Декодируем URL
-            let decoded = decodeURIComponent(webAppData);
-            console.log('📦 Декодированные данные:', decoded);
+            let userId = null;
+            let userData = null;
+            let chatData = null;
+            let authData = {};
             
-            // Убираем префикс "user=", если он есть
-            if (decoded.startsWith('user=')) {
-                decoded = decoded.substring(5);
+            const hash = window.location.hash.substring(1);
+            const hashParams = new URLSearchParams(hash);
+            console.log('🔍 Все параметры из хэша:', Array.from(hashParams.entries()));
+            
+            const userParam = hashParams.get('user');
+            if (userParam) {
+                try {
+                    const decoded = decodeURIComponent(userParam);
+                    userData = JSON.parse(decoded);
+                    console.log('✅ Данные пользователя:', userData);
+                    userId = userData.id;
+                } catch (e) {
+                    console.error('❌ Ошибка парсинга user:', e);
+                }
             }
             
-            // Парсим JSON
-            const userData = JSON.parse(decoded);
-            console.log('✅ Данные из хэша получены:', userData);
-            userId = userData.id;
+            const chatParam = hashParams.get('chat');
+            if (chatParam) {
+                try {
+                    const decoded = decodeURIComponent(chatParam);
+                    chatData = JSON.parse(decoded);
+                    console.log('📦 Данные чата:', chatData);
+                    if (!userId && chatData.id) {
+                        userId = chatData.id;
+                    }
+                } catch (e) {
+                    console.error('Ошибка парсинга chat:', e);
+                }
+            }
             
-            // Сохраняем имя пользователя
-            if (userData.first_name) {
+            authData = {
+                hash: hashParams.get('hash'),
+                auth_date: hashParams.get('auth_date'),
+                query_id: hashParams.get('query_id'),
+                ip: hashParams.get('ip')
+            };
+            console.log('🔐 Данные аутентификации:', authData);
+            
+            window.maxData = {
+                user: userData,
+                chat: chatData,
+                auth: authData,
+                raw_hash: hash,
+                user_id: userId
+            };
+            
+            if (userData && userData.first_name) {
                 window.maxUserName = userData.first_name;
             }
-        } catch (e) {
-            console.error('❌ Ошибка парсинга WebAppData:', e);
-            console.log('🔍 Сырые данные:', webAppData);
-        }
-    }
-    
-    // 2. ПРОВЕРКА QUERY-ПАРАМЕТРОВ (для обратной совместимости)
-    if (!userId) {
-        const urlParams = new URLSearchParams(window.location.search);
-        userId = urlParams.get('user_id');
-        if (userId) console.log('✅ user_id из query-параметров:', userId);
-    }
-    
-    // 3. ПРОВЕРКА MAX WebApp
-    if (!userId && window.MAX?.WebApp?.initDataUnsafe?.user?.id) {
-        userId = window.MAX.WebApp.initDataUnsafe.user.id;
-        console.log('✅ user_id из MAX.WebApp:', userId);
-    }
-    
-    // 4. ПРОВЕРКА Telegram WebApp
-    if (!userId && window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
-        userId = window.Telegram.WebApp.initDataUnsafe.user.id;
-        console.log('✅ user_id из Telegram.WebApp:', userId);
-    }
-    
-    // 5. ПРОВЕРКА localStorage
-    if (!userId) {
-        userId = localStorage.getItem('fredi_user_id');
-        if (userId) console.log('✅ user_id из localStorage:', userId);
-    }
-    
-    // Сохраняем в localStorage (если не тестовый ID)
-    if (userId && userId !== '213102077') {
-        localStorage.setItem('fredi_user_id', userId);
-    }
-    
-    window.maxContext = { user_id: userId };
-    console.log('🎯 Итоговый user_id:', userId);
-    
-    // Инициализируем WebApp
-    if (window.MAX?.WebApp) {
-        window.MAX.WebApp.ready();
-        window.MAX.WebApp.expand();
-    }
-    if (window.Telegram?.WebApp) {
-        window.Telegram.WebApp.ready();
-        window.Telegram.WebApp.expand();
-    }
-    
-    // Загружаем дашборд или показываем экран входа
-    if (!userId) {
-        console.log('❌ Нет user_id! Показываем экран входа');
-        showLoginScreen();
-    } else {
-        console.log('✅ Загружаем дашборд для user_id:', userId);
-        initDashboard();
-    }
-})();
+            
+            if (!userId) {
+                const urlParams = new URLSearchParams(window.location.search);
+                userId = urlParams.get('user_id');
+                if (userId) console.log('✅ user_id из query-параметров:', userId);
+            }
+            
+            if (!userId && window.MAX?.WebApp?.initDataUnsafe?.user?.id) {
+                userId = window.MAX.WebApp.initDataUnsafe.user.id;
+                console.log('✅ user_id из MAX.WebApp:', userId);
+                window.maxData = window.maxData || {};
+                window.maxData.user = window.MAX.WebApp.initDataUnsafe.user;
+            }
+            
+            if (!userId && window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
+                userId = window.Telegram.WebApp.initDataUnsafe.user.id;
+                console.log('✅ user_id из Telegram.WebApp:', userId);
+                window.maxData = window.maxData || {};
+                window.maxData.user = window.Telegram.WebApp.initDataUnsafe.user;
+            }
+            
+            if (!userId) {
+                userId = localStorage.getItem('fredi_user_id');
+                if (userId) console.log('✅ user_id из localStorage:', userId);
+            }
+            
+            if (userId && userId !== '213102077') {
+                localStorage.setItem('fredi_user_id', userId);
+                if (userData && userData.first_name) {
+                    localStorage.setItem('fredi_user_name', userData.first_name);
+                }
+            }
+            
+            window.maxContext = { 
+                user_id: userId,
+                user_data: userData,
+                chat_data: chatData,
+                auth_data: authData
+            };
+            console.log('🎯 Итоговый user_id:', userId);
+            console.log('📊 Полные данные:', window.maxContext);
+            
+            if (window.MAX?.WebApp) {
+                window.MAX.WebApp.ready();
+                window.MAX.WebApp.expand();
+            }
+            if (window.Telegram?.WebApp) {
+                window.Telegram.WebApp.ready();
+                window.Telegram.WebApp.expand();
+            }
+            
+            if (!userId) {
+                console.log('❌ Нет user_id! Показываем экран входа');
+                showLoginScreen();
+            } else {
+                console.log('✅ Загружаем дашборд для user_id:', userId);
+                initDashboard();
+            }
+        })();
     </script>
     
     <!-- ===== МИКРОФОН ДЛЯ MAX - УДЕРЖАНИЕ ДЛЯ ЗАПИСИ ===== -->
