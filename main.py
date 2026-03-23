@@ -2846,6 +2846,25 @@ async def text_to_speech_api(request: Request):
             content={"success": False, "error": str(e)}
         )
 
+# ============================================
+# WEBHOOK ДЛЯ MAX
+# ============================================
+
+@api_app.post("/webhook")
+async def webhook(request: Request):
+    """Эндпоинт для получения обновлений от MAX"""
+    try:
+        data = await request.json()
+        logger.info(f"📨 Получен webhook: {data}")
+        
+        # Здесь можно обработать входящие обновления
+        # и извлечь user_id из данных
+        
+        return JSONResponse({"status": "ok", "message": "Webhook received"})
+    except Exception as e:
+        logger.error(f"❌ Ошибка webhook: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
 
 async def api_get_ideas_internal(user_id: int) -> list:
     """Внутренняя функция для получения идей"""
