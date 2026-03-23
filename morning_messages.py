@@ -1,484 +1,701 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ПРОСТАЯ СИНХРОННАЯ РАБОТА С БД
-- Без asyncio
-- Без event loops
-- Без конфликтов
-- Работает из любого потока
-- С поддержкой напоминаний и событий
+Модуль для утренних вдохновляющих сообщений (3 дня)
+С ИИ-генерацией для Дней 2 и 3
+ВЕРСИЯ 2.4 - ИСПРАВЛЕНО: замена sync_db на прямые вызовы db_instance
 """
 
-import os
-import json
 import logging
-import psycopg2
-from psycopg2.extras import Json, RealDictCursor
-from typing import Optional, Dict, Any, List
-from datetime import datetime
+import random
+import re
+import json
+import time
+import threading
+import asyncio
+from datetime import datetime, timedelta
+from typing import Dict, Optional, List, Any
+
+import pytz
+from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+from profiles import VECTORS, LEVEL_PROFILES
+from services import call_deepseek, text_to_speech
+
+# ✅ ИСПРАВЛЕНО: импорт из db_instance
+from db_instance import (
+    log_event,
+    add_reminder,
+    get_user_reminders,
+    save_user_data
+)
 
 logger = logging.getLogger(__name__)
 
-# ============================================
-# ПОДКЛЮЧЕНИЕ
-# ============================================
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://variatica:Ben9BvM0OnppX1EVSabWQQSwTCrqkahh@dpg-d639vucr85hc73b2ge00-a.oregon-postgres.render.com/variatica"
-)
-
-_conn = None
-_connected = False
-
-
-def connect() -> bool:
-    """Подключиться к БД"""
-    global _conn, _connected
-    try:
-        if _conn and not _conn.closed:
-            return True
-        _conn = psycopg2.connect(DATABASE_URL)
-        _connected = True
-        _create_tables()
-        logger.info("✅ PostgreSQL подключена")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Ошибка подключения: {e}")
-        _connected = False
-        return False
-
-
-def disconnect():
-    """Закрыть соединение"""
-    global _conn, _connected
-    try:
-        if _conn and not _conn.closed:
-            _conn.close()
-        _connected = False
-        logger.info("🔒 PostgreSQL закрыта")
-    except:
-        pass
-
-
-def ensure_connection() -> bool:
-    """Проверить и восстановить соединение"""
-    if not _connected or not _conn or _conn.closed:
-        return connect()
-    try:
-        _conn.cursor().execute("SELECT 1")
-        return True
-    except:
-        return connect()
-
-
-# ============================================
-# СОЗДАНИЕ ТАБЛИЦ
-# ============================================
-
-def _create_tables():
-    """Создать таблицы если не существуют"""
-    cur = _conn.cursor()
+class MorningMessageManager:
+    """Менеджер утренних сообщений с ИИ-генерацией и сохранением в БД"""
     
-    # Пользователи
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_users (
-            user_id BIGINT PRIMARY KEY,
-            first_name TEXT,
-            username TEXT,
-            created_at TIMESTAMP DEFAULT NOW(),
-            updated_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
+    def __init__(self):
+        self.scheduled_tasks = {}  # {user_id: {day: task}}
+        self.bot = None
+        self.user_contexts = None
+        self.user_data = None
     
-    # Данные пользователей
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_user_data (
-            user_id BIGINT PRIMARY KEY,
-            data JSONB NOT NULL,
-            updated_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
+    def set_bot(self, bot):
+        """Устанавливает экземпляр бота"""
+        self.bot = bot
     
-    # Контекст
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_user_contexts (
-            user_id BIGINT PRIMARY KEY,
-            name TEXT,
-            age INTEGER,
-            gender TEXT,
-            city TEXT,
-            communication_mode TEXT DEFAULT 'coach',
-            weather_cache JSONB,
-            data JSONB,
-            updated_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
+    def set_contexts(self, user_contexts, user_data):
+        """Устанавливает ссылки на глобальные хранилища"""
+        self.user_contexts = user_contexts
+        self.user_data = user_data
     
-    # Результаты тестов
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_test_results (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            test_type TEXT,
-            results JSONB,
-            profile_code TEXT,
-            perception_type TEXT,
-            thinking_level INTEGER,
-            vectors JSONB,
-            deep_patterns JSONB,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
+    # ============================================
+    # ФУНКЦИИ ДЛЯ РАБОТЫ С БД (ИСПРАВЛЕНЫ)
+    # ============================================
     
-    # События
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_events (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            event_type TEXT,
-            event_data JSONB,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
+    def _save_message_to_db(self, user_id: int, day: int, message_text: str, message_type: str = "morning"):
+        """Синхронно сохраняет отправленное сообщение в БД"""
+        try:
+            # Сохраняем как событие
+            log_event(
+                user_id,
+                f'morning_message_day_{day}',
+                {
+                    'day': day,
+                    'message_type': message_type,
+                    'message_preview': message_text[:100],
+                    'timestamp': time.time()
+                }
+            )
+            
+            # Также добавляем напоминание в таблицу reminders
+            add_reminder(
+                user_id=user_id,
+                reminder_type=f'morning_day_{day}',
+                remind_at=datetime.now(),
+                data={
+                    'day': day,
+                    'message': message_text[:200],
+                    'sent': True
+                }
+            )
+            
+            logger.debug(f"💾 Утреннее сообщение для дня {day} пользователя {user_id} сохранено в БД")
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения сообщения для {user_id}: {e}")
     
-    # Напоминания (для утренних сообщений)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_reminders (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            reminder_type TEXT NOT NULL,
-            remind_at TIMESTAMP NOT NULL,
-            data JSONB,
-            completed_at TIMESTAMP,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
+    def _save_generation_stats(self, user_id: int, day: int, success: bool, error: str = None):
+        """Синхронно сохраняет статистику генерации"""
+        try:
+            log_event(
+                user_id,
+                'morning_generation',
+                {
+                    'day': day,
+                    'success': success,
+                    'error': error,
+                    'timestamp': time.time()
+                }
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения статистики генерации: {e}")
     
-    # Индексы
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_test_user ON fredi_test_results(user_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_events_user ON fredi_events(user_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_user ON fredi_reminders(user_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_date ON fredi_reminders(remind_at)")
-    
-    _conn.commit()
-    cur.close()
-    logger.info("✅ Таблицы созданы")
-
-
-# ============================================
-# СОХРАНЕНИЕ
-# ============================================
-
-def save_user(user_id: int, first_name: str = None, username: str = None) -> bool:
-    """Сохранить пользователя"""
-    if not ensure_connection():
-        return False
-    try:
-        cur = _conn.cursor()
-        cur.execute("""
-            INSERT INTO fredi_users (user_id, first_name, username, created_at, updated_at)
-            VALUES (%s, %s, %s, NOW(), NOW())
-            ON CONFLICT (user_id) DO UPDATE SET
-                first_name = EXCLUDED.first_name,
-                username = EXCLUDED.username,
-                updated_at = NOW()
-        """, (user_id, first_name, username))
-        _conn.commit()
-        cur.close()
-        return True
-    except Exception as e:
-        logger.error(f"❌ save_user {user_id}: {e}")
-        return False
-
-
-def save_user_data(user_id: int, data: Dict) -> bool:
-    """Сохранить данные пользователя"""
-    if not ensure_connection():
-        return False
-    try:
-        cur = _conn.cursor()
-        cur.execute("""
-            INSERT INTO fredi_user_data (user_id, data, updated_at)
-            VALUES (%s, %s, NOW())
-            ON CONFLICT (user_id) DO UPDATE SET
-                data = EXCLUDED.data,
-                updated_at = NOW()
-        """, (user_id, Json(data)))
-        _conn.commit()
-        cur.close()
-        return True
-    except Exception as e:
-        logger.error(f"❌ save_user_data {user_id}: {e}")
-        return False
-
-
-def save_context(user_id: int, name: str = None, age: int = None, gender: str = None,
-                 city: str = None, mode: str = None, data: Dict = None) -> bool:
-    """Сохранить контекст пользователя"""
-    if not ensure_connection():
-        return False
-    try:
-        cur = _conn.cursor()
-        cur.execute("""
-            INSERT INTO fredi_user_contexts (user_id, name, age, gender, city, communication_mode, data, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-            ON CONFLICT (user_id) DO UPDATE SET
-                name = EXCLUDED.name,
-                age = EXCLUDED.age,
-                gender = EXCLUDED.gender,
-                city = EXCLUDED.city,
-                communication_mode = EXCLUDED.communication_mode,
-                data = EXCLUDED.data,
-                updated_at = NOW()
-        """, (user_id, name, age, gender, city, mode, Json(data) if data else None))
-        _conn.commit()
-        cur.close()
-        return True
-    except Exception as e:
-        logger.error(f"❌ save_context {user_id}: {e}")
-        return False
-
-
-def save_test_result(user_id: int, test_type: str, results: Dict,
-                     profile_code: str = None, perception_type: str = None,
-                     thinking_level: int = None, vectors: Dict = None,
-                     deep_patterns: Dict = None) -> Optional[int]:
-    """Сохранить результат теста"""
-    if not ensure_connection():
-        return None
-    try:
-        cur = _conn.cursor()
-        cur.execute("""
-            INSERT INTO fredi_test_results 
-            (user_id, test_type, results, profile_code, perception_type, 
-             thinking_level, vectors, deep_patterns, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-            RETURNING id
-        """, (user_id, test_type, Json(results), profile_code, perception_type,
-              thinking_level, Json(vectors) if vectors else None,
-              Json(deep_patterns) if deep_patterns else None))
-        test_id = cur.fetchone()[0]
-        _conn.commit()
-        cur.close()
-        logger.info(f"📝 Тест {user_id} сохранен (ID: {test_id})")
-        return test_id
-    except Exception as e:
-        logger.error(f"❌ save_test_result {user_id}: {e}")
-        return None
-
-
-def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
-    """Логировать событие"""
-    if not ensure_connection():
-        return False
-    try:
-        cur = _conn.cursor()
-        cur.execute("""
-            INSERT INTO fredi_events (user_id, event_type, event_data, created_at)
-            VALUES (%s, %s, %s, NOW())
-        """, (user_id, event_type, Json(event_data) if event_data else None))
-        _conn.commit()
-        cur.close()
-        return True
-    except Exception as e:
-        logger.error(f"❌ log_event: {e}")
-        return False
-
-
-def add_reminder(user_id: int, reminder_type: str, remind_at: datetime, data: Dict = None) -> bool:
-    """Добавить напоминание"""
-    if not ensure_connection():
-        return False
-    try:
-        cur = _conn.cursor()
-        cur.execute("""
-            INSERT INTO fredi_reminders (user_id, reminder_type, remind_at, data, created_at)
-            VALUES (%s, %s, %s, %s, NOW())
-        """, (user_id, reminder_type, remind_at, Json(data) if data else None))
-        _conn.commit()
-        cur.close()
-        logger.debug(f"📅 Напоминание {reminder_type} для {user_id} на {remind_at}")
-        return True
-    except Exception as e:
-        logger.error(f"❌ add_reminder: {e}")
-        return False
-
-
-def get_user_reminders(user_id: int, include_sent: bool = False) -> List[Dict]:
-    """Получить напоминания пользователя"""
-    if not ensure_connection():
-        return []
-    try:
-        cur = _conn.cursor(cursor_factory=RealDictCursor)
-        query = """
-            SELECT id, reminder_type, remind_at, data, created_at
-            FROM fredi_reminders
-            WHERE user_id = %s
+    def _get_user_morning_history(self, user_id: int) -> List[Dict]:
         """
-        if not include_sent:
-            query += " AND (completed_at IS NULL OR completed_at = '1970-01-01')"
-        query += " ORDER BY remind_at DESC LIMIT 100"
+        Синхронно получает историю утренних сообщений пользователя
+        """
+        try:
+            # Получаем все напоминания пользователя
+            reminders = get_user_reminders(user_id, include_sent=True)
+            morning_history = []
+            
+            for r in reminders:
+                reminder_type = r.get('reminder_type', '')
+                # Фильтруем только утренние сообщения
+                if reminder_type.startswith('morning_'):
+                    data = r.get('data', {})
+                    # Если data в виде строки JSON, парсим
+                    if isinstance(data, str):
+                        try:
+                            data = json.loads(data)
+                        except:
+                            data = {}
+                    
+                    morning_history.append({
+                        'day': data.get('day'),
+                        'timestamp': r.get('remind_at'),
+                        'preview': data.get('message', '')[:100] if data.get('message') else data.get('message_preview', '')
+                    })
+            
+            logger.debug(f"📜 Получена история утренних сообщений для {user_id}: {len(morning_history)} записей")
+            return morning_history
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения истории для {user_id}: {e}")
+            return []
+    
+    # ============================================
+    # ОСТАЛЬНЫЕ МЕТОДЫ (БЕЗ ИЗМЕНЕНИЙ)
+    # ============================================
+    
+    async def schedule_morning_message(self, user_id: int, user_name: str, scores: dict, profile_data: dict):
+        """Планирует серию из 3 утренних сообщений"""
+        # Отменяем все предыдущие задачи для этого пользователя
+        self.cancel_all_user_tasks(user_id)
         
-        cur.execute(query, (user_id,))
-        rows = cur.fetchall()
-        cur.close()
+        # Получаем часовой пояс пользователя
+        context = self.user_contexts.get(user_id) if self.user_contexts else None
+        timezone = self._get_user_timezone(context)
         
-        result = []
-        for row in rows:
-            result.append({
-                'id': row['id'],
-                'reminder_type': row['reminder_type'],
-                'remind_at': row['remind_at'],
-                'data': row['data'],
-                'created_at': row['created_at']
-            })
-        return result
-    except Exception as e:
-        logger.error(f"❌ get_user_reminders: {e}")
-        return []
+        # Текущее время
+        now_utc = datetime.now(pytz.UTC)
+        now_local = now_utc.astimezone(timezone)
+        
+        # Планируем на 3 дня
+        for day in range(1, 4):
+            # Целевая дата (сегодня + day дней)
+            target_local = now_local.replace(hour=9, minute=0, second=0, microsecond=0)
+            target_local = target_local + timedelta(days=day)
+            
+            # Если сегодня уже после 9:00, то начинаем с завтра
+            if day == 1 and now_local.hour >= 9:
+                target_local = target_local + timedelta(days=1)
+            
+            target_utc = target_local.astimezone(pytz.UTC)
+            seconds_until_target = (target_utc - now_utc).total_seconds()
+            
+            if seconds_until_target < 0:
+                seconds_until_target = 60
+            
+            logger.info(
+                f"📅 День {day} для пользователя {user_id}\n"
+                f"   Отправка: {target_local.strftime('%Y-%m-%d %H:%M')}\n"
+                f"   Через: {seconds_until_target/3600:.1f} часов"
+            )
+            
+            # Сохраняем запланированное сообщение
+            def _save_reminder():
+                add_reminder(
+                    user_id=user_id,
+                    reminder_type=f'morning_scheduled_day_{day}',
+                    remind_at=target_utc,
+                    data={
+                        'day': day,
+                        'scheduled_time': target_utc.isoformat(),
+                        'user_name': user_name
+                    }
+                )
+            
+            threading.Thread(target=_save_reminder, daemon=True).start()
+            
+            # Создаем задачу
+            task = asyncio.create_task(
+                self._send_daily_message(
+                    user_id, user_name, scores, profile_data,
+                    seconds_until_target, timezone, day
+                )
+            )
+            
+            if user_id not in self.scheduled_tasks:
+                self.scheduled_tasks[user_id] = {}
+            
+            self.scheduled_tasks[user_id][day] = task
+    
+    def _get_user_timezone(self, context) -> pytz.timezone:
+        """Определяет часовой пояс пользователя"""
+        if context and hasattr(context, 'timezone') and context.timezone:
+            try:
+                return pytz.timezone(context.timezone)
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка часового пояса {context.timezone}: {e}")
+        
+        return pytz.timezone("Europe/Moscow")
+    
+    async def _send_daily_message(self, user_id: int, user_name: str, scores: dict,
+                                   profile_data: dict, delay_seconds: float,
+                                   timezone: pytz.timezone, day: int):
+        """Отправляет ежедневное сообщение"""
+        try:
+            await asyncio.sleep(delay_seconds)
+            
+            if not self.bot:
+                logger.error(f"❌ Бот не инициализирован")
+                return
+            
+            # Получаем актуальные данные
+            context = self.user_contexts.get(user_id) if self.user_contexts else None
+            mode = context.communication_mode if context else "coach"
+            
+            if context:
+                # Обновляем погоду
+                if hasattr(context, 'update_weather'):
+                    if asyncio.iscoroutinefunction(context.update_weather):
+                        await context.update_weather()
+                    else:
+                        context.update_weather()
+            
+            success = True
+            error_msg = None
+            
+            # Генерируем текст для этого дня
+            try:
+                if day == 1:
+                    # День 1 - по сценарию
+                    text = await self._generate_day1_text(
+                        user_id, user_name, scores, profile_data, context, timezone
+                    )
+                else:
+                    # Дни 2 и 3 - через ИИ
+                    text = await self._generate_ai_text(
+                        user_id, user_name, scores, profile_data, context, timezone, day
+                    )
+            except Exception as e:
+                logger.error(f"❌ Ошибка генерации текста для дня {day}: {e}")
+                text = await self._generate_fallback_text(day, user_name, 
+                    self._get_address_from_context(context))
+                success = False
+                error_msg = str(e)
+            
+            clean_text = self._clean_text_for_voice(text)
+            
+            # Клавиатура для дня
+            keyboard = self._get_keyboard_for_day(day)
+            
+            # Сохраняем в БД
+            threading.Thread(target=self._save_message_to_db, args=(user_id, day, text), daemon=True).start()
+            threading.Thread(target=self._save_generation_stats, args=(user_id, day, success, error_msg), daemon=True).start()
+            
+            # Отправляем текст
+            try:
+                if hasattr(self.bot, 'send_message') and asyncio.iscoroutinefunction(self.bot.send_message):
+                    await self.bot.send_message(
+                        user_id,
+                        text,
+                        parse_mode='HTML',
+                        reply_markup=keyboard
+                    )
+                else:
+                    self.bot.send_message(
+                        user_id,
+                        text,
+                        parse_mode='HTML',
+                        reply_markup=keyboard
+                    )
+                logger.info(f"✅ Текст для дня {day} отправлен пользователю {user_id}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки текста для дня {day}: {e}")
+            
+            # Отправляем голос
+            try:
+                audio_data = await text_to_speech(clean_text, mode)
+                if audio_data:
+                    logger.info(f"🎙 Голос для дня {day} сгенерирован ({len(audio_data)} байт)")
+                    if hasattr(self.bot, 'send_audio'):
+                        if asyncio.iscoroutinefunction(self.bot.send_audio):
+                            await self.bot.send_audio(user_id, ('voice.ogg', audio_data))
+                        else:
+                            self.bot.send_audio(user_id, ('voice.ogg', audio_data))
+            except Exception as e:
+                logger.error(f"❌ Ошибка голоса для дня {day}: {e}")
+            
+            logger.info(f"✅ День {day} полностью отправлен пользователю {user_id}")
+            
+        except asyncio.CancelledError:
+            logger.info(f"⏰ День {day} для {user_id} отменён")
+        except Exception as e:
+            logger.error(f"❌ Ошибка дня {day} для {user_id}: {e}")
+    
+    def _get_address_from_context(self, context) -> str:
+        """Получает обращение из контекста"""
+        if not context:
+            return "друг"
+        
+        gender = getattr(context, 'gender', 'other')
+        if gender == "male":
+            return "брат"
+        elif gender == "female":
+            return "сестрёнка"
+        else:
+            return "друг"
+    
+    def _get_keyboard_for_day(self, day: int) -> InlineKeyboardMarkup:
+        """Возвращает клавиатуру для конкретного дня"""
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="ask_question")],
+            [InlineKeyboardButton(text="🧠 МОЙ ПРОФИЛЬ", callback_data="show_results")],
+            [InlineKeyboardButton(text="🌟 ИДЕИ НА ВЫХОДНЫЕ", callback_data="weekend_ideas")]
+        ])
+    
+    async def _generate_day1_text(self, user_id: int, user_name: str, scores: dict,
+                                    profile_data: dict, context, timezone: pytz.timezone) -> str:
+        """Генерирует текст для Дня 1"""
+        now_local = datetime.now(timezone)
+        hour = now_local.hour
+        
+        # Приветствие
+        greeting = self._get_greeting(hour, user_name, context)
+        
+        # Погода
+        weather_text = self._get_weather_text(context, hour)
+        
+        # Вдохновение на основе профиля
+        inspiration = self._get_profile_inspiration(scores)
+        
+        # Совет на день
+        daily_tip = self._get_daily_tip(scores)
+        
+        text = f"""
+🌅 <b>{greeting}!</b>
 
+{weather_text}
 
-def complete_reminder(reminder_id: int) -> bool:
-    """Отметить напоминание как выполненное"""
-    if not ensure_connection():
-        return False
-    try:
-        cur = _conn.cursor()
-        cur.execute("""
-            UPDATE fredi_reminders 
-            SET completed_at = NOW() 
-            WHERE id = %s
-        """, (reminder_id,))
-        _conn.commit()
-        cur.close()
-        return True
-    except Exception as e:
-        logger.error(f"❌ complete_reminder: {e}")
-        return False
+{inspiration}
 
+💡 <b>Совет на сегодня:</b>
+{daily_tip}
 
-# ============================================
-# ЗАГРУЗКА
-# ============================================
-
-def load_user_data(user_id: int) -> Dict:
-    """Загрузить данные пользователя"""
-    if not ensure_connection():
-        return {}
-    try:
-        cur = _conn.cursor()
-        cur.execute("SELECT data FROM fredi_user_data WHERE user_id = %s", (user_id,))
-        row = cur.fetchone()
-        cur.close()
-        return row[0] if row else {}
-    except Exception as e:
-        logger.error(f"❌ load_user_data {user_id}: {e}")
-        return {}
-
-
-def load_user_context(user_id: int) -> Optional[Dict]:
-    """Загрузить контекст пользователя"""
-    if not ensure_connection():
-        return None
-    try:
-        cur = _conn.cursor()
-        cur.execute("""
-            SELECT name, age, gender, city, communication_mode, data 
-            FROM fredi_user_contexts WHERE user_id = %s
-        """, (user_id,))
-        row = cur.fetchone()
-        cur.close()
-        if row:
-            return {
-                'name': row[0],
-                'age': row[1],
-                'gender': row[2],
-                'city': row[3],
-                'communication_mode': row[4],
-                'data': row[5]
+✨ Хорошего дня!
+"""
+        return text.strip()
+    
+    async def _generate_ai_text(self, user_id: int, user_name: str, scores: dict,
+                                  profile_data: dict, context, timezone: pytz.timezone,
+                                  day: int) -> str:
+        """Генерирует текст через DeepSeek для Дней 2 и 3"""
+        now_local = datetime.now(timezone)
+        hour = now_local.hour
+        weekday = now_local.weekday()
+        
+        # Определяем основной вектор
+        if scores:
+            min_vector = min(scores.items(), key=lambda x: x[1])
+            main_vector = min_vector[0]
+            level = self._level(min_vector[1])
+            
+            vector_names = {
+                "СБ": "страх конфликтов и защиту границ",
+                "ТФ": "отношения с деньгами и ресурсами",
+                "УБ": "понимание мира и поиск смыслов",
+                "ЧВ": "отношения с людьми и эмоциональные связи"
             }
-        return None
-    except Exception as e:
-        logger.error(f"❌ load_user_context {user_id}: {e}")
-        return None
-
-
-def load_all_users() -> List[int]:
-    """Загрузить всех пользователей"""
-    if not ensure_connection():
-        return []
-    try:
-        cur = _conn.cursor()
-        cur.execute("SELECT user_id FROM fredi_users")
-        rows = cur.fetchall()
-        cur.close()
-        return [row[0] for row in rows]
-    except Exception as e:
-        logger.error(f"❌ load_all_users: {e}")
-        return []
-
-
-def get_stats() -> Dict:
-    """Получить статистику"""
-    if not ensure_connection():
-        return {}
-    try:
-        cur = _conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM fredi_users")
-        users = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM fredi_test_results")
-        tests = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM fredi_events")
-        events = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM fredi_reminders")
-        reminders = cur.fetchone()[0]
-        cur.close()
-        return {
-            'users': users,
-            'tests': tests,
-            'events': events,
-            'reminders': reminders
+            vector_desc = vector_names.get(main_vector, "психологический профиль")
+        else:
+            main_vector = "СБ"
+            vector_desc = "психологический профиль"
+            level = 3
+        
+        weekdays = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+        weekday_name = weekdays[weekday]
+        
+        day_themes = {
+            2: "маленькие действия и эксперименты",
+            3: "интеграция опыта и взгляд в будущее"
         }
-    except Exception as e:
-        logger.error(f"❌ get_stats: {e}")
-        return {}
+        theme = day_themes.get(day, "продолжение пути")
+        
+        gender = context.gender if context else "other"
+        address = self._get_address_from_context(context)
+        
+        weather_context = ""
+        if context and context.weather_cache:
+            weather = context.weather_cache
+            temp = weather.get('temp', 0)
+            desc = weather.get('description', '')
+            icon = weather.get('icon', '☁️')
+            weather_context = f"Погода: {icon} {desc}, {temp}°C. "
+        
+        prompt = f"""
+Ты - психолог Фреди. Напиши утреннее мотивационное сообщение для пользователя.
 
+ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ:
+- Имя: {user_name}
+- Обращение: {address}
+- Пол: {gender}
+- Основной вектор: {main_vector} ({vector_desc})
+- Уровень по этому вектору: {level}/6
+- День недели: {weekday_name}
+- Время суток: {hour} часов
+- {weather_context}
 
-# ============================================
-# ЗАГЛУШКА ДЛЯ ОБРАТНОЙ СОВМЕСТИМОСТИ
-# ============================================
+КОНТЕКСТ СООБЩЕНИЯ:
+- Это ДЕНЬ {day} из 3-дневной серии
+- Тема дня: {theme}
+- День 1 уже был (он был о принятии себя)
+- Сегодня нужно вдохновить на {theme}
 
-def db_loop_manager():
-    """Заглушка для обратной совместимости (для db_sync.py)"""
-    import asyncio
-    try:
-        return asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.new_event_loop()
+ТРЕБОВАНИЯ К СООБЩЕНИЮ:
+1. Тёплое, поддерживающее, без нравоучений
+2. Учитывай профиль пользователя (вектор и уровень)
+3. Используй обращение "{address}" в тексте
+4. Добавь 1-2 риторических вопроса
+5. Закончи ободряющей фразой
+6. Длина: 3-5 абзацев
+7. НЕ ИСПОЛЬЗУЙ звёздочки, решётки, markdown
+8. Только текст, готовый для голосового озвучивания
+
+Напиши сообщение:
+"""
+        
+        try:
+            response = await call_deepseek(prompt, max_tokens=800)
+            if response:
+                formatted = self._format_ai_response(response, day, address)
+                return formatted
+        except Exception as e:
+            logger.error(f"❌ Ошибка генерации ИИ: {e}")
+            threading.Thread(target=self._save_generation_stats, args=(user_id, day, False, str(e)), daemon=True).start()
+        
+        return await self._generate_fallback_text(day, user_name, address)
+    
+    def _format_ai_response(self, text: str, day: int, address: str) -> str:
+        """Форматирует ответ ИИ для чата"""
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+        text = re.sub(r'__(.*?)__', r'\1', text)
+        text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
+        
+        if day == 2:
+            header = f"⚡ <b>Доброе утро, {address}!</b>\n\n"
+        else:
+            header = f"🌟 <b>Доброе утро, {address}!</b>\n\n"
+        
+        paragraphs = text.split('\n\n')
+        formatted_paragraphs = [p.strip() for p in paragraphs if p.strip()]
+        body = '\n\n'.join(formatted_paragraphs)
+        
+        return header + body
+    
+    async def _generate_fallback_text(self, day: int, user_name: str, address: str) -> str:
+        """Запасной текст"""
+        if day == 2:
+            return f"""
+🌅 <b>Доброе утро, {address}!</b>
+
+Сегодня день маленьких шагов. Не надо геройства, просто одно маленькое действие в сторону того, что для тебя важно.
+
+Помни: большие перемены начинаются с малого.
+
+✨ Хорошего дня!
+"""
+        else:
+            return f"""
+🌅 <b>Доброе утро, {address}!</b>
+
+Третий день нашей работы. Ты уже прошёл большой путь за это время.
+
+Посмотри назад — ты изменился. Пусть немного, но это начало новой привычки — быть на своей стороне.
+
+✨ Я рядом и всегда поддержу.
+"""
+    
+    def _get_greeting(self, hour: int, user_name: str, context) -> str:
+        """Возвращает приветствие"""
+        if 5 <= hour < 12:
+            greeting = "Доброе утро"
+        elif 12 <= hour < 18:
+            greeting = "Добрый день"
+        elif 18 <= hour < 23:
+            greeting = "Добрый вечер"
+        else:
+            greeting = "Доброй ночи"
+        
+        address = self._get_address_from_context(context)
+        return f"{greeting}, {address}"
+    
+    def _get_weather_text(self, context, hour: int) -> str:
+        """Формирует текст о погоде"""
+        if not context or not hasattr(context, 'weather_cache') or not context.weather_cache:
+            return "За окном новый день, полный возможностей."
+        
+        weather = context.weather_cache
+        temp = weather.get('temp', 0)
+        desc = weather.get('description', '')
+        icon = weather.get('icon', '☁️')
+        
+        if 5 <= hour < 12:
+            time_word = "утро"
+        elif 12 <= hour < 18:
+            time_word = "день"
+        elif 18 <= hour < 23:
+            time_word = "вечер"
+        else:
+            time_word = "ночь"
+        
+        if temp < -15:
+            return f"{icon} Морозное {time_word}, {temp}°C. Даже в самый холод можно найти тепло внутри себя."
+        elif temp < 0:
+            return f"{icon} {desc}, {temp}°C. Холодно, но твоя внутренняя искра уже согревает."
+        elif temp < 10:
+            return f"{icon} Прохладное {time_word}, {temp}°C. Самое время для уютных мыслей и планов."
+        elif temp < 20:
+            return f"{icon} Свежее {time_word}, {temp}°C. Природа просыпается — как и твои новые возможности."
+        elif temp < 30:
+            return f"{icon} Теплое {time_word}, {temp}°C. Энергия так и плещет — лови момент!"
+        else:
+            return f"{icon} Жаркое {time_word}, {temp}°C. Даже солнце сегодня хочет тебя вдохновить."
+    
+    def _get_profile_inspiration(self, scores: dict) -> str:
+        """Вдохновение на основе профиля"""
+        if not scores:
+            return "Каждый день — это новая страница твоей истории."
+        
+        sorted_vectors = sorted(scores.items(), key=lambda x: x[1])
+        weakest = sorted_vectors[0] if sorted_vectors else ("СБ", 3)
+        strongest = sorted_vectors[-1] if sorted_vectors else ("ЧВ", 3)
+        
+        weak_score = weakest[1]
+        strong_score = strongest[1]
+        
+        weak_inspirations = {
+            "СБ": [
+                f"Твоя сила не в отсутствии страха, а в умении действовать несмотря на него.",
+                f"Каждый раз, когда ты встречаешь вызов, ты становишься сильнее.",
+                f"Ты уже справился со многими бурями — справишься и с этой."
+            ],
+            "ТФ": [
+                f"Деньги — это просто энергия, и ты учишься ей управлять.",
+                f"Твоя ценность не в кошельке, а в том, какой ты человек.",
+                f"Изобилие начинается с благодарности за то, что уже есть."
+            ],
+            "УБ": [
+                f"Мир полон загадок, и каждая разгаданная делает тебя мудрее.",
+                f"Ты не обязан всё понимать сразу — просто наблюдай.",
+                f"В хаосе всегда есть порядок, просто он пока не виден."
+            ],
+            "ЧВ": [
+                f"Самые важные отношения — это отношения с собой.",
+                f"Ты достоин любви просто потому, что ты есть.",
+                f"Каждая встреча — это урок, который делает тебя ближе к себе."
+            ]
+        }
+        
+        strong_inspirations = {
+            "СБ": "Твоя устойчивость — это твой суперсила. Используй её, чтобы защищать не только себя, но и свои мечты.",
+            "ТФ": "Твой талант управлять ресурсами может изменить не только твою жизнь, но и жизнь вокруг.",
+            "УБ": "Твоя способность видеть закономерности — дар. Доверяй своей интуиции.",
+            "ЧВ": "Твоя эмпатия — это мост к другим людям. Не бойся открываться."
+        }
+        
+        weak_text = random.choice(weak_inspirations.get(weakest[0], ["Сегодня — день новых возможностей."]))
+        strong_text = strong_inspirations.get(strongest[0], "")
+        
+        return f"{weak_text}\n\n{strong_text}"
+    
+    def _get_daily_tip(self, scores: dict) -> str:
+        """Совет на день на основе профиля"""
+        if not scores:
+            return "Найди 5 минут для себя и просто подыши."
+        
+        min_vector = min(scores.items(), key=lambda x: x[1])
+        vector, score = min_vector
+        lvl = self._level(score)
+        
+        tips = {
+            "СБ": {
+                1: "Сделай одно маленькое дело, которое откладывал.",
+                2: "Скажи 'нет' тому, что тебе не нужно.",
+                3: "Позволь себе не согласиться с кем-то сегодня.",
+                4: "Выдохни и отпусти контроль над одной ситуацией.",
+                5: "Защити не себя, а того, кто слабее.",
+                6: "Используй свою силу, чтобы созидать, а не обороняться."
+            },
+            "ТФ": {
+                1: "Запиши одну идею заработка, которая пришла в голову.",
+                2: "Посмотри на свои расходы и найди одну статью для оптимизации.",
+                3: "Поблагодари себя за то, что уже имеешь.",
+                4: "Подумай, на что ты потратишь неожиданный доход.",
+                5: "Сделай маленький шаг к финансовой цели.",
+                6: "Поделись ресурсом с тем, кому он нужнее."
+            },
+            "УБ": {
+                1: "Прочитай одну статью на новую тему.",
+                2: "Задай вопрос 'почему' три раза подряд.",
+                3: "Найди закономерность в своей неделе.",
+                4: "Попробуй посмотреть на ситуацию глазами другого.",
+                5: "Запиши одну мысль, которая кажется важной.",
+                6: "Поделись своим пониманием с кем-то."
+            },
+            "ЧВ": {
+                1: "Напиши близкому человеку просто так.",
+                2: "Скажи комплимент незнакомцу.",
+                3: "Выслушай кого-то, не перебивая.",
+                4: "Попроси о помощи, если она нужна.",
+                5: "Поблагодари того, кто это заслужил.",
+                6: "Обними того, кто рядом."
+            }
+        }
+        
+        vector_tips = tips.get(vector, {})
+        tip = vector_tips.get(lvl, "Сделай что-то хорошее для себя сегодня.")
+        
+        return tip
+    
+    def _clean_text_for_voice(self, text: str) -> str:
+        """Очищает текст для синтеза речи"""
+        if not text:
+            return text
+        
+        text = re.sub(r'<[^>]+>', '', text)
+        
+        emoji_pattern = re.compile("["
+            u"\U0001F600-\U0001F64F"
+            u"\U0001F300-\U0001F5FF"
+            u"\U0001F680-\U0001F6FF"
+            u"\U0001F1E0-\U0001F1FF"
+            u"\U00002702-\U000027B0"
+            u"\U000024C2-\U0001F251"
+            u"\U0001F900-\U0001F9FF"
+            "]+", flags=re.UNICODE)
+        text = emoji_pattern.sub(r'', text)
+        
+        text = re.sub(r'\s+', ' ', text)
+        
+        return text.strip()
+    
+    def _level(self, score: float) -> int:
+        """Дробный балл 1..4 → целый уровень 1..6"""
+        if score <= 1.49:
+            return 1
+        elif score <= 2.00:
+            return 2
+        elif score <= 2.50:
+            return 3
+        elif score <= 3.00:
+            return 4
+        elif score <= 3.50:
+            return 5
+        else:
+            return 6
+    
+    def cancel_all_user_tasks(self, user_id: int):
+        """Отменяет все задачи пользователя"""
+        if user_id in self.scheduled_tasks:
+            for day, task in self.scheduled_tasks[user_id].items():
+                task.cancel()
+                logger.info(f"⏰ Отменён день {day} для пользователя {user_id}")
+            del self.scheduled_tasks[user_id]
+            
+            # Логируем отмену
+            threading.Thread(target=log_event, args=(user_id, 'morning_cancelled', {}), daemon=True).start()
+    
+    async def get_user_morning_stats(self, user_id: int) -> Dict[str, Any]:
+        """Получает статистику утренних сообщений пользователя"""
+        history = self._get_user_morning_history(user_id)
+        
+        days_sent = set()
+        for item in history:
+            days_sent.add(item.get('day'))
+        
+        return {
+            'total_sent': len(history),
+            'days_completed': len(days_sent),
+            'history': history[:5]
+        }
 
 
 # ============================================
 # ЭКСПОРТ
 # ============================================
 
-__all__ = [
-    'connect',
-    'disconnect',
-    'ensure_connection',
-    'save_user',
-    'save_user_data',
-    'save_context',
-    'save_test_result',
-    'log_event',
-    'add_reminder',
-    'get_user_reminders',
-    'complete_reminder',
-    'load_user_data',
-    'load_user_context',
-    'load_all_users',
-    'get_stats',
-    'db_loop_manager'
-]
-
-logger.info("✅ Простая синхронная БД загружена")
+__all__ = ['MorningMessageManager']
