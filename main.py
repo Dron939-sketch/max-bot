@@ -2850,12 +2850,23 @@ async def text_to_speech_api(request: Request):
 # WEBHOOK ДЛЯ MAX
 # ============================================
 
+@api_app.get("/webhook")
+async def webhook_get():
+    """GET-обработчик для проверки вебхука платформой MAX"""
+    logger.info("✅ GET-запрос на /webhook (проверка доступности)")
+    return JSONResponse({
+        "status": "ok",
+        "message": "Webhook is active",
+        "method": "GET"
+    })
+
+
 @api_app.post("/webhook")
 async def webhook(request: Request):
-    """Эндпоинт для получения обновлений от MAX"""
+    """POST-обработчик для получения обновлений от MAX"""
     try:
         data = await request.json()
-        logger.info(f"📨 Получен webhook: {data}")
+        logger.info(f"📨 Получен POST-запрос на webhook: {data}")
         
         # Здесь можно обработать входящие обновления
         # и извлечь user_id из данных
