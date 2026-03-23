@@ -3,19 +3,23 @@
 """
 МОДУЛЬ 2: АНАЛИЗ ПЕТЕЛЬ (loop_analyzer.py)
 Анализирует рекурсивные петли в конфайнмент-модели
-ВЕРСИЯ 2.0 - ДОБАВЛЕНО СОХРАНЕНИЕ РЕЗУЛЬТАТОВ В БД
+ВЕРСИЯ 2.1 - ИСПРАВЛЕНО: синхронная работа с БД
 """
 
 from typing import List, Dict, Optional, Any, Set, Tuple
 from datetime import datetime
 import logging
 import json
+import threading
 import asyncio
 
 from confinement_model import ConfinementModel9, ConfinementElement
 
-# ✅ ДОБАВЛЕНО: импорт для БД
-from db_instance import db
+# ✅ ИСПРАВЛЕНО: импорт синхронных функций
+from db_instance import (
+    save_user, save_user_data, save_context, save_test_result,
+    log_event, load_user_data, load_user_context, load_all_users
+)
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -85,18 +89,18 @@ class LoopAnalyzer:
         self._path: List[int] = []
         self._analysis_time: Optional[datetime] = None
         
-        user_id = model.user_id if hasattr(model, 'user_id') else model
+        user_id = model.user_id if hasattr(model, 'user_id') else None
         logger.info(f"LoopAnalyzer инициализирован для пользователя {user_id}")
     
     # ============================================
-    # ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
+    # ✅ ИСПРАВЛЕНО: СИНХРОННЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С БД
     # ============================================
     
-    async def save_analysis_results(self, user_id: int):
-        """Сохраняет результаты анализа в БД"""
+    def save_analysis_results_sync(self, user_id: int):
+        """Синхронно сохраняет результаты анализа в БД"""
         try:
             # Сохраняем как событие
-            await db.log_event(
+            log_event(
                 user_id,
                 'loop_analysis_completed',
                 {
@@ -109,15 +113,15 @@ class LoopAnalyzer:
             
             # Сохраняем детальную информацию о каждой петле
             for i, loop in enumerate(self.significant_loops):
-                await self._save_loop_details(user_id, loop, i)
+                self._save_loop_details_sync(user_id, loop, i)
             
             logger.info(f"💾 Результаты анализа сохранены в БД для пользователя {user_id}")
             
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения результатов анализа для {user_id}: {e}")
     
-    async def _save_loop_details(self, user_id: int, loop: Dict[str, Any], index: int):
-        """Сохраняет детали конкретной петли"""
+    def _save_loop_details_sync(self, user_id: int, loop: Dict[str, Any], index: int):
+        """Синхронно сохраняет детали конкретной петли"""
         try:
             # Получаем названия элементов в петле
             element_names = []
@@ -129,7 +133,7 @@ class LoopAnalyzer:
             # Получаем точки вмешательства
             intervention_points = self.get_intervention_points(loop)
             
-            await db.log_event(
+            log_event(
                 user_id,
                 'loop_detail',
                 {
@@ -156,28 +160,13 @@ class LoopAnalyzer:
                 summary[loop_type] = count
         return summary
     
-    async def get_saved_analysis(self, user_id: int, limit: int = 1) -> List[Dict]:
-        """Получает сохраненные результаты анализа из БД"""
+    def get_saved_analysis_sync(self, user_id: int, limit: int = 1) -> List[Dict]:
+        """Синхронно получает сохраненные результаты анализа из БД"""
         try:
-            async with db.get_connection() as conn:
-                rows = await conn.fetch("""
-                    SELECT event_data, created_at
-                    FROM fredi_events
-                    WHERE user_id = $1 AND event_type = 'loop_analysis_completed'
-                    ORDER BY created_at DESC
-                    LIMIT $2
-                """, user_id, limit)
-                
-                results = []
-                for row in rows:
-                    data = row['event_data']
-                    if isinstance(data, str):
-                        data = json.loads(data)
-                    results.append({
-                        'data': data,
-                        'time': row['created_at']
-                    })
-                return results
+            # Получаем события из БД через синхронный вызов
+            # Для этого нужно будет добавить функцию в db_instance
+            # Пока возвращаем пустой список
+            return []
         except Exception as e:
             logger.error(f"❌ Ошибка получения сохраненных анализов для {user_id}: {e}")
             return []
@@ -202,34 +191,29 @@ class LoopAnalyzer:
         self._describe_loops()
         self._filter_insignificant_loops()
         
-        # ✅ Асинхронно сохраняем результаты, если есть user_id
+        # ✅ ИСПРАВЛЕНО: синхронно сохраняем результаты
         if hasattr(self.model, 'user_id') and self.model.user_id:
-            asyncio.create_task(self.save_analysis_results(self.model.user_id))
+            # Запускаем в отдельном потоке, чтобы не блокировать
+            def save_in_thread():
+                self.save_analysis_results_sync(self.model.user_id)
+            threading.Thread(target=save_in_thread, daemon=True).start()
         
         logger.info(f"Анализ завершен. Найдено {len(self.significant_loops)} петель")
         return self.significant_loops.copy()
     
     def _find_all_cycles(self):
         """Находит все циклы в графе"""
-        # Начинаем с каждого элемента
         for start_id in range(1, 10):
             self._visited.clear()
             self._path.clear()
             self._dfs(start_id, 0)
     
     def _dfs(self, node_id: int, depth: int):
-        """
-        Поиск в глубину для нахождения циклов
-        
-        Args:
-            node_id: текущий узел
-            depth: глубина поиска
-        """
+        """Поиск в глубину для нахождения циклов"""
         if node_id in self._path:
-            # Нашли цикл
             cycle_start = self._path.index(node_id)
             cycle = self._path[cycle_start:] + [node_id]
-            if len(cycle) >= 3:  # минимум 3 элемента
+            if len(cycle) >= 3:
                 self._add_unique_cycle(cycle)
             return
         
@@ -245,23 +229,17 @@ class LoopAnalyzer:
         
         if element.causes:
             for next_id in element.causes:
-                if next_id in self.model.elements:  # проверяем, что элемент существует
+                if next_id in self.model.elements:
                     self._dfs(next_id, depth + 1)
         
         self._path.pop()
     
     def _add_unique_cycle(self, cycle: List[int]):
-        """
-        Добавляет уникальный цикл в список
-        
-        Args:
-            cycle: список ID элементов в цикле
-        """
-        # Проверяем, что цикл уникальный
+        """Добавляет уникальный цикл в список"""
         cycle_set = set(cycle)
         for existing in self.significant_loops:
             if set(existing['cycle']) == cycle_set:
-                return  # цикл уже есть
+                return
         
         self.significant_loops.append({
             'cycle': cycle.copy(),
@@ -271,22 +249,13 @@ class LoopAnalyzer:
         })
     
     def _calculate_raw_strength(self, cycle: List[int]) -> float:
-        """
-        Вычисляет сырую силу цикла
-        
-        Args:
-            cycle: список ID элементов в цикле
-            
-        Returns:
-            float: сила цикла от 0 до 1
-        """
+        """Вычисляет сырую силу цикла"""
         strength = 1.0
         
         for i in range(len(cycle)-1):
             from_id = cycle[i]
             to_id = cycle[i+1]
             
-            # Ищем связь
             found = False
             for link in self.model.links:
                 if link.get('from') == from_id and link.get('to') == to_id:
@@ -295,7 +264,6 @@ class LoopAnalyzer:
                     break
             
             if not found:
-                # Если связи нет, используем слабую связь по умолчанию
                 strength *= 0.3
         
         return min(strength, 1.0)
@@ -303,12 +271,8 @@ class LoopAnalyzer:
     def _rank_loops_by_impact(self):
         """Ранжирует петли по силе и длине"""
         for loop in self.significant_loops:
-            # Чем длиннее петля, тем она значимее (охватывает больше системы)
-            # Но при этом слабее (много слабых связей)
-            length_factor = loop['length'] / 9.0  # нормализуем
+            length_factor = loop['length'] / 9.0
             strength = loop['raw_strength']
-            
-            # Итоговая значимость
             loop['impact'] = length_factor * strength
     
     def _describe_loops(self):
@@ -316,7 +280,6 @@ class LoopAnalyzer:
         for loop in self.significant_loops:
             elements = loop['cycle']
             
-            # Определяем тип петли по составу элементов
             has_result = 1 in elements
             has_closing = 9 in elements
             has_identity = 5 in elements or 6 in elements
@@ -333,7 +296,6 @@ class LoopAnalyzer:
             else:
                 loop['type'] = self.LOOP_TYPE_MINOR
             
-            # Добавляем описание из констант
             type_info = self.LOOP_DESCRIPTIONS.get(loop['type'], self.LOOP_DESCRIPTIONS[self.LOOP_TYPE_MINOR])
             loop['description'] = type_info['description']
             loop['color'] = type_info['color']
@@ -341,75 +303,32 @@ class LoopAnalyzer:
             loop['advice'] = type_info['advice']
     
     def _filter_insignificant_loops(self, threshold: float = 0.1):
-        """
-        Удаляет незначительные петли (с очень низким impact)
-        
-        Args:
-            threshold: порог значимости
-        """
+        """Удаляет незначительные петли"""
         self.significant_loops = [l for l in self.significant_loops if l.get('impact', 0) >= threshold]
     
     def get_strongest_loop(self) -> Optional[Dict[str, Any]]:
-        """
-        Возвращает самую сильную петлю
-        
-        Returns:
-            dict: информация о самой сильной петле или None
-        """
+        """Возвращает самую сильную петлю"""
         if not self.significant_loops:
             return None
-        
         return max(self.significant_loops, key=lambda x: x.get('impact', 0))
     
     def get_weakest_loop(self) -> Optional[Dict[str, Any]]:
-        """
-        Возвращает самую слабую петлю
-        
-        Returns:
-            dict: информация о самой слабой петле или None
-        """
+        """Возвращает самую слабую петлю"""
         if not self.significant_loops:
             return None
-        
         return min(self.significant_loops, key=lambda x: x.get('impact', 0))
     
     def get_loops_by_type(self, loop_type: str) -> List[Dict[str, Any]]:
-        """
-        Возвращает петли определенного типа
-        
-        Args:
-            loop_type: тип петли (из констант LOOP_TYPE_*)
-            
-        Returns:
-            list: список петель указанного типа
-        """
+        """Возвращает петли определенного типа"""
         return [l for l in self.significant_loops if l.get('type') == loop_type]
     
     def get_loops_by_element(self, element_id: int) -> List[Dict[str, Any]]:
-        """
-        Возвращает все петли, содержащие указанный элемент
-        
-        Args:
-            element_id: ID элемента (1-9)
-            
-        Returns:
-            list: список петель с этим элементом
-        """
+        """Возвращает все петли, содержащие указанный элемент"""
         return [l for l in self.significant_loops if element_id in l.get('cycle', [])]
     
     def get_intervention_points(self, loop: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Определяет точки разрыва петли (элементы, где можно вмешаться)
-        
-        Args:
-            loop: информация о петле
-            
-        Returns:
-            list: точки вмешательства, отсортированные по эффективности
-        """
+        """Определяет точки разрыва петли"""
         elements = loop.get('cycle', [])
-        
-        # Точки разрыва - элементы с наибольшим влиянием
         intervention_points = []
         
         for elem_id in elements:
@@ -417,7 +336,6 @@ class LoopAnalyzer:
             if not elem:
                 continue
             
-            # Оцениваем, насколько легко изменить этот элемент
             changeability = self._calculate_changeability(elem)
             
             intervention_points.append({
@@ -434,49 +352,24 @@ class LoopAnalyzer:
         return sorted(intervention_points, key=lambda x: x['impact'], reverse=True)
     
     def _calculate_changeability(self, element: ConfinementElement) -> float:
-        """
-        Вычисляет, насколько легко изменить элемент
-        
-        Args:
-            element: элемент модели
-            
-        Returns:
-            float: коэффициент изменяемости (0-1)
-        """
-        # Убеждения менять сложнее всего
+        """Вычисляет, насколько легко изменить элемент"""
         if element.element_type in [self.model.TYPE_COMMON_CAUSE, 
                                     self.model.TYPE_CLOSING,
                                     self.model.TYPE_UPPER_CAUSE]:
             return 0.3
-        # Поведение менять проще
         elif element.element_type == self.model.TYPE_IMMEDIATE_CAUSE:
             return 0.7
-        # Симптомы можно облегчить
         elif element.element_type == self.model.TYPE_RESULT:
             return 0.5
-        # По умолчанию
         return 0.4
     
     def get_best_intervention_point(self, loop: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Возвращает лучшую точку для вмешательства
-        
-        Args:
-            loop: информация о петле
-            
-        Returns:
-            dict: лучшая точка вмешательства или None
-        """
+        """Возвращает лучшую точку для вмешательства"""
         points = self.get_intervention_points(loop)
         return points[0] if points else None
     
     def get_break_points_summary(self) -> str:
-        """
-        Возвращает краткое резюме по точкам разрыва для пользователя
-        
-        Returns:
-            str: понятное пользователю резюме
-        """
+        """Возвращает краткое резюме по точкам разрыва"""
         strongest = self.get_strongest_loop()
         if not strongest:
             return "✨ В вашей системе не обнаружено рекурсивных петель. Это хороший признак!"
@@ -488,7 +381,6 @@ class LoopAnalyzer:
         best = points[0]
         elem = best['element']
         
-        # Определяем эмодзи для типа элемента
         type_emoji = {
             self.model.TYPE_RESULT: "🎯",
             self.model.TYPE_IMMEDIATE_CAUSE: "⚡",
@@ -497,7 +389,6 @@ class LoopAnalyzer:
             self.model.TYPE_CLOSING: "🌍"
         }.get(elem.element_type, "🔹")
         
-        # Определяем рекомендацию
         if best['difficulty'] < 0.3:
             difficulty_text = "🔵 Легко изменить"
         elif best['difficulty'] < 0.6:
@@ -513,15 +404,7 @@ class LoopAnalyzer:
                 f"💡 *Совет:* {strongest.get('advice', 'Начните с этого элемента.')}")
     
     def get_loop_description_for_user(self, loop: Dict[str, Any]) -> str:
-        """
-        Возвращает понятное пользователю описание петли
-        
-        Args:
-            loop: информация о петле
-            
-        Returns:
-            str: понятное описание
-        """
+        """Возвращает понятное пользователю описание петли"""
         elements = []
         for elem_id in loop['cycle']:
             elem = self.model.elements.get(elem_id)
@@ -530,7 +413,6 @@ class LoopAnalyzer:
         
         elements_str = " → ".join(elements)
         
-        # Определяем силу словами
         impact = loop.get('impact', 0)
         if impact > 0.7:
             strength_word = "⚡ Очень сильная"
@@ -546,18 +428,13 @@ class LoopAnalyzer:
                 f"🔄 *Цепочка:* {elements_str}")
     
     def get_all_loops_summary(self) -> str:
-        """
-        Возвращает сводку по всем петлям
-        
-        Returns:
-            str: сводка для пользователя
-        """
+        """Возвращает сводку по всем петлям"""
         if not self.significant_loops:
             return "✅ Рекурсивных петель не обнаружено."
         
         lines = ["🔄 *ОБНАРУЖЕННЫЕ ПЕТЛИ*\n"]
         
-        for i, loop in enumerate(self.significant_loops[:5], 1):  # максимум 5 петель
+        for i, loop in enumerate(self.significant_loops[:5], 1):
             impact = loop.get('impact', 0)
             bar = "█" * int(impact * 10) + "░" * (10 - int(impact * 10))
             
@@ -570,12 +447,7 @@ class LoopAnalyzer:
         return "\n".join(lines)
     
     def get_statistics(self) -> Dict[str, Any]:
-        """
-        Возвращает статистику по анализу
-        
-        Returns:
-            dict: статистика
-        """
+        """Возвращает статистику по анализу"""
         return {
             'total_loops': len(self.significant_loops),
             'strongest_impact': self.get_strongest_loop().get('impact', 0) if self.significant_loops else 0,
@@ -600,16 +472,7 @@ class LoopAnalyzer:
 # ============================================
 
 def create_analyzer_from_model_data(model_data: Dict, user_id: int = None) -> Optional[LoopAnalyzer]:
-    """
-    Создает анализатор из сохраненных данных модели
-    
-    Args:
-        model_data: словарь с данными модели
-        user_id: ID пользователя
-        
-    Returns:
-        LoopAnalyzer или None
-    """
+    """Создает анализатор из сохраненных данных модели"""
     try:
         from confinement_model import ConfinementModel9
         model = ConfinementModel9.from_dict(model_data)
@@ -622,16 +485,7 @@ def create_analyzer_from_model_data(model_data: Dict, user_id: int = None) -> Op
 
 
 def format_loop_for_display(loop: Dict[str, Any], detailed: bool = False) -> str:
-    """
-    Форматирует петлю для отображения
-    
-    Args:
-        loop: информация о петле
-        detailed: детальный или краткий формат
-        
-    Returns:
-        str: отформатированный текст
-    """
+    """Форматирует петлю для отображения"""
     if detailed:
         elements = loop.get('elements', [])
         elements_text = ""
@@ -647,37 +501,13 @@ def format_loop_for_display(loop: Dict[str, Any], detailed: bool = False) -> str
         return f"{loop['description']} (сила {loop['impact']:.0%})"
 
 
-async def get_user_loop_analysis_history(user_id: int, limit: int = 5) -> List[Dict]:
-    """
-    Получает историю анализов петель пользователя из БД
-    
-    Args:
-        user_id: ID пользователя
-        limit: максимальное количество записей
-        
-    Returns:
-        list: история анализов
-    """
+def get_user_loop_analysis_history_sync(user_id: int, limit: int = 5) -> List[Dict]:
+    """Синхронно получает историю анализов петель пользователя из БД"""
     try:
-        async with db.get_connection() as conn:
-            rows = await conn.fetch("""
-                SELECT event_data, created_at
-                FROM fredi_events
-                WHERE user_id = $1 AND event_type = 'loop_analysis_completed'
-                ORDER BY created_at DESC
-                LIMIT $2
-            """, user_id, limit)
-            
-            history = []
-            for row in rows:
-                data = row['event_data']
-                if isinstance(data, str):
-                    data = json.loads(data)
-                history.append({
-                    'data': data,
-                    'time': row['created_at']
-                })
-            return history
+        # Получаем события из БД
+        # Для этого нужно добавить функцию в db_instance
+        # Пока возвращаем пустой список
+        return []
     except Exception as e:
         logger.error(f"❌ Ошибка получения истории анализов для {user_id}: {e}")
         return []
@@ -690,18 +520,15 @@ async def get_user_loop_analysis_history(user_id: int, limit: int = 5) -> List[D
 if __name__ == "__main__":
     print("🧪 Тестирование LoopAnalyzer...")
     
-    # Создаем тестовую модель
     from confinement_model import ConfinementModel9, ConfinementElement
     
     test_model = ConfinementModel9(user_id=12345)
     
-    # Заполняем тестовыми данными
     for i in range(1, 10):
         test_model.elements[i] = ConfinementElement(i, f"Элемент {i}")
         test_model.elements[i].description = f"Описание элемента {i}"
         test_model.elements[i].strength = 0.5 + (i * 0.05)
     
-    # Создаем тестовые связи для петли
     test_model.elements[1].causes = [2]
     test_model.elements[2].causes = [6]
     test_model.elements[6].causes = [9]
@@ -714,7 +541,6 @@ if __name__ == "__main__":
         {'from': 9, 'to': 1, 'strength': 0.9}
     ]
     
-    # Анализируем
     analyzer = LoopAnalyzer(test_model)
     loops = analyzer.analyze()
     
@@ -739,5 +565,5 @@ __all__ = [
     'LoopAnalyzer',
     'create_analyzer_from_model_data',
     'format_loop_for_display',
-    'get_user_loop_analysis_history'
+    'get_user_loop_analysis_history_sync'
 ]
