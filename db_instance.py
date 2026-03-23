@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ ДЛЯ PYTHON 3.11 - ИСПРАВЛЕНО: единый цикл событий + save_telegram_user + close_db + retry + log_event
+ВЕРСИЯ 3.0 - ИСПРАВЛЕНО: полная поддержка всех параметров save_test_result
 """
 
 import os
@@ -345,12 +345,10 @@ async def save_telegram_user_async(
     Асинхронная версия сохранения пользователя Telegram
     """
     try:
-        # Проверяем соединение с повторными попытками
         if not await ensure_db_connection():
             logger.error(f"❌ Нет соединения с БД для сохранения пользователя {user_id}")
             return False
         
-        # Сохраняем пользователя
         result = await db.save_telegram_user(
             user_id=user_id,
             username=username,
@@ -426,12 +424,10 @@ async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict
     Асинхронная версия сохранения (для вызова через менеджер)
     """
     try:
-        # Проверяем соединение с повторными попытками
         if not await ensure_db_connection():
             logger.error(f"❌ Нет соединения с БД для сохранения {user_id}")
             return False
         
-        # Импортируем глобальные словари, если параметры не переданы
         if user_data_dict is None:
             from state import user_data as global_user_data
             user_data_dict = global_user_data
@@ -444,7 +440,6 @@ async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict
             from state import user_routes as global_user_routes
             user_routes_dict = global_user_routes
         
-        # Сохраняем пользователя
         if user_id in user_data_dict:
             user_info = user_data_dict[user_id]
             first_name = user_info.get('first_name') or user_info.get('name')
@@ -456,17 +451,14 @@ async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict
                 first_name=first_name
             )
         
-        # Сохраняем user_data
         if user_id in user_data_dict:
             await db.save_user_data(user_id, user_data_dict[user_id])
         
-        # Сохраняем контекст
         if user_id in user_contexts_dict:
             context = user_contexts_dict[user_id]
             await db.save_user_context(user_id, context)
             await db.save_pickled_context(user_id, context)
         
-        # Сохраняем маршрут
         if user_id in user_routes_dict:
             route = user_routes_dict[user_id]
             await db.save_user_route(
@@ -505,50 +497,80 @@ def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_
         return False
 
 
-async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
+# ============================================
+# СОХРАНЕНИЕ РЕЗУЛЬТАТОВ ТЕСТА (ИСПРАВЛЕНО)
+# ============================================
+
+async def save_test_result_to_db_async(
+    user_id: int, 
+    test_type: str, 
+    results: Dict = None,
+    profile_code: str = None,
+    perception_type: str = None,
+    thinking_level: int = None,
+    vectors: Dict = None,
+    behavioral_levels: Dict = None,
+    deep_patterns: Dict = None,
+    confinement_model: Dict = None,
+    user_data_dict: Dict = None
+) -> Optional[int]:
     """
     Асинхронная версия сохранения результатов теста
+    Принимает все параметры, которые передаются из db_sync.py
     """
     try:
-        # Проверяем соединение с повторными попытками
         if not await ensure_db_connection():
             logger.error(f"❌ Нет соединения с БД для сохранения результатов {user_id}")
             return None
         
-        if user_data_dict is None:
-            from state import user_data as global_user_data
-            user_data_dict = global_user_data
+        # Получаем данные пользователя
+        if user_data_dict is not None:
+            data = user_data_dict.get(user_id, {})
+        else:
+            try:
+                from state import user_data as global_user_data
+                data = global_user_data.get(user_id, {})
+            except ImportError:
+                data = results or {}
         
-        data = user_data_dict.get(user_id, {})
+        if not data and results:
+            data = results
         
         if not data:
             logger.warning(f"⚠️ Нет данных для пользователя {user_id}")
             return None
         
-        # Получаем profile_code
-        profile_code = None
-        if data.get("profile_data"):
-            profile_code = data["profile_data"].get("display_name")
-        elif data.get("ai_generated_profile"):
-            import re
-            match = re.search(r'СБ-\d+_ТФ-\d+_УБ-\d+_ЧВ-\d+', data.get("ai_generated_profile", ""))
-            if match:
-                profile_code = match.group(0)
+        # Получаем profile_code если не передан
+        if not profile_code:
+            if data.get("profile_data"):
+                profile_code = data["profile_data"].get("display_name")
+            elif data.get("ai_generated_profile"):
+                import re
+                match = re.search(r'СБ-\d+_ТФ-\d+_УБ-\d+_ЧВ-\d+', data.get("ai_generated_profile", ""))
+                if match:
+                    profile_code = match.group(0)
         
-        # Сохраняем результат теста
+        # Используем переданные значения или берем из data
+        final_perception_type = perception_type or data.get("perception_type")
+        final_thinking_level = thinking_level or data.get("thinking_level")
+        final_vectors = vectors or data.get("behavioral_levels")
+        final_behavioral_levels = behavioral_levels or data.get("behavioral_levels")
+        final_deep_patterns = deep_patterns or data.get("deep_patterns")
+        final_confinement_model = confinement_model or data.get("confinement_model")
+        
         test_id = await db.save_test_result(
             user_id=user_id,
             test_type=test_type,
             results=data,
             profile_code=profile_code,
-            perception_type=data.get("perception_type"),
-            thinking_level=data.get("thinking_level"),
-            vectors=data.get("behavioral_levels"),
-            deep_patterns=data.get("deep_patterns"),
-            confinement_model=data.get("confinement_model")
+            perception_type=final_perception_type,
+            thinking_level=final_thinking_level,
+            vectors=final_vectors,
+            behavioral_levels=final_behavioral_levels,
+            deep_patterns=final_deep_patterns,
+            confinement_model=final_confinement_model
         )
         
-        # Сохраняем все ответы
         all_answers = data.get("all_answers", [])
         if all_answers and test_id:
             for answer in all_answers:
@@ -578,7 +600,19 @@ async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
         return None
 
 
-def save_test_result_to_db(user_id, test_type, user_data_dict=None):
+def save_test_result_to_db(
+    user_id: int, 
+    test_type: str, 
+    results: Dict = None,
+    profile_code: str = None,
+    perception_type: str = None,
+    thinking_level: int = None,
+    vectors: Dict = None,
+    behavioral_levels: Dict = None,
+    deep_patterns: Dict = None,
+    confinement_model: Dict = None,
+    user_data_dict: Dict = None
+) -> Optional[int]:
     """
     Синхронная обертка для сохранения результатов теста
     """
@@ -587,17 +621,27 @@ def save_test_result_to_db(user_id, test_type, user_data_dict=None):
             save_test_result_to_db_async,
             user_id,
             test_type,
+            results,
+            profile_code,
+            perception_type,
+            thinking_level,
+            vectors,
+            behavioral_levels,
+            deep_patterns,
+            confinement_model,
             user_data_dict,
             timeout=30
         )
         return result if result is not None else None
     except Exception as e:
         logger.error(f"❌ Ошибка save_test_result_to_db: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
 # ============================================
-# ДОБАВЛЕННЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С КОНТЕКСТОМ И ДАННЫМИ
+# ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ДАННЫМИ
 # ============================================
 
 async def get_user_context_async(user_id: int) -> Optional[Dict]:
@@ -821,7 +865,6 @@ __all__ = [
     'ensure_db_connection',
     'execute_with_retry',
     'sync_db_call',
-    # Добавленные функции
     'get_user_context',
     'get_user_context_async',
     'get_user_data',
