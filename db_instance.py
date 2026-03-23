@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ 3.0 - ИСПРАВЛЕНО: полная поддержка всех параметров save_test_result
+ВЕРСИЯ 3.1 - ИСПРАВЛЕНО: блокировка операций и правильная обработка соединений
 """
 
 import os
@@ -56,6 +56,7 @@ class DBLoopManager:
         self._tasks = set()
         self._running = False
         self._db_instance: Optional[BotDatabase] = None
+        self._operation_lock = asyncio.Lock()  # Блокировка для операций
     
     def init(self, db_instance: BotDatabase):
         """Инициализирует цикл событий в отдельном потоке"""
@@ -134,14 +135,19 @@ class DBLoopManager:
         if not is_coro_func and not is_coro:
             raise TypeError(f"{coro_func} is not a coroutine or coroutine function")
         
-        # ✅ ВСЕГДА выполняем в потоке БД, чтобы избежать конфликта циклов
-        if is_coro:
-            future = asyncio.run_coroutine_threadsafe(coro_func, self.loop)
-        else:
-            future = asyncio.run_coroutine_threadsafe(
-                coro_func(*args, **kwargs),
-                self.loop
-            )
+        # Оборачиваем в блокировку для предотвращения конфликтов
+        async def _wrapped():
+            try:
+                async with self._operation_lock:
+                    if is_coro:
+                        return await coro_func
+                    else:
+                        return await coro_func(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"Ошибка в _wrapped: {e}")
+                raise
+        
+        future = asyncio.run_coroutine_threadsafe(_wrapped(), self.loop)
         
         try:
             return future.result(timeout=timeout)
@@ -168,10 +174,11 @@ class DBLoopManager:
         
         async def _wrapped():
             try:
-                if is_coro:
-                    return await coro_func
-                else:
-                    return await coro_func(*args, **kwargs)
+                async with self._operation_lock:
+                    if is_coro:
+                        return await coro_func
+                    else:
+                        return await coro_func(*args, **kwargs)
             except Exception as e:
                 logger.error(f"❌ Ошибка в фоновой задаче: {e}")
                 return None
@@ -244,40 +251,49 @@ async def close_db():
 
 async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
     """
-    Проверяет соединение с БД через менеджер с повторными попытками
+    Проверяет соединение с БД с повторными попытками
     """
     for attempt in range(max_retries):
         try:
+            # Добавляем задержку между попытками
+            if attempt > 0:
+                await asyncio.sleep(delay * (2 ** attempt))
+            
             # Если пула нет - подключаемся
             if db.pool is None:
-                logger.info(f"🔄 Пул соединений не инициализирован, подключаемся... (попытка {attempt + 1}/{max_retries})")
+                logger.info(f"🔄 Подключаемся... (попытка {attempt + 1}/{max_retries})")
                 await db.connect()
                 logger.info("✅ Подключение к БД установлено")
                 return True
             
-            # Проверяем соединение
-            async with db.get_connection() as conn:
-                await conn.execute("SELECT 1")
+            # Используем короткий таймаут для проверки
+            try:
+                async with asyncio.timeout(5):
+                    async with db.get_connection() as conn:
+                        await conn.execute("SELECT 1")
+            except asyncio.TimeoutError:
+                logger.warning(f"⚠️ Таймаут проверки соединения (попытка {attempt + 1})")
+                if db.pool:
+                    await db.disconnect()
+                    db.pool = None
+                continue
             
             logger.debug("✅ Соединение с БД работает")
             return True
             
         except Exception as e:
-            logger.warning(f"⚠️ Ошибка при проверке соединения (попытка {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
+            logger.warning(f"⚠️ Ошибка (попытка {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
             
             if attempt < max_retries - 1:
-                # Пробуем переподключиться
                 try:
                     if db.pool:
                         await db.disconnect()
-                        logger.info("🔌 Старый пул закрыт")
+                        db.pool = None
+                        logger.info("🔌 Пул закрыт")
                 except Exception as disconnect_error:
-                    logger.warning(f"⚠️ Ошибка при закрытии пула: {disconnect_error}")
+                    logger.warning(f"⚠️ Ошибка при закрытии: {disconnect_error}")
                 
-                # Ждем перед следующей попыткой (с экспоненциальной задержкой)
-                wait_time = delay * (2 ** attempt)
-                logger.info(f"⏳ Ждем {wait_time:.1f}с перед следующей попыткой...")
-                await asyncio.sleep(wait_time)
+                await asyncio.sleep(delay * (2 ** attempt))
             else:
                 logger.error(f"❌ Все попытки ({max_retries}) исчерпаны")
                 return False
@@ -498,7 +514,7 @@ def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_
 
 
 # ============================================
-# СОХРАНЕНИЕ РЕЗУЛЬТАТОВ ТЕСТА (ИСПРАВЛЕНО)
+# СОХРАНЕНИЕ РЕЗУЛЬТАТОВ ТЕСТА
 # ============================================
 
 async def save_test_result_to_db_async(
