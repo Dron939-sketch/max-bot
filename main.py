@@ -32,9 +32,19 @@ import requests
 # =========================================
 
 # ========== ИМПОРТЫ ДЛЯ БАЗЫ ДАННЫХ ==========
-from db_instance import db, init_db, close_db, ensure_db_connection, execute_with_retry
-from db_sync import sync_db
-import asyncpg
+from db_instance import (
+    connect as db_connect,
+    disconnect as db_disconnect,
+    ensure_connection as db_ensure,
+    save_user,
+    save_user_data,
+    save_context,
+    save_test_result,
+    log_event,
+    load_user_data,
+    load_user_context,
+    load_all_users
+)
 # =============================================
 
 # ========== ЗАЩИТА ОТ ДВОЙНОГО ЗАПУСКА ==========
@@ -242,30 +252,45 @@ morning_manager.set_contexts(user_contexts, user_data)
 # ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ
 # ============================================
 
-async def init_database():
-    """Инициализация базы данных с фоновыми задачами"""
+def init_database_sync():
+    """Синхронная инициализация базы данных"""
+    global user_data, user_names, user_contexts, user_routes
+    
     try:
-        await init_db()
-        logger.info("✅ Подключение к PostgreSQL установлено")
-        
-        # Проверяем соединение и загружаем данные
-        if await ensure_db_connection():
-            await load_all_users_from_db()
+        if db_connect():
+            logger.info("✅ Подключение к PostgreSQL установлено")
             
-            # ✅ ЗАПУСКАЕМ ФОНОВЫЕ ЗАДАЧИ
-            asyncio.create_task(periodic_save_to_db())
-            asyncio.create_task(periodic_cleanup_db())
-            logger.info("✅ Фоновые задачи сохранения и очистки запущены")
+            # Загружаем пользователей
+            user_ids = load_all_users()
+            for user_id in user_ids:
+                # Загружаем данные
+                data = load_user_data(user_id)
+                if data:
+                    user_data[user_id] = data
+                
+                # Загружаем контекст
+                context = load_user_context(user_id)
+                if context:
+                    from models import UserContext
+                    ctx = UserContext(user_id)
+                    ctx.name = context.get('name')
+                    ctx.age = context.get('age')
+                    ctx.gender = context.get('gender')
+                    ctx.city = context.get('city')
+                    ctx.communication_mode = context.get('communication_mode', 'coach')
+                    user_contexts[user_id] = ctx
+                    
+                    if context.get('name'):
+                        user_names[user_id] = context['name']
+            
+            logger.info(f"✅ Загружено: {len(user_data)} пользователей, {len(user_contexts)} контекстов")
+            return True
         else:
-            logger.warning("⚠️ Не удалось проверить соединение с БД, фоновые задачи не запущены")
-        
-        logger.info("✅ База данных инициализирована")
-        return True
-        
+            logger.warning("⚠️ БД не подключена, работаем без сохранения")
+            return False
+            
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации БД: {e}")
-        # ❌ НЕ ВЫБРАСЫВАЕМ ИСКЛЮЧЕНИЕ, чтобы бот работал даже без БД
-        logger.warning("⚠️ Продолжаем работу БЕЗ PostgreSQL (только память)")
         return False
 
 async def load_all_users_from_db():
@@ -384,7 +409,7 @@ async def periodic_save_to_db():
             # Сохраняем каждого пользователя
             for user_id in list(user_data.keys()):
                 try:
-                    if sync_db.save_user_to_db(user_id):
+                    if save_user(user_id, first_name, username):
                         saved_count += 1
                     await asyncio.sleep(0.01)  # небольшая задержка между сохранениями
                 except Exception as e:
@@ -499,7 +524,7 @@ async def save_context(request: Request):
         
         logger.info(f"📝 Контекст сохранен для пользователя {user_id}: {context_data}")
         
-        sync_db.save_user_to_db(user_id)
+        save_user(user_id, first_name, username)
         
         return JSONResponse({"success": True})
     except Exception as e:
@@ -525,7 +550,7 @@ async def save_profile(request: Request):
         user_data[user_id]['ai_generated_profile'] = profile
         user_data[user_id]['profile_data'] = profile.get('profile_data', {})
         
-        sync_db.save_user_to_db(user_id)
+        save_user(user_id, first_name, username)
         
         return JSONResponse({
             "success": True,
@@ -569,7 +594,7 @@ async def save_test_progress(request: Request):
             })
             user_data[user_id][stage_key].append(answer)
         
-        sync_db.save_user_to_db(user_id)
+        save_user(user_id, first_name, username)
         
         stage_questions_count = {1: 4, 2: 6, 3: 24, 4: 12, 5: 8}
         total = stage_questions_count.get(stage, 4)
@@ -622,7 +647,7 @@ async def save_mode(request: Request):
             user_data[user_id] = {}
         user_data[user_id]['communication_mode'] = mode
         
-        sync_db.save_user_to_db(user_id)
+        save_user(user_id, first_name, username)
         
         return JSONResponse({
             "success": True,
@@ -659,7 +684,7 @@ async def sync_data(request: Request):
         if 'mode' in sync_data and user_id in user_contexts:
             user_contexts[user_id].communication_mode = sync_data['mode']
         
-        sync_db.save_user_to_db(user_id)
+        save_user(user_id, first_name, username)
         
         return JSONResponse({
             "success": True,
@@ -744,7 +769,7 @@ async def save_test_results(request: Request):
         user_data[user_id]['test_completed'] = True
         user_data[user_id]['test_completed_at'] = datetime.now().isoformat()
         
-        sync_db.save_user_to_db(user_id)
+        save_user(user_id, first_name, username)
         
         def run_generation():
             try:
@@ -955,7 +980,7 @@ async def get_thought(user_id: int):
                 if user_id not in user_data:
                     user_data[user_id] = {}
                 user_data[user_id]["psychologist_thought"] = thought
-                sync_db.save_user_to_db(user_id)
+                save_user(user_id, first_name, username)
             else:
                 thought = "Мысли психолога еще не сгенерированы."
         return {"thought": thought}
@@ -1251,7 +1276,7 @@ async def generate_profile_interpretation_async(user_id: int):
         
         if ai_profile:
             user_data[user_id]['ai_generated_profile'] = ai_profile
-            sync_db.save_user_to_db(user_id)
+            save_user(user_id, first_name, username)
             logger.info(f"✅ Интерпретация для пользователя {user_id} сгенерирована")
             await send_to_telegram(user_id, ai_profile)
         else:
@@ -1269,7 +1294,7 @@ async def generate_profile_interpretation_async(user_id: int):
 Хотите получить более подробную интерпретацию? Задайте вопрос в чате."""
             
             user_data[user_id]['ai_generated_profile'] = fallback_profile
-            sync_db.save_user_to_db(user_id)
+            save_user(user_id, first_name, username)
             await send_to_telegram(user_id, fallback_profile)
         
     except Exception as e:
@@ -1467,7 +1492,7 @@ async def submit_test_answer(request: Request):
             user_data[user_id][stage_key] = []
         user_data[user_id][stage_key].append(answer_record)
         
-        sync_db.save_user_to_db(user_id)
+        save_user(user_id, first_name, username)
         
         stage_questions_count = {1: 4, 2: 6, 3: 24, 4: 12, 5: 8}
         total = stage_questions_count.get(stage, 4)
@@ -2610,7 +2635,7 @@ async def api_chat_action(request: Request):
                     if user_id not in user_data:
                         user_data[user_id] = {}
                     user_data[user_id]['psychologist_thought'] = thought
-                    sync_db.save_user_to_db(user_id)
+                    save_user(user_id, first_name, username)
             return JSONResponse({
                 "success": True,
                 "action": action,
@@ -3437,7 +3462,7 @@ async def update_notification_settings(request: Request):
         user_data[user_id]['notification_settings'] = settings
         
         # Сохраняем в БД
-        sync_db.save_user_to_db(user_id)
+        save_user(user_id, first_name, username)
         
         return JSONResponse({"success": True})
         
