@@ -6,13 +6,14 @@
 - Без event loops
 - Без конфликтов
 - Работает из любого потока
+- С поддержкой напоминаний и событий
 """
 
 import os
 import json
 import logging
 import psycopg2
-from psycopg2.extras import Json
+from psycopg2.extras import Json, RealDictCursor
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
@@ -141,9 +142,25 @@ def _create_tables():
         )
     """)
     
+    # Напоминания (для утренних сообщений)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fredi_reminders (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            reminder_type TEXT NOT NULL,
+            remind_at TIMESTAMP NOT NULL,
+            data JSONB,
+            completed_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    
     # Индексы
     cur.execute("CREATE INDEX IF NOT EXISTS idx_test_user ON fredi_test_results(user_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_events_user ON fredi_events(user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_user ON fredi_reminders(user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_date ON fredi_reminders(remind_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_uncompleted ON fredi_reminders(remind_at) WHERE completed_at IS NULL")
     
     _conn.commit()
     cur.close()
@@ -271,6 +288,83 @@ def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
 
 
 # ============================================
+# НАПОМИНАНИЯ (ДОБАВЛЕНО)
+# ============================================
+
+def add_reminder(user_id: int, reminder_type: str, remind_at, data: Dict = None) -> bool:
+    """Добавить напоминание"""
+    if not ensure_connection():
+        return False
+    try:
+        cur = _conn.cursor()
+        cur.execute("""
+            INSERT INTO fredi_reminders (user_id, reminder_type, remind_at, data, created_at)
+            VALUES (%s, %s, %s, %s, NOW())
+        """, (user_id, reminder_type, remind_at, Json(data) if data else None))
+        _conn.commit()
+        cur.close()
+        logger.debug(f"📅 Напоминание {reminder_type} для {user_id} на {remind_at}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ add_reminder: {e}")
+        return False
+
+
+def get_user_reminders(user_id: int, include_sent: bool = False) -> List[Dict]:
+    """Получить напоминания пользователя"""
+    if not ensure_connection():
+        return []
+    try:
+        cur = _conn.cursor(cursor_factory=RealDictCursor)
+        query = """
+            SELECT id, reminder_type, remind_at, data, completed_at, created_at
+            FROM fredi_reminders
+            WHERE user_id = %s
+        """
+        if not include_sent:
+            query += " AND completed_at IS NULL"
+        query += " ORDER BY remind_at DESC LIMIT 100"
+        
+        cur.execute(query, (user_id,))
+        rows = cur.fetchall()
+        cur.close()
+        
+        result = []
+        for row in rows:
+            result.append({
+                'id': row['id'],
+                'reminder_type': row['reminder_type'],
+                'remind_at': row['remind_at'],
+                'data': row['data'],
+                'completed_at': row['completed_at'],
+                'created_at': row['created_at']
+            })
+        return result
+    except Exception as e:
+        logger.error(f"❌ get_user_reminders: {e}")
+        return []
+
+
+def complete_reminder(reminder_id: int) -> bool:
+    """Отметить напоминание как выполненное"""
+    if not ensure_connection():
+        return False
+    try:
+        cur = _conn.cursor()
+        cur.execute("""
+            UPDATE fredi_reminders 
+            SET completed_at = NOW() 
+            WHERE id = %s
+        """, (reminder_id,))
+        _conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        logger.error(f"❌ complete_reminder: {e}")
+        return False
+
+
+# ============================================
 # ЗАГРУЗКА
 # ============================================
 
@@ -343,11 +437,14 @@ def get_stats() -> Dict:
         tests = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM fredi_events")
         events = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM fredi_reminders")
+        reminders = cur.fetchone()[0]
         cur.close()
         return {
             'users': users,
             'tests': tests,
-            'events': events
+            'events': events,
+            'reminders': reminders
         }
     except Exception as e:
         logger.error(f"❌ get_stats: {e}")
@@ -355,7 +452,20 @@ def get_stats() -> Dict:
 
 
 # ============================================
-# ЭКСПОРТ (все функции синхронные)
+# ЗАГЛУШКА ДЛЯ ОБРАТНОЙ СОВМЕСТИМОСТИ
+# ============================================
+
+def db_loop_manager():
+    """Заглушка для обратной совместимости (для старых файлов)"""
+    import asyncio
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.new_event_loop()
+
+
+# ============================================
+# ЭКСПОРТ
 # ============================================
 
 __all__ = [
@@ -367,10 +477,14 @@ __all__ = [
     'save_context',
     'save_test_result',
     'log_event',
+    'add_reminder',
+    'get_user_reminders',
+    'complete_reminder',
     'load_user_data',
     'load_user_context',
     'load_all_users',
-    'get_stats'
+    'get_stats',
+    'db_loop_manager'
 ]
 
 logger.info("✅ Простая синхронная БД загружена")
