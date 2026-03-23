@@ -243,22 +243,30 @@ morning_manager.set_contexts(user_contexts, user_data)
 # ============================================
 
 async def init_database():
-    """Инициализация базы данных"""
+    """Инициализация базы данных с фоновыми задачами"""
     try:
         await init_db()
         logger.info("✅ Подключение к PostgreSQL установлено")
-        await ensure_db_connection()
-        await load_all_users_from_db()
         
-        # ⚠️ ВРЕМЕННО ОТКЛЮЧАЕМ ФОНОВЫЕ ЗАДАЧИ (конфликт циклов asyncio)
-        # setup_auto_save(interval_seconds=300)
-        # asyncio.create_task(periodic_save_to_db())
-        # asyncio.create_task(periodic_cleanup_db())
+        # Проверяем соединение и загружаем данные
+        if await ensure_db_connection():
+            await load_all_users_from_db()
+            
+            # ✅ ЗАПУСКАЕМ ФОНОВЫЕ ЗАДАЧИ
+            asyncio.create_task(periodic_save_to_db())
+            asyncio.create_task(periodic_cleanup_db())
+            logger.info("✅ Фоновые задачи сохранения и очистки запущены")
+        else:
+            logger.warning("⚠️ Не удалось проверить соединение с БД, фоновые задачи не запущены")
         
         logger.info("✅ База данных инициализирована")
+        return True
+        
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации БД: {e}")
-        raise
+        # ❌ НЕ ВЫБРАСЫВАЕМ ИСКЛЮЧЕНИЕ, чтобы бот работал даже без БД
+        logger.warning("⚠️ Продолжаем работу БЕЗ PostgreSQL (только память)")
+        return False
 
 async def load_all_users_from_db():
     """Загружает всех пользователей из БД в словари памяти"""
@@ -355,29 +363,61 @@ async def load_all_users_from_db():
         traceback.print_exc()
 
 async def periodic_save_to_db():
-    """Периодически сохраняет всех пользователей в БД"""
+    """Периодически сохраняет всех пользователей в БД с защитой от ошибок"""
     while True:
-        await asyncio.sleep(300)
-        logger.info("🔄 Периодическое сохранение данных в БД...")
-        saved_count = 0
-        for user_id in list(user_data.keys()):
+        try:
+            await asyncio.sleep(300)  # каждые 5 минут
+            logger.info("🔄 Периодическое сохранение данных в БД...")
+            
+            # Проверяем соединение перед сохранением
             try:
-                if sync_db.save_user_to_db(user_id):
-                    saved_count += 1
+                if not await ensure_db_connection():
+                    logger.warning("⚠️ Нет соединения с БД, пропускаем сохранение")
+                    continue
             except Exception as e:
-                logger.error(f"❌ Ошибка сохранения {user_id}: {e}")
-        logger.info(f"✅ Сохранено {saved_count} пользователей")
+                logger.warning(f"⚠️ Ошибка проверки соединения: {e}")
+                continue
+            
+            saved_count = 0
+            error_count = 0
+            
+            # Сохраняем каждого пользователя
+            for user_id in list(user_data.keys()):
+                try:
+                    if sync_db.save_user_to_db(user_id):
+                        saved_count += 1
+                    await asyncio.sleep(0.01)  # небольшая задержка между сохранениями
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f"❌ Ошибка сохранения {user_id}: {e}")
+                    if error_count > 10:  # если много ошибок, выходим
+                        logger.error("⚠️ Слишком много ошибок, прерываем сохранение")
+                        break
+            
+            logger.info(f"✅ Сохранено {saved_count} пользователей, ошибок: {error_count}")
+            
+        except Exception as e:
+            logger.error(f"❌ Критическая ошибка в periodic_save_to_db: {e}")
+            await asyncio.sleep(60)  # ждем минуту перед повторной попыткой
 
 async def periodic_cleanup_db():
-    """Периодическая очистка старых данных"""
+    """Периодическая очистка старых данных с защитой"""
     while True:
-        await asyncio.sleep(86400)
         try:
+            await asyncio.sleep(86400)  # раз в сутки
+            logger.info("🧹 Очистка старых данных...")
+            
+            # Проверяем соединение
+            if not await ensure_db_connection():
+                logger.warning("⚠️ Нет соединения с БД, пропускаем очистку")
+                continue
+            
             await db.cleanup_old_data(days=30)
-            logger.info("🧹 Очистка старых данных выполнена")
+            logger.info("✅ Очистка старых данных выполнена")
+            
         except Exception as e:
             logger.error(f"❌ Ошибка при очистке данных: {e}")
-
+            await asyncio.sleep(3600)  # ждем час
 # ============================================
 # FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
 # ============================================
