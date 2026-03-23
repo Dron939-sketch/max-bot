@@ -13,7 +13,7 @@ import asyncio
 import threading
 import inspect
 import traceback
-from typing import Dict, Any, Optional, Callable, Awaitable
+from typing import Dict, Any, Optional, Callable, Awaitable, List
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from functools import wraps
 import signal
@@ -392,7 +392,6 @@ def save_telegram_user(
         return False
 
 
-# ✅ ДОБАВЛЕНА ФУНКЦИЯ log_event_async И log_event
 async def log_event_async(user_id: int, event_type: str, event_data: Dict = None) -> bool:
     """Асинхронная версия логирования"""
     try:
@@ -598,6 +597,211 @@ def save_test_result_to_db(user_id, test_type, user_data_dict=None):
 
 
 # ============================================
+# ДОБАВЛЕННЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С КОНТЕКСТОМ И ДАННЫМИ
+# ============================================
+
+async def get_user_context_async(user_id: int) -> Optional[Dict]:
+    """Асинхронное получение контекста пользователя"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для получения контекста {user_id}")
+            return None
+        return await db.load_user_context(user_id)
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_user_context_async: {e}")
+        return None
+
+def get_user_context(user_id: int) -> Optional[Dict]:
+    """Синхронное получение контекста пользователя"""
+    try:
+        return db_loop_manager.run_coro(get_user_context_async, user_id, timeout=10)
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_user_context: {e}")
+        return None
+
+
+async def get_user_data_async(user_id: int) -> Optional[Dict]:
+    """Асинхронное получение данных пользователя"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для получения данных {user_id}")
+            return None
+        return await db.load_user_data(user_id)
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_user_data_async: {e}")
+        return None
+
+def get_user_data(user_id: int) -> Optional[Dict]:
+    """Синхронное получение данных пользователя"""
+    try:
+        return db_loop_manager.run_coro(get_user_data_async, user_id, timeout=10)
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_user_data: {e}")
+        return None
+
+
+async def get_telegram_user_async(user_id: int) -> Optional[Dict]:
+    """Асинхронное получение пользователя Telegram"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для получения пользователя {user_id}")
+            return None
+        return await db.get_telegram_user(user_id)
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_telegram_user_async: {e}")
+        return None
+
+def get_telegram_user(user_id: int) -> Optional[Dict]:
+    """Синхронное получение пользователя Telegram"""
+    try:
+        return db_loop_manager.run_coro(get_telegram_user_async, user_id, timeout=10)
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_telegram_user: {e}")
+        return None
+
+
+async def get_user_test_results_async(user_id: int, limit: int = 10, test_type: str = None) -> List[Dict]:
+    """Асинхронное получение результатов тестов"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для получения результатов {user_id}")
+            return []
+        return await db.get_user_test_results(user_id, limit, test_type)
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_user_test_results_async: {e}")
+        return []
+
+def get_user_test_results(user_id: int, limit: int = 10, test_type: str = None) -> List[Dict]:
+    """Синхронное получение результатов тестов"""
+    try:
+        return db_loop_manager.run_coro(get_user_test_results_async, user_id, limit, test_type, timeout=10)
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_user_test_results: {e}")
+        return []
+
+
+async def add_reminder_async(user_id: int, reminder_type: str, remind_at, data: Dict = None) -> Optional[int]:
+    """Асинхронное добавление напоминания"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для добавления напоминания {user_id}")
+            return None
+        return await db.add_reminder(user_id, reminder_type, remind_at, data)
+    except Exception as e:
+        logger.error(f"❌ Ошибка add_reminder_async: {e}")
+        return None
+
+def add_reminder(user_id: int, reminder_type: str, remind_at, data: Dict = None) -> Optional[int]:
+    """Синхронное добавление напоминания"""
+    try:
+        return db_loop_manager.run_coro(add_reminder_async, user_id, reminder_type, remind_at, data, timeout=10)
+    except Exception as e:
+        logger.error(f"❌ Ошибка add_reminder: {e}")
+        return None
+
+
+async def get_pending_reminders_async(limit: int = 100) -> List[Dict]:
+    """Асинхронное получение неотправленных напоминаний"""
+    try:
+        if not await ensure_db_connection():
+            logger.error("❌ Нет соединения с БД для получения напоминаний")
+            return []
+        return await db.get_pending_reminders(limit)
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_pending_reminders_async: {e}")
+        return []
+
+def get_pending_reminders(limit: int = 100) -> List[Dict]:
+    """Синхронное получение неотправленных напоминаний"""
+    try:
+        return db_loop_manager.run_coro(get_pending_reminders_async, limit, timeout=10)
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_pending_reminders: {e}")
+        return []
+
+
+async def get_cached_weekend_ideas_async(user_id: int) -> Optional[str]:
+    """Асинхронное получение кэшированных идей"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для получения идей {user_id}")
+            return None
+        return await db.get_cached_weekend_ideas(user_id)
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_cached_weekend_ideas_async: {e}")
+        return None
+
+def get_cached_weekend_ideas(user_id: int) -> Optional[str]:
+    """Синхронное получение кэшированных идей"""
+    try:
+        return db_loop_manager.run_coro(get_cached_weekend_ideas_async, user_id, timeout=5)
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_cached_weekend_ideas: {e}")
+        return None
+
+
+async def cache_weekend_ideas_async(user_id: int, ideas_text: str, main_vector: str, main_level: int) -> bool:
+    """Асинхронное сохранение идей в кэш"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения идей {user_id}")
+            return False
+        return await db.cache_weekend_ideas(user_id, ideas_text, main_vector, main_level)
+    except Exception as e:
+        logger.error(f"❌ Ошибка cache_weekend_ideas_async: {e}")
+        return False
+
+def cache_weekend_ideas(user_id: int, ideas_text: str, main_vector: str, main_level: int) -> bool:
+    """Синхронное сохранение идей в кэш"""
+    try:
+        return db_loop_manager.run_coro(cache_weekend_ideas_async, user_id, ideas_text, main_vector, main_level, timeout=10)
+    except Exception as e:
+        logger.error(f"❌ Ошибка cache_weekend_ideas: {e}")
+        return False
+
+
+async def get_user_reminders_async(user_id: int, include_sent: bool = False) -> List[Dict]:
+    """Асинхронное получение напоминаний пользователя"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для получения напоминаний {user_id}")
+            return []
+        return await db.get_user_reminders(user_id, include_sent)
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_user_reminders_async: {e}")
+        return []
+
+def get_user_reminders(user_id: int, include_sent: bool = False) -> List[Dict]:
+    """Синхронное получение напоминаний пользователя"""
+    try:
+        return db_loop_manager.run_coro(get_user_reminders_async, user_id, include_sent, timeout=10)
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_user_reminders: {e}")
+        return []
+
+
+async def mark_reminder_sent_async(reminder_id: int) -> bool:
+    """Асинхронная отметка напоминания как отправленного"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для отметки напоминания {reminder_id}")
+            return False
+        await db.mark_reminder_sent(reminder_id)
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка mark_reminder_sent_async: {e}")
+        return False
+
+def mark_reminder_sent(reminder_id: int) -> bool:
+    """Синхронная отметка напоминания как отправленного"""
+    try:
+        return db_loop_manager.run_coro(mark_reminder_sent_async, reminder_id, timeout=5)
+    except Exception as e:
+        logger.error(f"❌ Ошибка mark_reminder_sent: {e}")
+        return False
+
+
+# ============================================
 # ЭКСПОРТ
 # ============================================
 
@@ -607,12 +811,37 @@ __all__ = [
     'init_db',
     'close_db',
     'save_telegram_user',
+    'save_telegram_user_async',
     'save_user_to_db',
+    'save_user_to_db_async',
     'save_test_result_to_db',
-    'log_event',  # ✅ ДОБАВЛЕНО
+    'save_test_result_to_db_async',
+    'log_event',
+    'log_event_async',
     'ensure_db_connection',
     'execute_with_retry',
-    'sync_db_call'
+    'sync_db_call',
+    # Добавленные функции
+    'get_user_context',
+    'get_user_context_async',
+    'get_user_data',
+    'get_user_data_async',
+    'get_telegram_user',
+    'get_telegram_user_async',
+    'get_user_test_results',
+    'get_user_test_results_async',
+    'add_reminder',
+    'add_reminder_async',
+    'get_pending_reminders',
+    'get_pending_reminders_async',
+    'get_cached_weekend_ideas',
+    'get_cached_weekend_ideas_async',
+    'cache_weekend_ideas',
+    'cache_weekend_ideas_async',
+    'get_user_reminders',
+    'get_user_reminders_async',
+    'mark_reminder_sent',
+    'mark_reminder_sent_async'
 ]
 
 logger.info("✅ db_instance инициализирован")
