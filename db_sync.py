@@ -13,7 +13,7 @@ from typing import Optional, Dict, Any, List
 
 from db_instance import db_loop_manager, db, save_user_to_db as db_save_user
 from db_instance import save_telegram_user as db_save_telegram_user
-from db_instance import save_test_result_to_db_async as async_save_test_result
+from db_instance import save_test_result_to_db as async_save_test_result
 
 logger = logging.getLogger(__name__)
 
