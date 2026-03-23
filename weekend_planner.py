@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Модуль для генерации идей на выходные с учётом профиля пользователя
-ВЕРСИЯ 2.0 - ДОБАВЛЕНО КЭШИРОВАНИЕ В БД
+ВЕРСИЯ 2.1 - ИСПРАВЛЕНО: замена db на синхронные функции
 """
 import logging
 import random
@@ -19,14 +19,19 @@ from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from profiles import VECTORS
 from services import call_deepseek
 
-# ✅ ДОБАВЛЕНО: импорт для БД
-from db_instance import db
+# ✅ ИСПРАВЛЕНО: импорт синхронных функций из db_instance
+from db_instance import (
+    log_event,
+    add_reminder,
+    get_user_reminders,
+    save_user_data
+)
 
 logger = logging.getLogger(__name__)
 
 
 class WeekendPlanner:
-    """Генератор идей на выходные с учётом профиля и кэшированием в БД"""
+    """Генератор идей на выходные с учётом профиля и кэшированием"""
     
     def __init__(self):
         self.cache = {}  # in-memory кэш (для быстрого доступа)
@@ -45,15 +50,10 @@ class WeekendPlanner:
         Returns:
             Отформатированный текст с идеями
         """
-        # ✅ СНАЧАЛА ПРОВЕРЯЕМ КЭШ В БД
-        cached = await self._get_cached_from_db(user_id)
-        if cached:
-            logger.info(f"✅ Найдены кэшированные идеи для пользователя {user_id}")
-            return cached
-        
         # Проверяем in-memory кэш
         cache_key = f"{user_id}_{datetime.now().strftime('%Y-%m-%d')}"
         if cache_key in self.cache:
+            logger.info(f"✅ Найдены кэшированные идеи для пользователя {user_id} (in-memory)")
             return self.cache[cache_key]
         
         # Определяем основной вектор (самый слабый)
@@ -135,116 +135,66 @@ class WeekendPlanner:
                 # Форматируем ответ
                 formatted = self._format_response(response, address)
                 
-                # ✅ СОХРАНЯЕМ В КЭШ БД
-                await self._cache_to_db(user_id, formatted, main_vector, level)
-                
                 # Сохраняем в in-memory кэш
                 self.cache[cache_key] = formatted
+                
+                # Логируем генерацию (синхронно в отдельном потоке)
+                import threading
+                threading.Thread(
+                    target=self._log_generation,
+                    args=(user_id, True, main_vector, level),
+                    daemon=True
+                ).start()
                 
                 return formatted
         except Exception as e:
             logger.error(f"❌ Ошибка генерации идей: {e}")
-            # Логируем ошибку
-            await self._log_generation_error(user_id, str(e))
+            # Логируем ошибку (синхронно в отдельном потоке)
+            import threading
+            threading.Thread(
+                target=self._log_generation,
+                args=(user_id, False, main_vector, level, str(e)),
+                daemon=True
+            ).start()
         
         # Запасной вариант
         fallback = await self._get_fallback_ideas(main_vector, level, address)
-        
-        # ✅ СОХРАНЯЕМ ЗАПАСНОЙ ВАРИАНТ В КЭШ БД
-        await self._cache_to_db(user_id, fallback, main_vector, level)
         self.cache[cache_key] = fallback
         
         return fallback
     
     # ============================================
-    # ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
+    # ✅ ИСПРАВЛЕНО: СИНХРОННЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С БД
     # ============================================
     
-    async def _cache_to_db(self, user_id: int, ideas_text: str, main_vector: str, main_level: int):
-        """Сохраняет сгенерированные идеи в кэш БД"""
+    def _log_generation(self, user_id: int, success: bool, main_vector: str, level: int, error: str = None):
+        """Синхронно логирует генерацию идей в БД"""
         try:
-            await db.cache_weekend_ideas(
-                user_id=user_id,
-                ideas_text=ideas_text,
-                main_vector=main_vector,
-                main_level=main_level
-            )
-            logger.debug(f"💾 Идеи для пользователя {user_id} сохранены в БД")
-        except Exception as e:
-            logger.error(f"❌ Ошибка сохранения идей в БД для {user_id}: {e}")
-    
-    async def _get_cached_from_db(self, user_id: int) -> Optional[str]:
-        """Получает кэшированные идеи из БД"""
-        try:
-            return await db.get_cached_weekend_ideas(user_id)
-        except Exception as e:
-            logger.error(f"❌ Ошибка получения кэша из БД для {user_id}: {e}")
-            return None
-    
-    async def _log_generation_error(self, user_id: int, error: str):
-        """Логирует ошибку генерации в БД"""
-        try:
-            await db.log_event(
+            log_event(
                 user_id,
-                'weekend_ideas_error',
+                'weekend_ideas_generation',
                 {
-                    'error': error[:200],
+                    'success': success,
+                    'main_vector': main_vector,
+                    'level': level,
+                    'error': error[:200] if error else None,
                     'timestamp': time.time()
                 }
             )
+            logger.debug(f"📊 Генерация идей для {user_id} залогирована")
         except Exception as e:
             logger.error(f"❌ Ошибка логирования: {e}")
     
     async def clear_user_cache(self, user_id: int):
-        """Очищает кэш пользователя в БД"""
+        """Очищает in-memory кэш пользователя"""
         try:
-            async with db.get_connection() as conn:
-                await conn.execute(
-                    "DELETE FROM fredi_weekend_ideas_cache WHERE user_id = $1",
-                    user_id
-                )
-            logger.info(f"🧹 Кэш пользователя {user_id} очищен")
-            
             # Очищаем in-memory кэш
             keys_to_delete = [k for k in self.cache.keys() if str(user_id) in k]
             for key in keys_to_delete:
                 del self.cache[key]
+            logger.info(f"🧹 Кэш пользователя {user_id} очищен")
         except Exception as e:
             logger.error(f"❌ Ошибка очистки кэша для {user_id}: {e}")
-    
-    async def get_cache_stats(self, user_id: int = None) -> Dict[str, Any]:
-        """Получает статистику кэша"""
-        try:
-            async with db.get_connection() as conn:
-                if user_id:
-                    # Статистика для конкретного пользователя
-                    row = await conn.fetchrow("""
-                        SELECT 
-                            COUNT(*) as total,
-                            MAX(created_at) as last_generated,
-                            main_vector,
-                            main_level
-                        FROM fredi_weekend_ideas_cache
-                        WHERE user_id = $1
-                        GROUP BY main_vector, main_level
-                    """, user_id)
-                    
-                    if row:
-                        return dict(row)
-                    return {}
-                else:
-                    # Общая статистика
-                    rows = await conn.fetch("""
-                        SELECT 
-                            COUNT(DISTINCT user_id) as users_with_cache,
-                            COUNT(*) as total_entries,
-                            AVG(EXTRACT(EPOCH FROM (expires_at - created_at))/3600) as avg_cache_hours
-                        FROM fredi_weekend_ideas_cache
-                    """)
-                    return dict(rows[0]) if rows else {}
-        except Exception as e:
-            logger.error(f"❌ Ошибка получения статистики кэша: {e}")
-            return {}
     
     # ============================================
     # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
