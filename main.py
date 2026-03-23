@@ -409,7 +409,7 @@ async def periodic_save_to_db():
             # Сохраняем каждого пользователя
             for user_id in list(user_data.keys()):
                 try:
-                    if save_user(user_id, first_name, username):
+                    if save_user(user_id, message.from_user.first_name, message.from_user.username):
                         saved_count += 1
                     await asyncio.sleep(0.01)  # небольшая задержка между сохранениями
                 except Exception as e:
@@ -524,7 +524,7 @@ async def save_context(request: Request):
         
         logger.info(f"📝 Контекст сохранен для пользователя {user_id}: {context_data}")
         
-        save_user(user_id, first_name, username)
+        save_user(user_id, message.from_user.first_name, message.from_user.username)
         
         return JSONResponse({"success": True})
     except Exception as e:
@@ -550,7 +550,7 @@ async def save_profile(request: Request):
         user_data[user_id]['ai_generated_profile'] = profile
         user_data[user_id]['profile_data'] = profile.get('profile_data', {})
         
-        save_user(user_id, first_name, username)
+        save_user(user_id, message.from_user.first_name, message.from_user.username)
         
         return JSONResponse({
             "success": True,
@@ -594,7 +594,7 @@ async def save_test_progress(request: Request):
             })
             user_data[user_id][stage_key].append(answer)
         
-        save_user(user_id, first_name, username)
+        save_user(user_id, message.from_user.first_name, message.from_user.username)
         
         stage_questions_count = {1: 4, 2: 6, 3: 24, 4: 12, 5: 8}
         total = stage_questions_count.get(stage, 4)
@@ -647,7 +647,7 @@ async def save_mode(request: Request):
             user_data[user_id] = {}
         user_data[user_id]['communication_mode'] = mode
         
-        save_user(user_id, first_name, username)
+        save_user(user_id, message.from_user.first_name, message.from_user.username)
         
         return JSONResponse({
             "success": True,
@@ -684,7 +684,7 @@ async def sync_data(request: Request):
         if 'mode' in sync_data and user_id in user_contexts:
             user_contexts[user_id].communication_mode = sync_data['mode']
         
-        save_user(user_id, first_name, username)
+        save_user(user_id, message.from_user.first_name, message.from_user.username)
         
         return JSONResponse({
             "success": True,
@@ -769,7 +769,7 @@ async def save_test_results(request: Request):
         user_data[user_id]['test_completed'] = True
         user_data[user_id]['test_completed_at'] = datetime.now().isoformat()
         
-        save_user(user_id, first_name, username)
+        save_user(user_id, message.from_user.first_name, message.from_user.username)
         
         def run_generation():
             try:
@@ -980,7 +980,7 @@ async def get_thought(user_id: int):
                 if user_id not in user_data:
                     user_data[user_id] = {}
                 user_data[user_id]["psychologist_thought"] = thought
-                save_user(user_id, first_name, username)
+                save_user(user_id, message.from_user.first_name, message.from_user.username)
             else:
                 thought = "Мысли психолога еще не сгенерированы."
         return {"thought": thought}
@@ -1276,7 +1276,7 @@ async def generate_profile_interpretation_async(user_id: int):
         
         if ai_profile:
             user_data[user_id]['ai_generated_profile'] = ai_profile
-            save_user(user_id, first_name, username)
+            save_user(user_id, message.from_user.first_name, message.from_user.username)
             logger.info(f"✅ Интерпретация для пользователя {user_id} сгенерирована")
             await send_to_telegram(user_id, ai_profile)
         else:
@@ -1294,7 +1294,7 @@ async def generate_profile_interpretation_async(user_id: int):
 Хотите получить более подробную интерпретацию? Задайте вопрос в чате."""
             
             user_data[user_id]['ai_generated_profile'] = fallback_profile
-            save_user(user_id, first_name, username)
+            save_user(user_id, message.from_user.first_name, message.from_user.username)
             await send_to_telegram(user_id, fallback_profile)
         
     except Exception as e:
@@ -1492,7 +1492,7 @@ async def submit_test_answer(request: Request):
             user_data[user_id][stage_key] = []
         user_data[user_id][stage_key].append(answer_record)
         
-        save_user(user_id, first_name, username)
+        save_user(user_id, message.from_user.first_name, message.from_user.username)
         
         stage_questions_count = {1: 4, 2: 6, 3: 24, 4: 12, 5: 8}
         total = stage_questions_count.get(stage, 4)
@@ -2635,7 +2635,7 @@ async def api_chat_action(request: Request):
                     if user_id not in user_data:
                         user_data[user_id] = {}
                     user_data[user_id]['psychologist_thought'] = thought
-                    save_user(user_id, first_name, username)
+                    save_user(user_id, message.from_user.first_name, message.from_user.username)
             return JSONResponse({
                 "success": True,
                 "action": action,
@@ -3462,7 +3462,7 @@ async def update_notification_settings(request: Request):
         user_data[user_id]['notification_settings'] = settings
         
         # Сохраняем в БД
-        save_user(user_id, first_name, username)
+        save_user(user_id, message.from_user.first_name, message.from_user.username)
         
         return JSONResponse({"success": True})
         
