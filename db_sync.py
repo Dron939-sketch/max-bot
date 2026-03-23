@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Синхронные обертки для работы с БД - для вызовов из любого потока
-ВЕРСИЯ 2.4 - ИСПРАВЛЕНО: правильный импорт и вызов функций
+ВЕРСИЯ 2.5 - ИСПРАВЛЕНО: правильный импорт и вызов функций
 """
 
 import logging
@@ -48,7 +48,6 @@ class SyncDB:
     ) -> bool:
         """Синхронное сохранение пользователя"""
         try:
-            # ✅ ИСПРАВЛЕНО: используем синхронную версию
             result = db_save_telegram_user(
                 user_id, username, first_name, last_name, language_code
             )
@@ -86,7 +85,6 @@ class SyncDB:
     def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
         """Синхронное логирование события"""
         try:
-            # ✅ ИСПРАВЛЕНО: используем синхронную версию
             result = db_log_event(user_id, event_type, event_data)
             return result if result is not None else False
         except Exception as e:
@@ -166,11 +164,18 @@ class SyncDB:
     ) -> Optional[int]:
         """Синхронное сохранение результата теста"""
         try:
-            # ✅ ИСПРАВЛЕНО: используем синхронную версию из db_instance
+            # ✅ ИСПРАВЛЕНО: передаем все параметры в синхронную функцию
             result = save_test_result_to_db(
-                user_id, test_type, results, profile_code,
-                perception_type, thinking_level, vectors,
-                behavioral_levels, deep_patterns, confinement_model
+                user_id=user_id,
+                test_type=test_type,
+                results=results,
+                profile_code=profile_code,
+                perception_type=perception_type,
+                thinking_level=thinking_level,
+                vectors=vectors,
+                behavioral_levels=behavioral_levels,
+                deep_patterns=deep_patterns,
+                confinement_model=confinement_model
             )
             return result
         except Exception as e:
