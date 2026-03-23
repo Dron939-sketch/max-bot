@@ -3,14 +3,14 @@
 """
 МОДУЛЬ 7: АНАЛИЗ ВОПРОСОВ В КОНТЕКСТЕ КОНФАЙНМЕНТ-МОДЕЛИ
 Анализирует вопросы пользователя с учетом его психологического профиля
-ВЕРСИЯ 2.1 - ИСПРАВЛЕНО: безопасное создание LoopAnalyzer
+ВЕРСИЯ 2.2 - ИСПРАВЛЕНО: синхронная работа с БД
 """
 
 import re
 import logging
 import json
 import time
-import asyncio
+import threading
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 
@@ -18,8 +18,12 @@ from datetime import datetime
 from confinement_model import ConfinementModel9
 from loop_analyzer import LoopAnalyzer
 
-# ✅ ДОБАВЛЕНО: импорт для БД
-from db_instance import db
+# ✅ ИСПРАВЛЕНО: импорт синхронных функций
+from db_instance import (
+    log_event,
+    add_reminder,
+    get_user_reminders
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +150,6 @@ class QuestionContextAnalyzer:
             model: конфайнтмент-модель пользователя (объект ConfinementModel9) или user_id
             user_name: имя пользователя
         """
-        # ✅ ИСПРАВЛЕНО: безопасное получение модели
         from confinement_model import ConfinementModel9
         
         # Определяем, что передано
@@ -169,7 +172,7 @@ class QuestionContextAnalyzer:
         self.user_name = user_name
         self.reporter = ConfinementReporter(self.model, user_name)
         
-        # ✅ ИСПРАВЛЕНО: безопасное создание LoopAnalyzer
+        # Безопасное создание LoopAnalyzer
         from loop_analyzer import LoopAnalyzer
         try:
             self.loop_analyzer = LoopAnalyzer(self.model)
@@ -179,7 +182,7 @@ class QuestionContextAnalyzer:
             self.loop_analyzer = None
             self.loops = []
         
-        # Кэш для результатов анализа
+        # Кэш для результатов анализа (только в памяти)
         self._analysis_cache = {}
         self._cache_time = {}
         self.cache_ttl = 300  # 5 минут
@@ -200,7 +203,7 @@ class QuestionContextAnalyzer:
         # Проверяем in-memory кэш
         cache_key = hash(question) % 10000
         if not force_refresh and cache_key in self._analysis_cache:
-            cache_age = (datetime.now() - self._cache_time.get(cache_key, datetime.now())).seconds
+            cache_age = (datetime.now() - self._cache_time.get(cache_key, datetime.now())).total_seconds()
             if cache_age < self.cache_ttl:
                 return self._analysis_cache[cache_key]
         
@@ -219,8 +222,12 @@ class QuestionContextAnalyzer:
             'reflection': self._generate_reflection(question)
         }
         
-        # ✅ Кэшируем в БД (асинхронно)
-        asyncio.create_task(self._cache_analysis_to_db(question, analysis))
+        # Логируем анализ (синхронно в отдельном потоке)
+        threading.Thread(
+            target=self._log_analysis,
+            args=(question, analysis),
+            daemon=True
+        ).start()
         
         # Кэшируем в памяти
         self._analysis_cache[cache_key] = analysis
@@ -229,31 +236,18 @@ class QuestionContextAnalyzer:
         return analysis
     
     # ============================================
-    # ✅ ФУНКЦИИ ДЛЯ РАБОТЫ С БД
+    # ✅ ИСПРАВЛЕНО: СИНХРОННЫЕ ФУНКЦИИ ДЛЯ БД
     # ============================================
     
-    async def _cache_analysis_to_db(self, question: str, analysis: Dict[str, Any]):
-        """Сохраняет анализ вопроса в кэш БД"""
+    def _log_analysis(self, question: str, analysis: Dict):
+        """Синхронно логирует анализ в БД"""
         try:
-            # Используем метод из database.py
-            await db.cache_question_analysis(0, question, analysis)  # user_id = 0 - общий кэш
-            logger.debug(f"💾 Анализ вопроса сохранен в БД")
-        except Exception as e:
-            logger.error(f"❌ Ошибка сохранения анализа в БД: {e}")
-    
-    async def get_cached_analysis(self, question: str) -> Optional[Dict[str, Any]]:
-        """Получает кэшированный анализ из БД"""
-        try:
-            return await db.get_cached_question_analysis(0, question)
-        except Exception as e:
-            logger.error(f"❌ Ошибка получения кэша из БД: {e}")
-            return None
-    
-    async def save_analysis_to_db(self, user_id: int, question: str, analysis: Dict[str, Any]):
-        """Сохраняет анализ вопроса для конкретного пользователя"""
-        try:
-            # Сохраняем как событие
-            await db.log_event(
+            # Получаем user_id из модели
+            user_id = 0
+            if hasattr(self.model, 'user_id') and self.model.user_id:
+                user_id = self.model.user_id
+            
+            log_event(
                 user_id,
                 'question_analyzed',
                 {
@@ -264,86 +258,33 @@ class QuestionContextAnalyzer:
                     'timestamp': time.time()
                 }
             )
-            
-            # Кэшируем с user_id
-            await db.cache_question_analysis(user_id, question, analysis)
-            
+            logger.debug(f"📊 Анализ вопроса залогирован")
+        except Exception as e:
+            logger.error(f"❌ Ошибка логирования анализа: {e}")
+    
+    def save_analysis_to_db(self, user_id: int, question: str, analysis: Dict):
+        """Синхронно сохраняет анализ вопроса"""
+        try:
+            log_event(
+                user_id,
+                'question_analyzed',
+                {
+                    'question_preview': question[:100],
+                    'vectors': [v['vector'] for v in analysis.get('vectors', [])],
+                    'depth': analysis.get('depth', {}).get('type'),
+                    'emotion': analysis.get('emotion', {}).get('primary'),
+                    'timestamp': time.time()
+                }
+            )
+            logger.debug(f"💾 Анализ вопроса сохранен для {user_id}")
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения анализа для {user_id}: {e}")
     
-    async def get_user_analysis_history(self, user_id: int, limit: int = 10) -> List[Dict]:
-        """Получает историю анализов пользователя"""
-        try:
-            async with db.get_connection() as conn:
-                rows = await conn.fetch("""
-                    SELECT question_text, analysis, created_at
-                    FROM fredi_question_analysis_cache
-                    WHERE user_id = $1
-                    ORDER BY created_at DESC
-                    LIMIT $2
-                """, user_id, limit)
-                
-                history = []
-                for row in rows:
-                    analysis = row['analysis']
-                    if isinstance(analysis, str):
-                        analysis = json.loads(analysis)
-                    
-                    history.append({
-                        'question': row['question_text'],
-                        'analysis': analysis,
-                        'time': row['created_at']
-                    })
-                return history
-        except Exception as e:
-            logger.error(f"❌ Ошибка получения истории для {user_id}: {e}")
-            return []
-    
-    async def clear_user_analysis_cache(self, user_id: int):
-        """Очищает кэш анализов пользователя"""
-        try:
-            async with db.get_connection() as conn:
-                await conn.execute(
-                    "DELETE FROM fredi_question_analysis_cache WHERE user_id = $1",
-                    user_id
-                )
-            logger.info(f"🧹 Кэш анализов пользователя {user_id} очищен")
-            
-            # Очищаем in-memory кэш
-            self._analysis_cache.clear()
-            self._cache_time.clear()
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка очистки кэша для {user_id}: {e}")
-    
-    async def get_cache_stats(self, user_id: int = None) -> Dict[str, Any]:
-        """Получает статистику кэша"""
-        try:
-            async with db.get_connection() as conn:
-                if user_id:
-                    # Статистика для конкретного пользователя
-                    row = await conn.fetchrow("""
-                        SELECT 
-                            COUNT(*) as total,
-                            MAX(created_at) as last_analysis
-                        FROM fredi_question_analysis_cache
-                        WHERE user_id = $1
-                    """, user_id)
-                    
-                    return dict(row) if row else {}
-                else:
-                    # Общая статистика
-                    rows = await conn.fetch("""
-                        SELECT 
-                            COUNT(DISTINCT user_id) as users_with_cache,
-                            COUNT(*) as total_entries,
-                            AVG(EXTRACT(EPOCH FROM (expires_at - created_at))/60) as avg_cache_minutes
-                        FROM fredi_question_analysis_cache
-                    """)
-                    return dict(rows[0]) if rows else {}
-        except Exception as e:
-            logger.error(f"❌ Ошибка получения статистики кэша: {e}")
-            return {}
+    def clear_cache(self):
+        """Очищает кэш анализов"""
+        self._analysis_cache.clear()
+        self._cache_time.clear()
+        logger.info("Кэш анализов очищен")
     
     # ============================================
     # МЕТОДЫ АНАЛИЗА
@@ -352,12 +293,6 @@ class QuestionContextAnalyzer:
     def _analyze_vectors(self, question: str) -> List[Dict[str, Any]]:
         """
         Определяет, какие векторы затронуты в вопросе
-        
-        Args:
-            question: текст вопроса
-            
-        Returns:
-            list: список затронутых векторов с релевантностью
         """
         question_lower = question.lower()
         vectors = []
@@ -379,7 +314,7 @@ class QuestionContextAnalyzer:
                     'vector': vector,
                     'level': level,
                     'relevance': relevance,
-                    'matches': matches[:3],  # топ-3 совпадения
+                    'matches': matches[:3],
                     'description': self._get_vector_description(vector, level)
                 })
         
@@ -387,7 +322,6 @@ class QuestionContextAnalyzer:
     
     def _get_vector_level(self, vector: str) -> int:
         """Получает уровень вектора из модели"""
-        # Пытаемся получить из модели
         if hasattr(self.model, 'elements') and self.model.elements:
             for elem_id, element in self.model.elements.items():
                 if hasattr(element, 'vector') and element.vector == vector:
@@ -406,7 +340,6 @@ class QuestionContextAnalyzer:
                         else:
                             return 6
         
-        # Значения по умолчанию
         levels = {'СБ': 3, 'ТФ': 3, 'УБ': 3, 'ЧВ': 3}
         return levels.get(vector, 3)
     
@@ -449,18 +382,9 @@ class QuestionContextAnalyzer:
         return descriptions.get(vector, {}).get(level, "особое отношение")
     
     def _analyze_depth(self, question: str) -> Dict[str, Any]:
-        """
-        Анализирует глубину вопроса
-        
-        Args:
-            question: текст вопроса
-            
-        Returns:
-            dict: информация о глубине вопроса
-        """
+        """Анализирует глубину вопроса"""
         question_lower = question.lower()
         
-        # Определяем тип глубины
         depth_type = 'поверхностный'
         for d_type, markers in self.DEPTH_MARKERS.items():
             for marker in markers:
@@ -468,7 +392,6 @@ class QuestionContextAnalyzer:
                     depth_type = d_type
                     break
         
-        # Определяем, вопрос про себя или про других
         about_self = any(word in question_lower for word in ['я', 'меня', 'мне', 'мой', 'моя', 'мое'])
         about_others = any(word in question_lower for word in ['они', 'люди', 'другие', 'все', 'никто'])
         
@@ -481,15 +404,7 @@ class QuestionContextAnalyzer:
         }
     
     def _analyze_emotion(self, question: str) -> Dict[str, Any]:
-        """
-        Анализирует эмоциональный фон вопроса
-        
-        Args:
-            question: текст вопроса
-            
-        Returns:
-            dict: информация об эмоциях в вопросе
-        """
+        """Анализирует эмоциональный фон вопроса"""
         question_lower = question.lower()
         
         emotions = {}
@@ -521,15 +436,7 @@ class QuestionContextAnalyzer:
         }
     
     def _find_activated_loops(self, question: str) -> List[Dict[str, Any]]:
-        """
-        Находит петли, которые активируются вопросом
-        
-        Args:
-            question: текст вопроса
-            
-        Returns:
-            list: активированные петли
-        """
+        """Находит петли, которые активируются вопросом"""
         if not self.loops:
             return []
         
@@ -537,7 +444,6 @@ class QuestionContextAnalyzer:
         activated = []
         
         for loop in self.loops:
-            # Проверяем, есть ли совпадения с элементами петли
             loop_elements = loop.get('elements', [])
             matches = []
             
@@ -562,22 +468,13 @@ class QuestionContextAnalyzer:
         return sorted(activated, key=lambda x: x['activation_strength'], reverse=True)
     
     def _check_key_confinement(self, question: str) -> Optional[Dict[str, Any]]:
-        """
-        Проверяет, связан ли вопрос с ключевым ограничением
-        
-        Args:
-            question: текст вопроса
-            
-        Returns:
-            dict: информация о связи с ключевым ограничением или None
-        """
+        """Проверяет, связан ли вопрос с ключевым ограничением"""
         if not hasattr(self.reporter, 'key') or not self.reporter.key:
             return None
         
         key = self.reporter.key
         question_lower = question.lower()
         
-        # Проверяем совпадения с описанием ключевого ограничения
         key_desc = key.get('description', '').lower()
         key_words = set(key_desc.split())
         
@@ -598,18 +495,9 @@ class QuestionContextAnalyzer:
         return {'is_related': False}
     
     def _find_paradox(self, question: str) -> Optional[str]:
-        """
-        Ищет парадокс в вопросе - противоречие, которое не замечает пользователь
-        
-        Args:
-            question: текст вопроса
-            
-        Returns:
-            str: описание парадокса или None
-        """
+        """Ищет парадокс в вопросе"""
         question_lower = question.lower()
         
-        # Проверяем типичные парадоксы для разных профилей
         sb_level = self._get_vector_level('СБ')
         tf_level = self._get_vector_level('ТФ')
         ub_level = self._get_vector_level('УБ')
@@ -629,54 +517,33 @@ class QuestionContextAnalyzer:
         return None
     
     def _formulate_subtext(self, question: str) -> str:
-        """
-        Формулирует подтекст вопроса - что на самом деле спрашивает пользователь
-        
-        Args:
-            question: текст вопроса
-            
-        Returns:
-            str: формулировка подтекста
-        """
+        """Формулирует подтекст вопроса"""
         vectors = self._analyze_vectors(question)
         depth = self._analyze_depth(question)
         key = self._check_key_confinement(question)
         sb_level = self._get_vector_level('СБ')
         
-        # Если вопрос глубокий и связан с ключевым ограничением
         if key and key.get('is_related') and depth['type'] != 'поверхностный':
             return f"Вы не просто спрашиваете, вы вышли на своё ключевое ограничение. За вопросом стоит {key['description'].lower()}"
         
-        # Если вопрос про отношения
         if any(v['vector'] == 'ЧВ' for v in vectors):
             if sb_level <= 2:
                 return "Вы спрашиваете про других, но на самом деле про себя — почему вы позволяете с собой так обращаться"
         
-        # Если вопрос про деньги
         if any(v['vector'] == 'ТФ' for v in vectors):
             if sb_level <= 2:
                 return "Вы спрашиваете про деньги, но на самом деле про границы — деньги утекают так же, как утекают ваши силы в отношениях"
         
-        # Если вопрос про смысл
         if any(v['vector'] == 'УБ' for v in vectors):
             return "Вы ищете не ответ, а опору — точку, с которой можно начать что-то менять"
         
-        # Универсальный подтекст
         if depth['about_self']:
             return "Вы спрашиваете о том, что болит. Не столько за ответом, сколько за тем, чтобы это увидели"
         else:
             return "Вы описываете ситуацию, в которой застряли. Не столько вопрос, сколько попытка выговориться"
     
     def _generate_reflection(self, question: str) -> str:
-        """
-        Генерирует основную рефлексию - то, что можно сказать пользователю
-        
-        Args:
-            question: текст вопроса
-            
-        Returns:
-            str: текст рефлексии (без советов и инструкций)
-        """
+        """Генерирует основную рефлексию"""
         vectors = self._analyze_vectors(question)
         depth = self._analyze_depth(question)
         emotion = self._analyze_emotion(question)
@@ -684,21 +551,18 @@ class QuestionContextAnalyzer:
         paradox = self._find_paradox(question)
         key = self._check_key_confinement(question)
         
-        # Начинаем с имени, если знаем
         reflection = []
         
-        # Учитываем эмоциональный фон
         if emotion['present'] and emotion['intensity'] > 0.5:
             if emotion['primary'] == 'тревога':
                 reflection.append(f"В этом вопросе чувствуется тревога. Не та, которую можно успокоить советом, а та, которая живёт в теле и заставляет замирать.")
             elif emotion['primary'] == 'печаль':
-                reflection.append(f"Слышу усталость в этом вопросе. Не физическую, а ту, когда сил уже нет даже на то, чтобы злиться.")
+                reflection.append(f"Sлышу усталость в этом вопросе. Не физическую, а ту, когда сил уже нет даже на то, чтобы злиться.")
             elif emotion['primary'] == 'злость':
                 reflection.append(f"В вопросе есть злость. Спрятанная, приглушённая, но она здесь.")
             elif emotion['primary'] == 'стыд':
                 reflection.append(f"Здесь есть стыд. Он часто маскируется под вопросы 'почему я такой'.")
         
-        # Добавляем анализ векторов
         if vectors:
             main_vector = vectors[0]
             vector_name = {
@@ -709,23 +573,18 @@ class QuestionContextAnalyzer:
             }.get(main_vector['vector'], 'эта сфера')
             
             level_desc = main_vector['description']
-            
             reflection.append(f"Судя по профилю, в {vector_name} у вас {level_desc}.")
         
-        # Добавляем парадокс, если есть
         if paradox:
             reflection.append(paradox)
         
-        # Добавляем информацию о петлях
         if loops:
             main_loop = loops[0]
             reflection.append(f"И это не просто ситуация, а петля: {main_loop['description']}")
         
-        # Добавляем связь с ключевым ограничением
         if key and key.get('is_related'):
             reflection.append("И этот вопрос бьёт прямо в ключевое ограничение.")
         
-        # Формулируем суть
         if depth['type'] == 'экзистенциальный':
             reflection.append("Вы спрашиваете не о том, что делать, а о том, кто вы.")
         elif depth['type'] == 'глубинный':
@@ -734,22 +593,13 @@ class QuestionContextAnalyzer:
             if key and key.get('is_related'):
                 reflection.append("За внешним вопросом стоит что-то большее.")
         
-        # Если ничего не нашли, даем универсальную рефлексию
         if not reflection:
             reflection.append("Вы описали ситуацию, в которой застряли. Не столько спрашивая, сколько надеясь, что кто-то увидит, как вам тяжело.")
         
         return " ".join(reflection)
     
     def get_response_context(self, question: str) -> Dict[str, Any]:
-        """
-        Возвращает контекст для формирования ответа (для основного бота)
-        
-        Args:
-            question: текст вопроса
-            
-        Returns:
-            dict: контекст для ответа
-        """
+        """Возвращает контекст для формирования ответа"""
         analysis = self.analyze(question)
         
         return {
@@ -765,63 +615,39 @@ class QuestionContextAnalyzer:
         }
     
     def get_reflection_text(self, question: str) -> str:
-        """
-        Возвращает только текст рефлексии (для использования в ответах)
-        
-        Args:
-            question: текст вопроса
-            
-        Returns:
-            str: текст рефлексии
-        """
+        """Возвращает только текст рефлексии"""
         analysis = self.analyze(question)
         return analysis['reflection']
-    
-    def clear_cache(self):
-        """Очищает кэш анализов"""
-        self._analysis_cache.clear()
-        self._cache_time.clear()
-        logger.info("Кэш анализов очищен")
 
 
 # ============================================
-# ДОБАВЛЯЕМ АЛИАС ДЛЯ СОВМЕСТИМОСТИ
+# АЛИАС ДЛЯ СОВМЕСТИМОСТИ
 # ============================================
 QuestionAnalyzer = QuestionContextAnalyzer
 
 
 # ============================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ СОЗДАНИЯ АНАЛИЗАТОРА
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================
 
 def create_analyzer_from_user_data(user_data: Dict, user_name: str = "друг") -> Optional[QuestionContextAnalyzer]:
     """
     Создает анализатор из данных пользователя
-    
-    Args:
-        user_data: словарь с данными пользователя
-        user_name: имя пользователя
-        
-    Returns:
-        QuestionContextAnalyzer или None
     """
     model_data = user_data.get('confinement_model')
     if not model_data:
         logger.warning(f"Нет конфайнмент-модели для пользователя {user_name}")
-        return QuestionContextAnalyzer(None, user_name)  # Создаем с пустой моделью
+        return QuestionContextAnalyzer(None, user_name)
     
     try:
-        from confinement_model import ConfinementModel9
-        # Если model_data уже является объектом ConfinementModel9
         if isinstance(model_data, ConfinementModel9):
             model = model_data
         else:
-            # Если это словарь, создаем модель из словаря
             model = ConfinementModel9.from_dict(model_data)
         return QuestionContextAnalyzer(model, user_name)
     except Exception as e:
         logger.error(f"Ошибка при создании анализатора: {e}")
-        return QuestionContextAnalyzer(None, user_name)  # Создаем с пустой моделью
+        return QuestionContextAnalyzer(None, user_name)
 
 
 # ============================================
@@ -830,7 +656,7 @@ def create_analyzer_from_user_data(user_data: Dict, user_name: str = "друг")
 
 __all__ = [
     'QuestionContextAnalyzer',
-    'QuestionAnalyzer',  # Добавлен алиас
+    'QuestionAnalyzer',
     'ConfinementReporter',
     'create_analyzer_from_user_data'
 ]
