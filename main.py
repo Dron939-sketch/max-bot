@@ -249,9 +249,12 @@ async def init_database():
         logger.info("✅ Подключение к PostgreSQL установлено")
         await ensure_db_connection()
         await load_all_users_from_db()
-        setup_auto_save(interval_seconds=300)
-        asyncio.create_task(periodic_save_to_db())
-        asyncio.create_task(periodic_cleanup_db())
+        
+        # ⚠️ ВРЕМЕННО ОТКЛЮЧАЕМ ФОНОВЫЕ ЗАДАЧИ (конфликт циклов asyncio)
+        # setup_auto_save(interval_seconds=300)
+        # asyncio.create_task(periodic_save_to_db())
+        # asyncio.create_task(periodic_cleanup_db())
+        
         logger.info("✅ База данных инициализирована")
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации БД: {e}")
