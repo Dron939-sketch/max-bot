@@ -3507,5 +3507,62 @@ async def force_load_user(request: Request):
             content={"success": False, "error": str(e)}
         )
 
+# ============================================
+# ЭНДПОИНТЫ ДЛЯ КОРНЕВЫХ ФАЙЛОВ (без /static/)
+# ============================================
+
+@api_app.get("/")
+async def serve_index():
+    index_path = os.path.join(MINIAPP_PATH, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path, media_type="text/html")
+    return JSONResponse(status_code=404, content={"error": "index.html not found"})
+
+
+@api_app.get("/styles.css")
+async def serve_styles():
+    path = os.path.join(MINIAPP_PATH, "styles.css")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="text/css")
+    return JSONResponse(status_code=404, content={"error": "styles.css not found"})
+
+
+@api_app.get("/{filename}.js")
+async def serve_js(filename: str):
+    path = os.path.join(MINIAPP_PATH, f"{filename}.js")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/javascript")
+    return JSONResponse(status_code=404, content={"error": f"{filename}.js not found"})
+
+
+@api_app.get("/manifest.json")
+async def serve_manifest():
+    path = os.path.join(MINIAPP_PATH, "manifest.json")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/manifest+json")
+    return JSONResponse(status_code=404, content={"error": "manifest.json not found"})
+
+
+@api_app.get("/service-worker.js")
+async def serve_service_worker():
+    path = os.path.join(MINIAPP_PATH, "service-worker.js")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/javascript")
+    return JSONResponse(status_code=404, content={"error": "service-worker.js not found"})
+
+
+@api_app.get("/sw.js")
+async def serve_sw():
+    # Пробуем sw.js
+    path = os.path.join(MINIAPP_PATH, "sw.js")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/javascript")
+    # Если нет, пробуем service-worker.js
+    alt_path = os.path.join(MINIAPP_PATH, "service-worker.js")
+    if os.path.exists(alt_path):
+        return FileResponse(alt_path, media_type="application/javascript")
+    return JSONResponse(status_code=404, content={"error": "sw.js not found"})
+
+
 if __name__ == "__main__":
     main()
