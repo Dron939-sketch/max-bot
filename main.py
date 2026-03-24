@@ -27,6 +27,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.encoders import jsonable_encoder
 import uvicorn
 import requests
 # =========================================
@@ -716,21 +717,24 @@ async def get_user_status(user_id: str):
     try:
         user_id = int(user_id)
     except ValueError:
-        return JSONResponse({
-            "success": False,
-            "error": "Invalid user_id format"
-        }, status_code=400)
+        return JSONResponse(
+            content={"success": False, "error": "Invalid user_id format"},
+            status_code=400
+        )
     
     user_info = user_data.get(user_id, {})
     
-    return JSONResponse({
+    response_data = {
         "success": True,
         "has_profile": bool(user_info.get('profile_data')),
         "has_interpretation": bool(user_info.get('ai_generated_profile')),
         "test_completed": user_info.get('test_completed', False),
         "interpretation_ready": bool(user_info.get('ai_generated_profile')),
         "profile_code": user_info.get('profile_data', {}).get('display_name')
-    })
+    }
+    
+    # ✅ Используем jsonable_encoder для безопасной сериализации
+    return JSONResponse(content=jsonable_encoder(response_data))
 
 @api_app.get("/api/user-data")
 async def get_user_data_api(user_id: int):
