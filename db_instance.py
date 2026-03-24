@@ -13,7 +13,7 @@ import asyncio
 import threading
 import inspect
 import traceback
-from typing import Dict, Any, Optional, Callable, Awaitable
+from typing import Dict, Any, Optional, Callable, Awaitable, List
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from functools import wraps
 import signal
@@ -392,7 +392,35 @@ def save_telegram_user(
         return False
 
 
-# ✅ ДОБАВЛЕНА ФУНКЦИЯ log_event_async И log_event
+# ✅ ФУНКЦИЯ save_user - АЛИАС ДЛЯ СОВМЕСТИМОСТИ
+def save_user(
+    user_id: int,
+    username: str = None,
+    first_name: str = None,
+    last_name: str = None,
+    language_code: str = None
+) -> bool:
+    """
+    Алиас для save_telegram_user (для совместимости с другими модулями)
+    Используется в handlers/goals.py и других модулях
+    """
+    return save_telegram_user(user_id, username, first_name, last_name, language_code)
+
+
+async def save_user_async(
+    user_id: int,
+    username: str = None,
+    first_name: str = None,
+    last_name: str = None,
+    language_code: str = None
+) -> bool:
+    """
+    Асинхронный алиас для save_telegram_user_async
+    """
+    return await save_telegram_user_async(user_id, username, first_name, last_name, language_code)
+
+
+# ✅ ФУНКЦИЯ log_event_async И log_event
 async def log_event_async(user_id: int, event_type: str, event_data: Dict = None) -> bool:
     """Асинхронная версия логирования"""
     try:
@@ -607,9 +635,10 @@ __all__ = [
     'init_db',
     'close_db',
     'save_telegram_user',
+    'save_user',  # ✅ ДОБАВЛЕН АЛИАС
     'save_user_to_db',
     'save_test_result_to_db',
-    'log_event',  # ✅ ДОБАВЛЕНО
+    'log_event',
     'ensure_db_connection',
     'execute_with_retry',
     'sync_db_call'
