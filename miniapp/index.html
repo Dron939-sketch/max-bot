@@ -21,7 +21,7 @@
     <!-- MAX Bridge -->
     <script src="https://st.max.ru/js/max-web-app.js"></script>
     
-    <!-- ========== ПРАВИЛЬНОЕ ПОЛУЧЕНИЕ USER_ID ИЗ MAX ========== -->
+    <!-- ========== УНИВЕРСАЛЬНОЕ ПОЛУЧЕНИЕ USER_ID (ВСЕ ВЕРСИИ MAX) ========== -->
     <script>
         // ============================================
         // ДИАГНОСТИКА
@@ -29,16 +29,20 @@
         console.log('=== ДИАГНОСТИКА MAX ===');
         console.log('navigator.userAgent:', navigator.userAgent);
         console.log('window.MAX:', window.MAX);
+        console.log('window.Telegram:', window.Telegram);
+        console.log('location.href:', location.href);
         
         // ============================================
-        // ПОЛУЧЕНИЕ USER_ID (АСИНХРОННО)
+        // УНИВЕРСАЛЬНОЕ ПОЛУЧЕНИЕ USER_ID
+        // Поддерживает: мобильный MAX, веб-версию MAX, Telegram
         // ============================================
+        
         async function getUserIdFromMax() {
             console.log('🔍 Получение user_id из MAX...');
             
-            // 1. MAX мессенджер - через getUser() (основной способ)
+            // ========== 1. МОБИЛЬНЫЙ MAX (через getUser) ==========
             if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUser) {
-                console.log('🔄 Используем MAX.WebApp.getUser()');
+                console.log('🔄 Пробуем MAX.WebApp.getUser() (мобильный)');
                 try {
                     const user = await window.MAX.WebApp.getUser();
                     if (user && user.id) {
@@ -46,55 +50,106 @@
                         return parseInt(user.id);
                     }
                 } catch (err) {
-                    console.error('getUser error:', err);
+                    console.warn('getUser error:', err);
                 }
             }
             
-            // 2. MAX мессенджер - из initDataUnsafe
+            // ========== 2. ВЕБ-ВЕРСИЯ MAX (через initDataUnsafe) ==========
             if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.initDataUnsafe) {
                 const initData = window.MAX.WebApp.initDataUnsafe;
+                console.log('📦 initDataUnsafe:', initData);
+                
                 if (initData.user && initData.user.id) {
                     console.log('✅ user_id из initDataUnsafe.user.id:', initData.user.id);
                     return parseInt(initData.user.id);
                 }
+                
                 if (initData.user_id) {
                     console.log('✅ user_id из initDataUnsafe.user_id:', initData.user_id);
                     return parseInt(initData.user_id);
                 }
             }
             
-            // 3. Telegram (если портировано)
+            // ========== 3. ВЕБ-ВЕРСИЯ MAX (через WebAppData в URL) ==========
+            const urlParams = new URLSearchParams(window.location.search);
+            const webAppData = urlParams.get('WebAppData');
+            
+            if (webAppData) {
+                console.log('🔍 Парсим WebAppData из URL...');
+                try {
+                    let decodedData = webAppData;
+                    try {
+                        decodedData = decodeURIComponent(webAppData);
+                    } catch(e) {}
+                    
+                    const params = new URLSearchParams(decodedData);
+                    const userParam = params.get('user');
+                    
+                    if (userParam) {
+                        let userStr = userParam;
+                        try {
+                            userStr = decodeURIComponent(userParam);
+                        } catch(e) {}
+                        
+                        const userData = JSON.parse(userStr);
+                        if (userData && userData.id) {
+                            console.log('✅ user_id из WebAppData.user.id:', userData.id);
+                            return parseInt(userData.id);
+                        }
+                    }
+                    
+                    const userIdParam = params.get('user_id');
+                    if (userIdParam && !isNaN(parseInt(userIdParam))) {
+                        console.log('✅ user_id из WebAppData.user_id:', userIdParam);
+                        return parseInt(userIdParam);
+                    }
+                } catch (e) {
+                    console.error('Ошибка парсинга WebAppData:', e);
+                }
+            }
+            
+            // ========== 4. Telegram WebApp ==========
             if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe) {
                 const initData = window.Telegram.WebApp.initDataUnsafe;
+                console.log('📦 Telegram.initDataUnsafe:', initData);
+                
                 if (initData.user && initData.user.id) {
                     console.log('✅ user_id из Telegram:', initData.user.id);
                     return parseInt(initData.user.id);
                 }
             }
             
-            // 4. Из URL параметров (для тестирования)
-            const urlParams = new URLSearchParams(window.location.search);
-            const urlUserId = urlParams.get('user_id') || urlParams.get('userId');
+            // ========== 5. ИЗ URL ПАРАМЕТРОВ (для прямой ссылки) ==========
+            const urlUserId = urlParams.get('user_id') || urlParams.get('userId') || urlParams.get('uid');
             if (urlUserId && !isNaN(parseInt(urlUserId))) {
                 console.log('✅ user_id из URL:', urlUserId);
                 return parseInt(urlUserId);
             }
             
-            // 5. Из localStorage (сохранённый реальный ID)
+            // ========== 6. ИЗ LOCALSTORAGE (сохранённый ID) ==========
             const savedUserId = localStorage.getItem('fredi_user_id');
             if (savedUserId && !isNaN(parseInt(savedUserId))) {
                 console.log('✅ user_id из localStorage:', savedUserId);
                 return parseInt(savedUserId);
             }
             
-            // 6. Если в MAX, но данные еще не загружены - ждем
+            // ========== 7. РЕЖИМ ОТЛАДКИ (только для разработки) ==========
+            const isDebug = urlParams.get('debug') === '1';
+            if (isDebug) {
+                const debugId = parseInt(urlParams.get('user_id') || '213102077');
+                console.warn('⚠️ Режим отладки: используем ID:', debugId);
+                return debugId;
+            }
+            
+            // ========== 8. ЖДЁМ ЗАГРУЗКУ ДАННЫХ (если MAX есть, но данных нет) ==========
             if (window.MAX && window.MAX.WebApp) {
                 console.log('⏳ MAX есть, ждем загрузки данных...');
                 return new Promise((resolve) => {
                     let attempts = 0;
+                    const maxAttempts = 50;
                     const interval = setInterval(async () => {
                         attempts++;
-                        // Пробуем getUser
+                        
                         if (window.MAX.WebApp.getUser) {
                             try {
                                 const user = await window.MAX.WebApp.getUser();
@@ -105,18 +160,20 @@
                                 }
                             } catch(e) {}
                         }
-                        // Проверяем initDataUnsafe
+                        
                         if (window.MAX.WebApp.initDataUnsafe?.user?.id) {
                             clearInterval(interval);
                             resolve(parseInt(window.MAX.WebApp.initDataUnsafe.user.id));
                             return;
                         }
+                        
                         if (window.MAX.WebApp.initDataUnsafe?.user_id) {
                             clearInterval(interval);
                             resolve(parseInt(window.MAX.WebApp.initDataUnsafe.user_id));
                             return;
                         }
-                        if (attempts > 50) {
+                        
+                        if (attempts >= maxAttempts) {
                             clearInterval(interval);
                             console.error('❌ Таймаут ожидания user_id');
                             resolve(null);
@@ -133,7 +190,7 @@
         // ПОЛУЧЕНИЕ ИМЕНИ ПОЛЬЗОВАТЕЛЯ
         // ============================================
         async function getUserNameFromMax() {
-            // MAX через getUser
+            // Мобильный MAX
             if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUser) {
                 try {
                     const user = await window.MAX.WebApp.getUser();
@@ -143,7 +200,7 @@
                 } catch(e) {}
             }
             
-            // MAX из initDataUnsafe
+            // Веб-версия MAX
             if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.initDataUnsafe) {
                 const initData = window.MAX.WebApp.initDataUnsafe;
                 if (initData.user && initData.user.first_name) {
@@ -159,6 +216,12 @@
                 }
             }
             
+            // Из localStorage
+            const savedName = localStorage.getItem('userName');
+            if (savedName && savedName !== 'Гость') {
+                return savedName;
+            }
+            
             return null;
         }
         
@@ -168,7 +231,7 @@
         window.maxContext = {
             user_id: null,
             user_name: 'Друг',
-            isMax: false,
+            isMax: !!(window.MAX && window.MAX.WebApp),
             initialized: false
         };
         
@@ -189,21 +252,25 @@
                     localStorage.setItem('fredi_user_id', userId);
                     console.log('🎯 maxContext.user_id:', userId);
                     console.log('🎯 maxContext.user_name:', window.maxContext.user_name);
+                    console.log('🎯 maxContext.isMax:', window.maxContext.isMax);
                 } else {
                     console.error('❌ Не удалось получить user_id');
-                    // Показываем ошибку, но не блокируем полностью
-                    const container = document.getElementById('screenContainer');
-                    if (container) {
-                        container.innerHTML = `
-                            <div style="display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:20px;">
-                                <div>
-                                    <div style="font-size:64px;">🔐</div>
-                                    <h2>Ошибка входа</h2>
-                                    <p>Не удалось получить ID пользователя.<br>Пожалуйста, откройте приложение через MAX.</p>
-                                    <button onclick="location.reload()" style="padding:12px 24px;background:#248bf2;color:white;border:none;border-radius:40px;">Повторить</button>
+                    // Показываем ошибку, если не в режиме отладки
+                    const isDebug = new URLSearchParams(window.location.search).get('debug') === '1';
+                    if (!isDebug) {
+                        const container = document.getElementById('screenContainer');
+                        if (container) {
+                            container.innerHTML = `
+                                <div style="display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:20px;">
+                                    <div>
+                                        <div style="font-size:64px;">🔐</div>
+                                        <h2>Ошибка входа</h2>
+                                        <p>Не удалось получить ID пользователя.<br>Пожалуйста, откройте приложение через MAX.</p>
+                                        <button onclick="location.reload()" style="padding:12px 24px;background:#248bf2;color:white;border:none;border-radius:40px;">Повторить</button>
+                                    </div>
                                 </div>
-                            </div>
-                        `;
+                            `;
+                        }
                     }
                 }
             } catch (error) {
@@ -231,9 +298,8 @@
         localStorage.setItem('api_base_url', window.API_BASE_URL);
     </script>
     
-    <!-- ========== СТИЛИ (сокращены для краткости, но полные в вашем файле) ========== -->
+    <!-- ========== СТИЛИ ========== -->
     <style>
-        /* Здесь все ваши стили из предыдущей версии */
         * {
             margin: 0;
             padding: 0;
@@ -669,7 +735,6 @@
             display: none;
         }
         
-        /* Остальные стили из вашего файла */
         .onboarding-container, .context-container, .benefits-container, .final-profile-container, 
         .ask-question-container, .choose-goal-container, .choose-mode-container, .thought-result-container {
             max-width: 600px;
@@ -1038,7 +1103,7 @@
     <div id="recordingTimer" class="recording-timer" style="display: none;">0s</div>
     <div id="toastMessage" class="toast-message"></div>
 
-    <!-- ========== ШАБЛОНЫ ЭКРАНОВ (все шаблоны из вашего файла) ========== -->
+    <!-- ========== ШАБЛОНЫ ЭКРАНОВ ========== -->
     <template id="onboardingScreen1">
         <div class="onboarding-container">
             <div class="onboarding-content">
@@ -1216,20 +1281,20 @@
     </template>
 
     <!-- ========== СКРИПТЫ ========== -->
-    <script src="/api.js?v=12"></script>
-    <script src="/context.js?v=12"></script>
-    <script src="/onboarding.js?v=12"></script>
-    <script src="/script.js?v=12"></script>
-    <script src="/test.js?v=12"></script>
-    <script src="/animations.js?v=12"></script>
-    <script src="/animated-avatar.js?v=12"></script>
-    <script src="/dynamic-bg.js?v=12"></script>
-    <script src="/challenges.js?v=12"></script>
-    <script src="/notifications.js?v=12"></script>
-    <script src="/psychometric.js?v=12"></script>
-    <script src="/dashboard.js?v=12"></script>
+    <script src="/api.js?v=13"></script>
+    <script src="/context.js?v=13"></script>
+    <script src="/onboarding.js?v=13"></script>
+    <script src="/script.js?v=13"></script>
+    <script src="/test.js?v=13"></script>
+    <script src="/animations.js?v=13"></script>
+    <script src="/animated-avatar.js?v=13"></script>
+    <script src="/dynamic-bg.js?v=13"></script>
+    <script src="/challenges.js?v=13"></script>
+    <script src="/notifications.js?v=13"></script>
+    <script src="/psychometric.js?v=13"></script>
+    <script src="/dashboard.js?v=13"></script>
     
-    <!-- ========== ИНИЦИАЛИЗАЦИЯ ========== -->
+    <!-- ========== ИНИЦИАЛИЗАЦИЯ МИКРОФОНА ========== -->
     <script>
         // Создаем объект для управления микрофоном
         window.maxMicrophoneManager = {
