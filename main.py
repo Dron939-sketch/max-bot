@@ -712,26 +712,25 @@ async def get_test_interpretation(user_id: int):
         )
 
 @api_app.get("/api/user-status")
-async def get_user_status(user_id: int):
+async def get_user_status(user_id: str):
     try:
         user_id = int(user_id)
-        user_info = user_data.get(user_id, {})
-        
+    except ValueError:
         return JSONResponse({
-            "success": True,
-            "has_profile": bool(user_info.get('profile_data')),
-            "has_interpretation": bool(user_info.get('ai_generated_profile')),
-            "test_completed": user_info.get('test_completed', False),
-            "interpretation_ready": bool(user_info.get('ai_generated_profile')),
-            "profile_code": user_info.get('profile_data', {}).get('display_name')
-        })
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
+            "success": False,
+            "error": "Invalid user_id format"
+        }, status_code=400)
+    
+    user_info = user_data.get(user_id, {})
+    
+    return JSONResponse({
+        "success": True,
+        "has_profile": bool(user_info.get('profile_data')),
+        "has_interpretation": bool(user_info.get('ai_generated_profile')),
+        "test_completed": user_info.get('test_completed', False),
+        "interpretation_ready": bool(user_info.get('ai_generated_profile')),
+        "profile_code": user_info.get('profile_data', {}).get('display_name')
+    })
 
 @api_app.get("/api/user-data")
 async def get_user_data_api(user_id: int):
