@@ -2678,13 +2678,28 @@ async def webhook(request: Request):
 
 
 @api_app.get("/api/force-load-user")
+@api_app.post("/api/force-load-user")
 async def force_load_user(request: Request):
+    """Принудительная загрузка пользователя из БД (поддерживает GET и POST)"""
     try:
-        data = await request.json()
-        user_id = data.get('user_id')
+        user_id = None
+        
+        # Пытаемся получить user_id из разных источников
+        if request.method == "GET":
+            user_id = request.query_params.get('user_id')
+        else:
+            try:
+                data = await request.json()
+                user_id = data.get('user_id')
+            except:
+                form = await request.form()
+                user_id = form.get('user_id')
         
         if not user_id:
-            return JSONResponse({"success": False, "error": "user_id required"})
+            return JSONResponse(
+                {"success": False, "error": "user_id required"},
+                status_code=400
+            )
         
         user_id = int(user_id)
         
@@ -2731,6 +2746,7 @@ async def force_load_user(request: Request):
             status_code=500,
             content={"success": False, "error": str(e)}
         )
+
 
 
 # ============================================
@@ -3042,6 +3058,37 @@ async def update_notification_settings(request: Request):
             content={"success": False, "error": str(e)}
         )
 
+@api_app.get("/api/user-context")
+async def get_user_context(user_id: int):
+    """Получение контекста пользователя"""
+    try:
+        user_id = int(user_id)
+        context = user_contexts.get(user_id)
+        
+        if context:
+            return JSONResponse({
+                "success": True,
+                "context": {
+                    "name": context.name,
+                    "age": context.age,
+                    "gender": context.gender,
+                    "city": context.city,
+                    "communication_mode": context.communication_mode
+                }
+            })
+        else:
+            return JSONResponse({
+                "success": True,
+                "context": None,
+                "message": "Контекст не найден"
+            })
+    except Exception as e:
+        logger.error(f"❌ Error in get_user_context: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
 # ============================================
 # ГЛАВНАЯ ФУНКЦИЯ
 # ============================================
@@ -3119,5 +3166,40 @@ def main():
 # ТОЧКА ВХОДА
 # ============================================
 
+@api_app.get("/api/user-stats")
+async def get_user_stats(user_id: int):
+    """Получение статистики пользователя"""
+    try:
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        all_answers = user_info.get('all_answers', [])
+        sessions_count = len(all_answers) // 5 if all_answers else 0
+        
+        return JSONResponse({
+            "success": True,
+            "stats": {
+                "days_active": 3,
+                "sessions_count": sessions_count,
+                "questions_asked": len(all_answers),
+                "profile_completed": bool(user_info.get('profile_data'))
+            }
+        })
+    except Exception as e:
+        logger.error(f"❌ Error in get_user_stats: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+@api_app.get("/api/check")
+async def check_api():
+    """Проверка работоспособности API"""
+    return JSONResponse({
+        "success": True,
+        "status": "online",
+        "version": "9.6",
+        "timestamp": datetime.now().isoformat()
+    })
 if __name__ == "__main__":
     main()
