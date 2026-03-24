@@ -3,6 +3,7 @@
 """
 Централизованный доступ к экземпляру базы данных
 ВЕРСИЯ ДЛЯ PYTHON 3.11 - ПОЛНАЯ ВЕРСИЯ С ВСЕМИ ФУНКЦИЯМИ
+ДОБАВЛЕНО: Сохранение мыслей психолога и описания профиля
 """
 
 import os
@@ -18,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from functools import wraps
 import signal
 import sys
+from datetime import datetime
 
 from database import BotDatabase
 
@@ -673,6 +675,284 @@ def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_
         return False
 
 
+# ============================================
+# НОВАЯ ФУНКЦИЯ ДЛЯ СОХРАНЕНИЯ МЫСЛЕЙ ПСИХОЛОГА
+# ============================================
+
+async def create_psychologist_thoughts_table():
+    """Создает таблицу для хранения мыслей психолога"""
+    try:
+        if not await ensure_db_connection():
+            logger.error("❌ Нет соединения с БД")
+            return False
+        
+        async with db.get_connection() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS fredi_psychologist_thoughts (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    test_result_id INTEGER,
+                    thought_type VARCHAR(50) NOT NULL DEFAULT 'psychologist_thought',
+                    thought_text TEXT NOT NULL,
+                    thought_summary VARCHAR(500),
+                    metadata JSONB DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_active BOOLEAN DEFAULT TRUE
+                )
+            """)
+            
+            # Индексы
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_thoughts_user_id 
+                ON fredi_psychologist_thoughts(user_id)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_thoughts_test_result 
+                ON fredi_psychologist_thoughts(test_result_id)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_thoughts_type 
+                ON fredi_psychologist_thoughts(thought_type)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_thoughts_created 
+                ON fredi_psychologist_thoughts(created_at)
+            """)
+            
+            # GIN индекс для полнотекстового поиска
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_thoughts_text_gin 
+                ON fredi_psychologist_thoughts 
+                USING GIN(to_tsvector('russian', thought_text))
+            """)
+            
+            logger.info("✅ Таблица fredi_psychologist_thoughts создана")
+            return True
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка создания таблицы: {e}")
+        return False
+
+
+async def save_psychologist_thought_async(
+    user_id: int,
+    thought_text: str,
+    test_result_id: int = None,
+    thought_type: str = 'psychologist_thought',
+    thought_summary: str = None,
+    metadata: Dict = None
+) -> Optional[int]:
+    """
+    Сохраняет мысль психолога в отдельную таблицу
+    """
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД")
+            return None
+        
+        # Убеждаемся, что таблица существует
+        await create_psychologist_thoughts_table()
+        
+        async with db.get_connection() as conn:
+            # Если test_result_id не передан, получаем последний
+            if test_result_id is None:
+                row = await conn.fetchrow("""
+                    SELECT id FROM fredi_test_results 
+                    WHERE user_id = $1 
+                    ORDER BY created_at DESC LIMIT 1
+                """, user_id)
+                if row:
+                    test_result_id = row['id']
+            
+            # Деактивируем предыдущие мысли того же типа
+            await conn.execute("""
+                UPDATE fredi_psychologist_thoughts 
+                SET is_active = FALSE 
+                WHERE user_id = $1 AND thought_type = $2 AND is_active = TRUE
+            """, user_id, thought_type)
+            
+            # Сохраняем новую мысль
+            row = await conn.fetchrow("""
+                INSERT INTO fredi_psychologist_thoughts (
+                    user_id, test_result_id, thought_type, thought_text, 
+                    thought_summary, metadata
+                ) VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id
+            """, user_id, test_result_id, thought_type, thought_text,
+                thought_summary, json.dumps(metadata or {}))
+            
+            thought_id = row['id']
+            
+            # ОБРАТНАЯ СОВМЕСТИМОСТЬ: сохраняем также в user_data
+            try:
+                from state import user_data
+                if user_id in user_data:
+                    user_data[user_id]['psychologist_thought'] = thought_text
+                    user_data[user_id]['psychologist_thought_id'] = thought_id
+                    user_data[user_id]['psychologist_thought_type'] = thought_type
+                    user_data[user_id]['psychologist_thought_metadata'] = metadata
+                    save_user_data(user_id, user_data[user_id])
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось сохранить мысль в user_data: {e}")
+            
+            logger.info(f"💾 Мысль психолога сохранена: user={user_id}, id={thought_id}, type={thought_type}")
+            return thought_id
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения мысли: {e}")
+        return None
+
+
+def save_psychologist_thought(
+    user_id: int,
+    thought_text: str,
+    test_result_id: int = None,
+    thought_type: str = 'psychologist_thought',
+    **kwargs
+) -> Optional[int]:
+    """Синхронная обертка для сохранения мысли психолога"""
+    try:
+        result = db_loop_manager.run_coro(
+            save_psychologist_thought_async,
+            user_id,
+            thought_text,
+            test_result_id,
+            thought_type,
+            **kwargs,
+            timeout=30
+        )
+        return result if result is not None else None
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_psychologist_thought: {e}")
+        return None
+
+
+# ============================================
+# ФУНКЦИИ ДЛЯ ПОЛУЧЕНИЯ МЫСЛЕЙ
+# ============================================
+
+async def get_psychologist_thought_async(
+    user_id: int,
+    thought_type: str = 'psychologist_thought',
+    only_active: bool = True
+) -> Optional[str]:
+    """Получает последнюю мысль психолога"""
+    try:
+        if not await ensure_db_connection():
+            return None
+        
+        async with db.get_connection() as conn:
+            query = """
+                SELECT thought_text FROM fredi_psychologist_thoughts 
+                WHERE user_id = $1 AND thought_type = $2
+            """
+            params = [user_id, thought_type]
+            
+            if only_active:
+                query += " AND is_active = TRUE"
+            
+            query += " ORDER BY created_at DESC LIMIT 1"
+            
+            row = await conn.fetchrow(query, *params)
+            return row['thought_text'] if row else None
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения мысли: {e}")
+        return None
+
+
+def get_psychologist_thought(
+    user_id: int,
+    thought_type: str = 'psychologist_thought',
+    only_active: bool = True
+) -> Optional[str]:
+    """Синхронная обертка для получения мысли психолога"""
+    try:
+        result = db_loop_manager.run_coro(
+            get_psychologist_thought_async,
+            user_id,
+            thought_type,
+            only_active,
+            timeout=10
+        )
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_psychologist_thought: {e}")
+        return None
+
+
+async def get_psychologist_thought_history_async(
+    user_id: int,
+    thought_type: str = None,
+    limit: int = 10
+) -> List[Dict]:
+    """Получает историю мыслей психолога"""
+    try:
+        if not await ensure_db_connection():
+            return []
+        
+        async with db.get_connection() as conn:
+            query = """
+                SELECT 
+                    id, thought_type, thought_text, thought_summary,
+                    created_at, is_active, metadata
+                FROM fredi_psychologist_thoughts 
+                WHERE user_id = $1
+            """
+            params = [user_id]
+            
+            if thought_type:
+                query += " AND thought_type = $2"
+                params.append(thought_type)
+            
+            query += " ORDER BY created_at DESC LIMIT $3"
+            params.append(limit)
+            
+            rows = await conn.fetch(query, *params)
+            
+            return [
+                {
+                    'id': row['id'],
+                    'type': row['thought_type'],
+                    'text': row['thought_text'],
+                    'summary': row['thought_summary'],
+                    'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                    'is_active': row['is_active'],
+                    'metadata': row['metadata']
+                }
+                for row in rows
+            ]
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения истории мыслей: {e}")
+        return []
+
+
+def get_psychologist_thought_history(
+    user_id: int,
+    thought_type: str = None,
+    limit: int = 10
+) -> List[Dict]:
+    """Синхронная обертка для получения истории мыслей"""
+    try:
+        result = db_loop_manager.run_coro(
+            get_psychologist_thought_history_async,
+            user_id,
+            thought_type,
+            limit,
+            timeout=10
+        )
+        return result if result is not None else []
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_psychologist_thought_history: {e}")
+        return []
+
+
+# ============================================
+# ФУНКЦИИ ДЛЯ СОХРАНЕНИЯ РЕЗУЛЬТАТОВ ТЕСТА
+# ============================================
+
 async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
     """
     Асинхронная версия сохранения результатов теста (простая версия)
@@ -736,6 +1016,39 @@ async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
                     target=answer.get('target')
                 )
         
+        # ✅ СОХРАНЯЕМ МЫСЛИ ПСИХОЛОГА И ОПИСАНИЕ ПРОФИЛЯ
+        # Мысль психолога
+        thought = data.get('psychologist_thought')
+        if thought:
+            await save_psychologist_thought_async(
+                user_id=user_id,
+                thought_text=thought,
+                test_result_id=test_id,
+                thought_type='psychologist_thought',
+                metadata={
+                    'model_version': data.get('model_version', 'deepseek'),
+                    'generation_time_ms': data.get('generation_time_ms'),
+                    'profile_code': profile_code
+                }
+            )
+        
+        # Описание профиля
+        profile_description = data.get('ai_generated_profile')
+        if profile_description:
+            await save_psychologist_thought_async(
+                user_id=user_id,
+                thought_text=profile_description,
+                test_result_id=test_id,
+                thought_type='profile_description',
+                thought_summary=profile_description[:200],
+                metadata={
+                    'profile_code': profile_code,
+                    'vectors': data.get('behavioral_levels'),
+                    'perception_type': data.get('perception_type'),
+                    'thinking_level': data.get('thinking_level')
+                }
+            )
+        
         logger.info(f"📝 Результаты теста для пользователя {user_id} сохранены (ID: {test_id})")
         return test_id
         
@@ -765,7 +1078,7 @@ def save_test_result_to_db(user_id, test_type, user_data_dict=None):
 
 
 # ============================================
-# НОВАЯ ФУНКЦИЯ ДЛЯ СОХРАНЕНИЯ РЕЗУЛЬТАТОВ С ПОЛНЫМИ ПАРАМЕТРАМИ
+# ФУНКЦИЯ ДЛЯ СОХРАНЕНИЯ РЕЗУЛЬТАТОВ С ПОЛНЫМИ ПАРАМЕТРАМИ
 # ============================================
 
 async def save_test_result_full_async(
@@ -852,6 +1165,39 @@ async def save_test_result_full_async(
                     target=answer.get('target')
                 )
         
+        # ✅ СОХРАНЯЕМ МЫСЛИ ПСИХОЛОГА И ОПИСАНИЕ ПРОФИЛЯ
+        # Мысль психолога
+        thought = results.get('psychologist_thought')
+        if thought:
+            await save_psychologist_thought_async(
+                user_id=user_id,
+                thought_text=thought,
+                test_result_id=test_id,
+                thought_type='psychologist_thought',
+                metadata={
+                    'model_version': results.get('model_version', 'deepseek'),
+                    'generation_time_ms': results.get('generation_time_ms'),
+                    'profile_code': profile_code
+                }
+            )
+        
+        # Описание профиля
+        profile_description = results.get('ai_generated_profile')
+        if profile_description:
+            await save_psychologist_thought_async(
+                user_id=user_id,
+                thought_text=profile_description,
+                test_result_id=test_id,
+                thought_type='profile_description',
+                thought_summary=profile_description[:200],
+                metadata={
+                    'profile_code': profile_code,
+                    'vectors': vectors,
+                    'perception_type': perception_type,
+                    'thinking_level': thinking_level
+                }
+            )
+        
         logger.info(f"📝 Результаты теста для пользователя {user_id} сохранены (ID: {test_id})")
         return test_id
         
@@ -909,7 +1255,7 @@ __all__ = [
     'save_user',  # алиас
     'save_user_to_db',
     'save_test_result_to_db',
-    'save_test_result_to_db_full',  # новая функция с полными параметрами
+    'save_test_result_to_db_full',  # функция с полными параметрами
     'log_event',
     'ensure_db_connection',
     'execute_with_retry',
@@ -919,7 +1265,12 @@ __all__ = [
     'get_user_data',
     'save_user_context',
     'get_user_context',
-    'save_route_data'
+    'save_route_data',
+    # НОВЫЕ ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
+    'create_psychologist_thoughts_table',
+    'save_psychologist_thought',
+    'get_psychologist_thought',
+    'get_psychologist_thought_history',
 ]
 
-logger.info("✅ db_instance инициализирован")
+logger.info("✅ db_instance инициализирован (с поддержкой мыслей психолога)")
