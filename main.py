@@ -334,7 +334,7 @@ async def root():
             return FileResponse(index_path)
     except Exception as e:
         logger.warning(f"⚠️ Не удалось вернуть index.html: {e}")
-    return {
+    return JSONResponse({
         "name": "MAX Bot",
         "version": "9.6",
         "status": "online",
@@ -345,7 +345,7 @@ async def root():
             "api": "/api/*",
             "miniapp": "/static/"
         }
-    }
+    })
 
 # ============================================
 # API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
