@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики этапов тестирования (1-5) для MAX
-Версия 2.4 - ИСПРАВЛЕНО: синхронные вызовы БД через sync_db
+Версия 2.5 - ИСПРАВЛЕНО: замена sync_db на прямые вызовы db_instance
 """
 
 import time
@@ -10,6 +10,7 @@ import logging
 import os
 import json
 import re
+import threading
 from typing import Dict, Any, Optional, List
 
 from bot_instance import bot
@@ -46,40 +47,57 @@ from state import (
     clear_state, TestStates
 )
 
-# ✅ ИСПРАВЛЕНО: импорт из db_sync вместо db_instance
-from db_sync import sync_db
+# ✅ ИСПРАВЛЕНО: импорт синхронных функций из db_instance
+from db_instance import (
+    save_user,
+    save_user_data,
+    save_context,
+    save_test_result,
+    log_event,
+    add_reminder,
+    get_user_reminders,
+    complete_reminder,
+    load_user_data,
+    load_user_context,
+    load_all_users,
+    get_stats
+)
 
 logger = logging.getLogger(__name__)
 
-# ============================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ БД - УДАЛЕНЫ (используем sync_db)
-# ============================================
 
 # ============================================
-# ДОБАВЛЕНА НЕДОСТАЮЩАЯ ФУНКЦИЯ
+# ✅ ФУНКЦИЯ ДЛЯ ЗАПУСКА СИНХРОННЫХ ВЫЗОВОВ В ФОНЕ
+# ============================================
+
+def run_sync_in_background(func, *args, **kwargs):
+    """Запускает синхронную функцию в отдельном потоке"""
+    def _wrapper():
+        try:
+            func(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в фоновой задаче: {e}")
+    threading.Thread(target=_wrapper, daemon=True).start()
+
+
+# ============================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================
 
 def clean_text_for_safe_display(text: str) -> str:
     """Очищает текст от HTML и Markdown для безопасного отображения"""
     if not text:
         return text
-    # Удаляем HTML теги
     text = re.sub(r'<[^>]+>', '', text)
-    # Удаляем Markdown
     text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
     text = re.sub(r'__(.*?)__', r'\1', text)
     text = re.sub(r'\*(.*?)\*', r'\1', text)
     text = re.sub(r'_(.*?)_', r'\1', text)
     text = re.sub(r'`(.*?)`', r'\1', text)
     text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
-    # Удаляем множественные пробелы и переносы строк
     text = re.sub(r'\s+', ' ', text)
     text = re.sub(r'\n\s*\n', '\n\n', text)
     return text.strip()
-
-# ============================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# ============================================
 
 def calculate_progress(current: int, total: int) -> str:
     """Возвращает прогресс-бар"""
@@ -213,13 +231,11 @@ def convert_to_simple_language(scores, perception_type, thinking_level, deep_pat
     """Конвертирует технические данные в простые описания"""
     result = {}
     
-    # 1. Внимание (куда смотрит)
     if perception_type in ["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ", "СТАТУСНО-ОРИЕНТИРОВАННЫЙ"]:
         result['attention_desc'] = "Для вас важно, что думают другие, вы чутко считываете настроение и ожидания окружающих."
     else:
         result['attention_desc'] = "Для вас важнее ваши внутренние ощущения и чувства, чем мнение других."
     
-    # 2. Мышление
     if thinking_level <= 3:
         result['thinking_desc'] = "Вы хорошо видите отдельные ситуации, но не всегда замечаете общие закономерности."
     elif thinking_level <= 6:
@@ -227,7 +243,6 @@ def convert_to_simple_language(scores, perception_type, thinking_level, deep_pat
     else:
         result['thinking_desc'] = "Вы видите общие законы и можете предсказывать развитие ситуаций."
     
-    # 3. СБ (реакция на угрозу)
     sb_level = scores.get("СБ", 3)
     sb_profiles = {
         1: "Под давлением вы замираете и не можете слова сказать.",
@@ -239,7 +254,6 @@ def convert_to_simple_language(scores, perception_type, thinking_level, deep_pat
     }
     result['sb_desc'] = sb_profiles.get(int(sb_level), "Вы по-разному реагируете на давление.")
     
-    # 4. ТФ (деньги)
     tf_level = scores.get("ТФ", 3)
     tf_profiles = {
         1: "Деньги приходят и уходят — как повезёт.",
@@ -251,7 +265,6 @@ def convert_to_simple_language(scores, perception_type, thinking_level, deep_pat
     }
     result['tf_desc'] = tf_profiles.get(int(tf_level), "У вас свои отношения с деньгами.")
     
-    # 5. УБ (понимание мира)
     ub_level = scores.get("УБ", 3)
     ub_profiles = {
         1: "Вы стараетесь не думать о сложном — само как-то решится.",
@@ -263,7 +276,6 @@ def convert_to_simple_language(scores, perception_type, thinking_level, deep_pat
     }
     result['ub_desc'] = ub_profiles.get(int(ub_level), "Вы по-своему понимаете мир.")
     
-    # 6. ЧВ (отношения)
     chv_level = scores.get("ЧВ", 3)
     chv_profiles = {
         1: "Вы сильно привязываетесь к людям, тяжело без них.",
@@ -275,7 +287,6 @@ def convert_to_simple_language(scores, perception_type, thinking_level, deep_pat
     }
     result['chv_desc'] = chv_profiles.get(int(chv_level), "У вас свои паттерны в отношениях.")
     
-    # 7. Точка роста
     growth_map = {
         "ENVIRONMENT": "Посмотрите вокруг — может, дело в обстоятельствах?",
         "BEHAVIOR": "Попробуйте делать хоть что-то по-другому — маленькие шаги многое меняют.",
@@ -305,8 +316,8 @@ def cleanup_old_state_files(max_age_hours=24):
     except Exception as e:
         logger.error(f"❌ Ошибка при очистке старых файлов: {e}")
 
-# Вызываем при загрузке модуля
 cleanup_old_state_files()
+
 
 # ============================================
 # ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ
@@ -349,8 +360,6 @@ def start_stage_1(message, user_id: int, state_data: dict):
         "perception_scores": {"EXTERNAL": 0, "INTERNAL": 0, "SYMBOLIC": 0, "MATERIAL": 0},
         "stage": 1
     })
-    logger.info(f"✅ state_data обновлен: stage1_current=0")
-    
     ask_stage_1_question(message, user_id, state_data)
 
 def ask_stage_1_question(message, user_id: int, state_data: dict):
@@ -358,16 +367,11 @@ def ask_stage_1_question(message, user_id: int, state_data: dict):
     current = state_data.get("stage1_current", 0)
     total = get_stage1_total()
     
-    logger.info(f"❓ ask_stage_1_question: current={current}, total={total}")
-    
     if current >= total:
-        logger.info(f"🎯 Все вопросы отвечены (current={current} >= total={total}), вызываем finish_stage_1")
         finish_stage_1(message, user_id, state_data)
         return
     
     question = get_stage1_question(current)
-    logger.info(f"📋 Вопрос {current+1}/{total}: {question['text'][:50]}...")
-    
     progress = calculate_progress(current + 1, total)
     
     question_text = f"""
@@ -386,15 +390,10 @@ def ask_stage_1_question(message, user_id: int, state_data: dict):
         ))
     
     safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
-    logger.info(f"✅ Вопрос {current+1} отправлен")
 
 def handle_stage_1_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 1"""
-    logger.info(f"📥 handle_stage_1_answer для user {user_id}, data={call.data}")
-    logger.info(f"📊 stage1_current до обработки = {state_data.get('stage1_current')}")
-    
     if state_data.get("processing", False):
-        logger.info(f"⚠️ Уже обрабатывается, пропускаем")
         return
     
     state_data["processing"] = True
@@ -402,39 +401,24 @@ def handle_stage_1_answer(call, user_id: int, state_data: dict):
     try:
         parts = call.data.split("_")
         if len(parts) < 3:
-            logger.error(f"❌ Неправильный формат callback: {call.data}")
             return
         
         if not parts[1].isdigit():
-            logger.error(f"❌ Неправильный индекс вопроса: {parts[1]}")
             return
         current = int(parts[1])
         option_id = parts[2]
         
-        logger.info(f"📝 Обработка ответа на вопрос {current}, опция {option_id}")
-        
         last_answered = state_data.get("stage1_last_answered", -1)
         if current <= last_answered:
-            logger.info(f"⏭️ Вопрос {current} уже отвечен (last_answered={last_answered}), пропускаем")
             return
         
         question = get_stage1_question(current)
-        if not question:
-            logger.error(f"❌ Вопрос {current} не найден")
-            return
-            
         selected_option = question["options"].get(option_id)
-        if not selected_option:
-            logger.error(f"❌ Опция {option_id} не найдена в вопросе {current}")
-            return
-        
-        logger.info(f"✅ Ответ: {selected_option['text']}")
         
         perception_scores = state_data.get("perception_scores", {})
         for axis, score in selected_option.get("scores", {}).items():
             if axis in ["EXTERNAL", "INTERNAL", "SYMBOLIC", "MATERIAL"]:
                 perception_scores[axis] = perception_scores.get(axis, 0) + score
-                logger.info(f"📊 {axis} +{score} = {perception_scores[axis]}")
         
         all_answers = state_data.get("all_answers", [])
         all_answers.append({
@@ -446,22 +430,17 @@ def handle_stage_1_answer(call, user_id: int, state_data: dict):
             'scores': selected_option.get('scores', {})
         })
         
-        new_current = current + 1
         state_data.update({
             "perception_scores": perception_scores,
             "stage1_last_answered": current,
-            "stage1_current": new_current,
+            "stage1_current": current + 1,
             "all_answers": all_answers
         })
-        
-        logger.info(f"📈 stage1_current обновлен: {current} -> {new_current}")
         
         ask_stage_1_question(call.message, user_id, state_data)
         
     except Exception as e:
-        logger.error(f"❌ Ошибка в stage1: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Ошибка в stage1: {e}")
         ask_stage_1_question(call.message, user_id, state_data)
     finally:
         state_data["processing"] = False
@@ -473,17 +452,14 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     perception_scores = state_data.get("perception_scores", {})
     perception_type = determine_perception_type(perception_scores)
     
-    logger.info(f"📊 perception_scores = {perception_scores}")
-    logger.info(f"🎯 perception_type = {perception_type}")
-    
     if user_id not in user_data:
         user_data[user_id] = {}
     user_data[user_id]["perception_type"] = perception_type
     
-    logger.info(f"✅ User {user_id}: Stage 1 complete, type={perception_type}")
-    
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
-    sync_db.save_user_to_db(user_id)
+    # ✅ ИСПРАВЛЕНО: синхронное сохранение в фоне
+    run_sync_in_background(save_user, user_id, user_data[user_id].get('first_name'), None)
+    run_sync_in_background(save_user_data, user_id, user_data[user_id])
+    run_sync_in_background(log_event, user_id, 'stage_1_completed', {'perception_type': perception_type})
     
     result_text = STAGE_1_FEEDBACK.get(perception_type, STAGE_1_FEEDBACK["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"])
     
@@ -494,12 +470,11 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     
     safe_send_message(message, text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     state_data["stage"] = 2
-    logger.info(f"✅ Этап 1 завершен")
     
-    # Очищаем временные данные
     for key in ['stage1_current', 'stage1_last_answered', 'processing', 'perception_scores']:
         if key in state_data:
             del state_data[key]
+
 
 # ============================================
 # ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ
@@ -551,8 +526,6 @@ def ask_stage_2_question(message, user_id: int, state_data: dict):
     current = state_data.get("stage2_current", 0)
     total_questions = get_stage2_total(perception_type)
     
-    logger.info(f"❓ ask_stage_2_question: current={current}, total={total_questions}")
-    
     if current >= total_questions:
         finish_stage_2(message, user_id, state_data)
         return
@@ -584,8 +557,6 @@ def ask_stage_2_question(message, user_id: int, state_data: dict):
 
 def handle_stage_2_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 2"""
-    logger.info(f"📥 handle_stage_2_answer для user {user_id}, data={call.data}")
-    
     if state_data.get("processing", False):
         return
     
@@ -618,14 +589,12 @@ def handle_stage_2_answer(call, user_id: int, state_data: dict):
         if measures == "thinking":
             points = get_stage2_score(perception_type, current, selected_level)
             stage2_level_scores_dict[selected_level] = stage2_level_scores_dict.get(selected_level, 0) + points
-            logger.info(f"📊 thinking score +{points} для уровня {selected_level}")
         
         strategy_levels = state_data.get("strategy_levels", {"СБ": [], "ТФ": [], "УБ": [], "ЧВ": []})
         if measures in ["СБ", "ТФ", "УБ", "ЧВ"]:
             try:
                 value = int(selected_level)
                 strategy_levels[measures].append(value)
-                logger.info(f"📊 strategy {measures} +{value}")
             except ValueError:
                 pass
         
@@ -663,9 +632,6 @@ def finish_stage_2(message, user_id: int, state_data: dict):
     level_scores_dict = state_data.get("stage2_level_scores_dict", {})
     thinking_level = calculate_thinking_level_by_scores(level_scores_dict)
     
-    logger.info(f"📊 level_scores_dict = {level_scores_dict}")
-    logger.info(f"🎯 thinking_level = {thinking_level}")
-    
     if user_id not in user_data:
         user_data[user_id] = {}
     user_data[user_id]["thinking_level"] = thinking_level
@@ -676,10 +642,10 @@ def finish_stage_2(message, user_id: int, state_data: dict):
     perception_type = user_data.get(user_id, {}).get("perception_type", "СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ")
     level_group = get_level_group(thinking_level)
     
-    logger.info(f"✅ User {user_id}: Stage 2 complete, level={thinking_level}")
-    
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
-    sync_db.save_user_to_db(user_id)
+    # ✅ ИСПРАВЛЕНО: синхронное сохранение в фоне
+    run_sync_in_background(save_user, user_id, user_data[user_id].get('first_name'), None)
+    run_sync_in_background(save_user_data, user_id, user_data[user_id])
+    run_sync_in_background(log_event, user_id, 'stage_2_completed', {'thinking_level': thinking_level})
     
     result_text = STAGE_2_FEEDBACK.get((perception_type, level_group))
     if not result_text:
@@ -693,14 +659,13 @@ def finish_stage_2(message, user_id: int, state_data: dict):
     safe_send_message(message, text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     state_data["stage"] = 3
 
+
 # ============================================
 # ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ
 # ============================================
 
 def show_stage_3_intro(message, user_id: int, state_data: dict):
     """Экран перед ЭТАПОМ 3"""
-    logger.info(f"📢 show_stage_3_intro для user {user_id}")
-    
     intro_text = f"""
 🧠 <b>ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ</b>
 
@@ -727,7 +692,6 @@ def show_stage_3_intro(message, user_id: int, state_data: dict):
 
 def start_stage_3(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 3"""
-    logger.info(f"🎬 start_stage_3 для user {user_id}")
     state_data.update({
         "stage3_current": 0,
         "stage3_last_answered": -1,
@@ -743,8 +707,6 @@ def ask_stage_3_question(message, user_id: int, state_data: dict):
     """Задаёт вопрос ЭТАПА 3"""
     current = state_data.get("stage3_current", 0)
     total = get_stage3_total()
-    
-    logger.info(f"❓ ask_stage_3_question: current={current}, total={total}")
     
     if current >= total:
         finish_stage_3(message, user_id, state_data)
@@ -773,8 +735,6 @@ def ask_stage_3_question(message, user_id: int, state_data: dict):
 
 def handle_stage_3_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 3"""
-    logger.info(f"📥 handle_stage_3_answer для user {user_id}, data={call.data}")
-    
     if state_data.get("processing", False):
         return
     
@@ -790,12 +750,6 @@ def handle_stage_3_answer(call, user_id: int, state_data: dict):
         current = int(parts[1])
         option_id = parts[2]
         strategy = parts[3]
-        
-        stage3_current = state_data.get("stage3_current", 0)
-        
-        if current < stage3_current:
-            ask_stage_3_question(call.message, user_id, state_data)
-            return
         
         question = get_stage3_question(current)
         option_text = question["options"].get(option_id)
@@ -850,9 +804,6 @@ def finish_stage_3(message, user_id: int, state_data: dict):
     
     final_level = calculate_final_level(stage2_level, stage3_scores)
     
-    logger.info(f"📊 stage2_level={stage2_level}, stage3_scores={stage3_scores}")
-    logger.info(f"🎯 final_level={final_level}")
-    
     if user_id not in user_data:
         user_data[user_id] = {}
     user_data[user_id]["final_level"] = final_level
@@ -869,10 +820,10 @@ def finish_stage_3(message, user_id: int, state_data: dict):
     
     behavior_level = map_to_stage3_feedback_level(final_level)
     
-    logger.info(f"✅ User {user_id}: Stage 3 complete, final_level={final_level}")
-    
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
-    sync_db.save_user_to_db(user_id)
+    # ✅ ИСПРАВЛЕНО: синхронное сохранение в фоне
+    run_sync_in_background(save_user, user_id, user_data[user_id].get('first_name'), None)
+    run_sync_in_background(save_user_data, user_id, user_data[user_id])
+    run_sync_in_background(log_event, user_id, 'stage_3_completed', {'final_level': final_level})
     
     result_text = STAGE_3_FEEDBACK.get(behavior_level, STAGE_3_FEEDBACK[1])
     
@@ -884,14 +835,13 @@ def finish_stage_3(message, user_id: int, state_data: dict):
     safe_send_message(message, text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     state_data["stage"] = 4
 
+
 # ============================================
 # ЭТАП 4: ТОЧКА РОСТА
 # ============================================
 
 def show_stage_4_intro(message, user_id: int, state_data: dict):
     """Экран перед ЭТАПОМ 4"""
-    logger.info(f"📢 show_stage_4_intro для user {user_id}")
-    
     intro_text = f"""
 🧠 <b>ЭТАП 4: ТОЧКА РОСТА</b>
 
@@ -918,7 +868,6 @@ def show_stage_4_intro(message, user_id: int, state_data: dict):
 
 def start_stage_4(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 4"""
-    logger.info(f"🎬 start_stage_4 для user {user_id}")
     state_data.update({
         "stage4_current": 0,
         "stage4_last_answered": -1,
@@ -933,8 +882,6 @@ def ask_stage_4_question(message, user_id: int, state_data: dict):
     """Задаёт вопрос ЭТАПА 4"""
     current = state_data.get("stage4_current", 0)
     total = get_stage4_total()
-    
-    logger.info(f"❓ ask_stage_4_question: current={current}, total={total}")
     
     if current >= total:
         finish_stage_4(message, user_id, state_data)
@@ -962,8 +909,6 @@ def ask_stage_4_question(message, user_id: int, state_data: dict):
 
 def handle_stage_4_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 4"""
-    logger.info(f"📥 handle_stage_4_answer для user {user_id}, data={call.data}")
-    
     if state_data.get("processing", False):
         return
     
@@ -1025,9 +970,6 @@ def finish_stage_4(message, user_id: int, state_data: dict):
     dilts_counts = state_data.get("dilts_counts", {})
     dominant_dilts = determine_dominant_dilts(dilts_counts)
     
-    logger.info(f"📊 dilts_counts = {dilts_counts}")
-    logger.info(f"🎯 dominant_dilts = {dominant_dilts}")
-    
     if user_id not in user_data:
         user_data[user_id] = {}
     user_data[user_id]["dilts_counts"] = dilts_counts
@@ -1045,10 +987,10 @@ def finish_stage_4(message, user_id: int, state_data: dict):
     model.build_from_profile(scores, user_data[user_id].get('history', []))
     user_data[user_id]["confinement_model"] = model.to_dict()
     
-    logger.info(f"✅ User {user_id}: Stage 4 complete, profile={profile_data.get('display_name', 'unknown')}")
-    
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
-    sync_db.save_user_to_db(user_id)
+    # ✅ ИСПРАВЛЕНО: синхронное сохранение в фоне
+    run_sync_in_background(save_user, user_id, user_data[user_id].get('first_name'), None)
+    run_sync_in_background(save_user_data, user_id, user_data[user_id])
+    run_sync_in_background(log_event, user_id, 'stage_4_completed', {'profile_code': profile_data.get('display_name')})
     
     show_preliminary_profile(message, user_id)
 
@@ -1109,13 +1051,14 @@ def show_preliminary_profile(message, user_id: int):
     
     from state import set_state
     set_state(user_id, TestStates.profile_confirmation)
-    logger.info(f"✅ Предварительный профиль показан")
 
 
 def profile_confirm(call):
     """Пользователь подтвердил профиль"""
     user_id = call.from_user.id
     logger.info(f"✅ profile_confirm для пользователя {user_id}")
+    
+    run_sync_in_background(log_event, user_id, 'profile_confirmed', {})
     
     safe_send_message(call.message, "✅ Отлично! Тогда исследуем глубину...", delete_previous=True, keep_last=1)
     
@@ -1142,6 +1085,8 @@ def profile_reject(call):
     """Пользователь полностью не согласен"""
     user_id = call.from_user.id
     logger.info(f"🔄 profile_reject для пользователя {user_id}")
+    
+    run_sync_in_background(log_event, user_id, 'profile_rejected', {})
     
     anecdote = """
 🧠 <b>ЧЕСТНОСТЬ - ЛУЧШАЯ ПОЛИТИКА</b>
@@ -1177,6 +1122,8 @@ def handle_goodbye(call):
     """Обработчик кнопки Досвидули"""
     user_id = call.from_user.id
     logger.info(f"👋 goodbye для пользователя {user_id}")
+    
+    run_sync_in_background(log_event, user_id, 'goodbye', {})
     
     safe_send_message(
         call.message,
@@ -1301,7 +1248,6 @@ def ask_clarifying_question(message, user_id: int):
 def handle_clarifying_answer(call):
     """Обрабатывает ответ на уточняющий вопрос"""
     user_id = call.from_user.id
-    logger.info(f"❓ handle_clarifying_answer для пользователя {user_id}, data={call.data}")
     
     data = get_state_data(user_id)
     
@@ -1403,8 +1349,6 @@ def ask_stage_5_question(message, user_id: int, state_data: dict):
     current = state_data.get("stage5_current", 0)
     total = get_stage5_total()
     
-    logger.info(f"❓ ask_stage_5_question: current={current}, total={total}")
-    
     if current >= total:
         finish_stage_5(message, user_id, state_data)
         return
@@ -1432,8 +1376,6 @@ def ask_stage_5_question(message, user_id: int, state_data: dict):
 
 def handle_stage_5_answer(call, user_id: int, state_data: dict):
     """Обработка ответа 5-го этапа"""
-    logger.info(f"📥 handle_stage_5_answer для user {user_id}, data={call.data}")
-    
     if state_data.get("processing", False):
         return
     
@@ -1492,57 +1434,40 @@ def finish_stage_5(message, user_id: int, state_data: dict):
     
     deep_patterns = analyze_stage5_results(stage5_answers)
     
-    logger.info(f"📊 deep_patterns = {deep_patterns}")
-    
     if user_id not in user_data:
         user_data[user_id] = {}
     user_data[user_id]["deep_patterns"] = deep_patterns
+    user_data[user_id]["test_completed"] = True
+    user_data[user_id]["test_completed_at"] = time.time()
     
-    logger.info(f"✅ User {user_id}: Stage 5 complete")
-    
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно через sync_db
-    # Получаем данные пользователя
-    user_data_dict = user_data.get(user_id, {})
-    
-    # Сохраняем результат теста
+    # ✅ ИСПРАВЛЕНО: синхронное сохранение в фоне
     profile_code = None
-    if user_data_dict.get("profile_data"):
-        profile_code = user_data_dict["profile_data"].get("display_name")
+    if user_data[user_id].get("profile_data"):
+        profile_code = user_data[user_id]["profile_data"].get("display_name")
     
-    sync_db.save_test_result(
+    run_sync_in_background(save_test_result,
         user_id=user_id,
         test_type='full_profile',
-        results=user_data_dict,
+        results=user_data[user_id],
         profile_code=profile_code,
-        perception_type=user_data_dict.get("perception_type"),
-        thinking_level=user_data_dict.get("thinking_level"),
-        vectors=user_data_dict.get("behavioral_levels"),
+        perception_type=user_data[user_id].get("perception_type"),
+        thinking_level=user_data[user_id].get("thinking_level"),
+        vectors=user_data[user_id].get("behavioral_levels"),
         deep_patterns=deep_patterns,
-        confinement_model=user_data_dict.get("confinement_model")
+        confinement_model=user_data[user_id].get("confinement_model")
     )
     
-    # Сохраняем пользователя
-    sync_db.save_user_to_db(user_id)
+    run_sync_in_background(save_user, user_id, user_data[user_id].get('first_name'), None)
+    run_sync_in_background(save_user_data, user_id, user_data[user_id])
+    run_sync_in_background(log_event, user_id, 'test_completed', {'profile_code': profile_code})
     
     # Сохраняем все ответы
     all_answers = state_data.get("all_answers", [])
     if all_answers:
         for answer in all_answers:
-            sync_db.save_test_answer(
-                user_id=user_id,
-                test_result_id=None,
-                stage=answer.get('stage', 0),
-                question_index=answer.get('question_index', 0),
-                question_text=answer.get('question', ''),
-                answer_text=answer.get('answer', ''),
-                answer_value=answer.get('option', ''),
-                scores=answer.get('scores'),
-                measures=answer.get('measures'),
-                strategy=answer.get('strategy'),
-                dilts=answer.get('dilts'),
-                pattern=answer.get('pattern'),
-                target=answer.get('target')
-            )
+            run_sync_in_background(save_test_answer, user_id, None, answer.get('stage', 0),
+                answer.get('question_index', 0), answer.get('question', ''),
+                answer.get('answer', ''), answer.get('option', ''))
     
     try:
         from handlers.profile import show_final_profile
@@ -1562,35 +1487,20 @@ def finish_stage_5(message, user_id: int, state_data: dict):
 # ============================================
 
 __all__ = [
-    # Этап 1
     'show_stage_1_intro', 'start_stage_1', 'ask_stage_1_question',
     'handle_stage_1_answer', 'finish_stage_1',
-    
-    # Этап 2
     'show_stage_2_intro', 'start_stage_2', 'ask_stage_2_question',
     'handle_stage_2_answer', 'finish_stage_2',
-    
-    # Этап 3
     'show_stage_3_intro', 'start_stage_3', 'ask_stage_3_question',
     'handle_stage_3_answer', 'finish_stage_3',
-    
-    # Этап 4
     'show_stage_4_intro', 'start_stage_4', 'ask_stage_4_question',
     'handle_stage_4_answer', 'finish_stage_4',
-    
-    # Этап 5
     'show_stage_5_intro', 'start_stage_5', 'ask_stage_5_question',
     'handle_stage_5_answer', 'finish_stage_5',
-    
-    # Предварительный профиль и подтверждение
     'show_preliminary_profile', 'profile_confirm', 'profile_doubt',
     'profile_reject', 'handle_goodbye',
-    
-    # Уточняющие вопросы
     'ask_whats_wrong', 'handle_discrepancy', 'clarify_next',
     'ask_clarifying_question', 'handle_clarifying_answer',
     'update_profile_with_clarifications',
-    
-    # Вспомогательные
     'cleanup_old_state_files', 'clean_text_for_safe_display'
 ]
