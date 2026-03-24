@@ -13,10 +13,164 @@
     <meta name="apple-mobile-web-app-title" content="Фреди">
     <link rel="apple-touch-icon" href="/icon-192.png">
     
+    <!-- Отключаем кэширование -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    
     <!-- MAX Bridge -->
     <script src="https://st.max.ru/js/max-web-app.js"></script>
     
-    <link rel="stylesheet" href="/static/styles.css">
+    <!-- ========== КРИТИЧЕСКИ ВАЖНО: УСТАНОВКА maxContext ДО ВСЕХ СКРИПТОВ ========== -->
+    <script>
+        // Функция получения user_id из MAX
+        function getUserIdFromMax() {
+            console.log('🔍 Получение user_id из MAX...');
+            
+            // 1. MAX мессенджер (основной способ)
+            if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.initDataUnsafe) {
+                const initData = window.MAX.WebApp.initDataUnsafe;
+                if (initData.user && initData.user.id) {
+                    console.log('✅ user_id из MAX.WebApp:', initData.user.id);
+                    return initData.user.id;
+                }
+                if (initData.user_id) {
+                    console.log('✅ user_id из MAX.WebApp.user_id:', initData.user_id);
+                    return initData.user_id;
+                }
+            }
+            
+            // 2. Telegram (если портировано)
+            if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe) {
+                const initData = window.Telegram.WebApp.initDataUnsafe;
+                if (initData.user && initData.user.id) {
+                    console.log('✅ user_id из Telegram.WebApp:', initData.user.id);
+                    return initData.user.id;
+                }
+            }
+            
+            // 3. Из URL параметров (для отладки и тестирования)
+            const urlParams = new URLSearchParams(window.location.search);
+            const urlUserId = urlParams.get('user_id') || urlParams.get('userId') || urlParams.get('uid');
+            if (urlUserId) {
+                console.log('✅ user_id из URL:', urlUserId);
+                localStorage.setItem('fredi_user_id', urlUserId);
+                return urlUserId;
+            }
+            
+            // 4. Из localStorage (сохранённый ранее)
+            const savedUserId = localStorage.getItem('fredi_user_id');
+            if (savedUserId) {
+                console.log('✅ user_id из localStorage:', savedUserId);
+                return savedUserId;
+            }
+            
+            // 5. Тестовый ID только для разработки (если не в MAX)
+        if (!window.MAX || !window.MAX.WebApp) {
+            console.warn('⚠️ Режим разработки: используется тестовый user_id');
+            // ✅ ИСПРАВЛЕНО: числовой ID вместо строки с test_
+            const testId = Math.floor(Math.random() * 1000000000).toString();
+            localStorage.setItem('fredi_user_id', testId);
+            console.log('🔧 Создан тестовый ID:', testId);
+            return testId;
+        }
+            
+            console.error('❌ Не удалось получить user_id!');
+            return null;
+        }
+        
+        // Функция получения имени пользователя
+        function getUserNameFromMax() {
+            // MAX
+            if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.initDataUnsafe) {
+                const initData = window.MAX.WebApp.initDataUnsafe;
+                if (initData.user && initData.user.first_name) {
+                    return initData.user.first_name;
+                }
+                if (initData.first_name) {
+                    return initData.first_name;
+                }
+            }
+            
+            // Telegram
+            if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe) {
+                const initData = window.Telegram.WebApp.initDataUnsafe;
+                if (initData.user && initData.user.first_name) {
+                    return initData.user.first_name;
+                }
+            }
+            
+            // Из localStorage
+            const savedName = localStorage.getItem('userName');
+            if (savedName && savedName !== 'Гость') {
+                return savedName;
+            }
+            
+            return null;
+        }
+        
+        // УСТАНАВЛИВАЕМ ГЛОБАЛЬНЫЙ maxContext
+        window.maxContext = window.maxContext || {};
+        window.maxContext.user_id = getUserIdFromMax();
+        window.maxContext.user_name = getUserNameFromMax() || 'Друг';
+        window.maxContext.isMax = !!(window.MAX && window.MAX.WebApp);
+        
+        console.log('🎯 maxContext установлен:', {
+            user_id: window.maxContext.user_id,
+            user_name: window.maxContext.user_name,
+            isMax: window.maxContext.isMax
+        });
+        
+        // Если нет user_id — показываем ошибку и блокируем загрузку
+        if (!window.maxContext.user_id) {
+            console.error('❌ КРИТИЧЕСКАЯ ОШИБКА: Нет user_id!');
+            document.addEventListener('DOMContentLoaded', function() {
+                document.body.innerHTML = `
+                    <div style="display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:20px;background:#0e1621;color:white;">
+                        <div>
+                            <div style="font-size:64px;margin-bottom:20px;">🔐</div>
+                            <h2 style="margin-bottom:12px;">Ошибка входа</h2>
+                            <p style="color:#8e9aa6;margin-bottom:24px;">
+                                Не удалось идентифицировать пользователя.<br>
+                                Пожалуйста, откройте приложение через MAX.
+                            </p>
+                            <button onclick="location.reload()" style="padding:14px 32px;background:#248bf2;color:white;border:none;border-radius:40px;font-size:16px;cursor:pointer;">
+                                🔄 ПОВТОРИТЬ
+                            </button>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+    </script>
+    
+    <!-- ========== КОНФИГУРАЦИЯ API (ИСПРАВЛЕНО) ========== -->
+    <script>
+        // FastAPI запущен на основном сервере
+        const MAIN_API_URL = 'https://max-bot-1-ywpz.onrender.com';
+        const MINIAPP_URL = 'https://max-bot-miniapp.onrender.com';
+        
+        const hostname = window.location.hostname;
+        
+        if (hostname === 'max-bot-miniapp.onrender.com') {
+            // Мини-приложение открыто отдельно — API на основном сервере
+            window.API_BASE_URL = MAIN_API_URL;
+            console.log('🌐 Мини-приложение на отдельном домене, API:', window.API_BASE_URL);
+        } else if (hostname === 'max-bot-1-ywpz.onrender.com') {
+            // Открыто на основном домене — API там же
+            window.API_BASE_URL = window.location.origin;
+            console.log('🌐 Основной домен, API:', window.API_BASE_URL);
+        } else {
+            // Локальная разработка
+            window.API_BASE_URL = 'http://localhost:10000';
+            console.log('🌐 Локальная разработка, API:', window.API_BASE_URL);
+        }
+        
+        // Сохраняем в localStorage для других скриптов
+        localStorage.setItem('api_base_url', window.API_BASE_URL);
+    </script>
+    
+    <!-- ========== СТИЛИ ========== -->
     <style>
         * {
             margin: 0;
@@ -172,6 +326,7 @@
             display: flex;
             align-items: center;
             gap: 12px;
+            cursor: pointer;
         }
         
         .user-mini-avatar {
@@ -302,60 +457,6 @@
             color: var(--max-text-secondary, #8e9aa6);
         }
         
-        .login-screen {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 400px;
-            text-align: center;
-            padding: 40px 20px;
-        }
-        
-        .login-icon {
-            font-size: 64px;
-            margin-bottom: 24px;
-        }
-        
-        .login-title {
-            font-size: 28px;
-            font-weight: bold;
-            margin-bottom: 16px;
-            background: linear-gradient(135deg, var(--max-blue, #248bf2), #6c5ce7);
-            -webkit-background-clip: text;
-            background-clip: text;
-            color: transparent;
-        }
-        
-        .login-text {
-            font-size: 16px;
-            color: var(--max-text-secondary, #8e9aa6);
-            line-height: 1.6;
-            margin-bottom: 32px;
-            max-width: 400px;
-        }
-        
-        .login-btn {
-            background: var(--max-blue, #248bf2);
-            border: none;
-            border-radius: 40px;
-            padding: 14px 32px;
-            font-size: 18px;
-            font-weight: 600;
-            color: white;
-            cursor: pointer;
-        }
-        
-        .voice-input-area {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-top: 16px;
-            padding-top: 16px;
-            border-top: 1px solid var(--glass-border, rgba(255,255,255,0.1));
-            justify-content: center;
-        }
-        
         .voice-record-btn {
             width: 64px;
             height: 64px;
@@ -382,10 +483,6 @@
         .voice-record-btn.recording {
             background: #ff4444;
             animation: pulse-red 1s infinite;
-            transform: scale(1.05);
-        }
-        
-        .voice-record-btn.recording:active {
             transform: scale(1.05);
         }
         
@@ -434,27 +531,6 @@
             50% { opacity: 0.3; }
         }
         
-        .voice-hint-text {
-            font-size: 13px;
-            color: var(--max-text-secondary, #8e9aa6);
-            text-align: center;
-            margin-top: 8px;
-        }
-        
-        .voice-hold-hint {
-            display: inline-block;
-            background: rgba(36, 139, 242, 0.2);
-            padding: 3px 10px;
-            border-radius: 20px;
-            font-size: 10px;
-            margin-left: 8px;
-            font-weight: normal;
-        }
-        
-        #hiddenAudioPlayer {
-            display: none;
-        }
-        
         .toast-message {
             position: fixed;
             bottom: 140px;
@@ -482,10 +558,6 @@
         
         .toast-message.error {
             background: #dc3545;
-        }
-        
-        .toast-message.info {
-            background: var(--max-blue, #248bf2);
         }
         
         .microphone-modal {
@@ -534,125 +606,14 @@
             color: var(--max-text, white);
         }
         
-        .modal-btn.primary:active {
-            transform: scale(0.98);
-        }
-        
-        @media (max-width: 480px) {
-            .screen-container {
-                padding: 16px;
-            }
-            .voice-record-btn {
-                width: 56px;
-                height: 56px;
-                font-size: 28px;
-            }
-            .recording-timer {
-                bottom: 100px;
-                padding: 8px 20px;
-                font-size: 18px;
-            }
-            .toast-message {
-                bottom: 120px;
-                padding: 10px 16px;
-                font-size: 13px;
-            }
-            .voice-hint-text {
-                font-size: 12px;
-            }
-        }
-        
-        @supports (padding: max(0px)) {
-            .screen-container {
-                padding-left: max(20px, env(safe-area-inset-left));
-                padding-right: max(20px, env(safe-area-inset-right));
-                padding-bottom: max(20px, env(safe-area-inset-bottom));
-            }
-            .chat-header {
-                padding-top: max(12px, env(safe-area-inset-top));
-            }
-            .recording-timer {
-                bottom: max(120px, env(safe-area-inset-bottom) + 80px);
-            }
-            .toast-message {
-                bottom: max(140px, env(safe-area-inset-bottom) + 100px);
-            }
-        }
-        
-        /* ===== АНИМИРОВАННЫЙ АВАТАР ===== */
-        
-        .animated-avatar {
-            display: block;
-            transition: transform 0.3s cubic-bezier(0.2, 0.9, 0.4, 1.1);
-            border-radius: 50%;
-            cursor: pointer;
-        }
-        
-        .animated-avatar:hover {
-            transform: scale(1.05);
-        }
-        
-        /* Контейнер аватара */
-        .user-avatar {
-            position: relative;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 50%;
-            transition: all 0.3s ease;
-            background: linear-gradient(135deg, var(--max-panel-bg), var(--max-bg));
-            width: 80px;
-            height: 80px;
-        }
-        
-        /* Эффект пульсации при клике */
-        .user-avatar::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            border-radius: 50%;
-            pointer-events: none;
-            animation: avatarPulse 0s ease-out;
-        }
-        
-        @keyframes avatarPulse {
-            0% {
-                box-shadow: 0 0 0 0 rgba(74, 158, 255, 0.4);
-                opacity: 1;
-            }
-            100% {
-                box-shadow: 0 0 0 15px rgba(74, 158, 255, 0);
-                opacity: 0;
-            }
-        }
-        
-        .user-avatar:active::after {
-            animation: avatarPulse 0.5s ease-out;
-        }
-        
-        /* Для мобильных устройств */
-        @media (max-width: 480px) {
-            .user-avatar {
-                width: 64px !important;
-                height: 64px !important;
-            }
-            
-            .animated-avatar {
-                width: 64px !important;
-                height: 64px !important;
-            }
-        }
-        
-        /* Стили для онбординга и теста */
-        .onboarding-container, .context-container, .benefits-container, .final-profile-container, .ask-question-container, .choose-goal-container, .choose-mode-container, .thought-result-container {
+        .onboarding-container, .context-container, .benefits-container, .final-profile-container, 
+        .ask-question-container, .choose-goal-container, .choose-mode-container, .thought-result-container {
             max-width: 600px;
             margin: 0 auto;
         }
         
-        .onboarding-content, .context-content, .benefits-content, .final-profile-content, .ask-question-content, .choose-goal-content, .choose-mode-content, .thought-result-content {
+        .onboarding-content, .context-content, .benefits-content, .final-profile-content, 
+        .ask-question-content, .choose-goal-content, .choose-mode-content, .thought-result-content {
             background: var(--max-panel-bg, #17212b);
             border-radius: 24px;
             padding: 24px;
@@ -690,11 +651,11 @@
             cursor: pointer;
             text-align: center;
             transition: all 0.2s;
+            border: none;
         }
         
         .onboarding-btn.primary {
             background: var(--max-blue, #248bf2);
-            border: none;
             color: white;
         }
         
@@ -802,14 +763,6 @@
             color: var(--max-text-secondary, #8e9aa6);
         }
         
-        .benefits-after {
-            background: var(--max-input-bg, #1f2c38);
-            padding: 16px;
-            border-radius: 16px;
-            margin: 20px 0;
-            line-height: 1.6;
-        }
-        
         .profile-header {
             text-align: center;
             margin-bottom: 24px;
@@ -851,18 +804,14 @@
             text-align: center;
         }
         
-        .ask-question-text, .mode-description, .goal-description {
-            margin-bottom: 20px;
-            line-height: 1.6;
-            text-align: center;
-        }
-        
-        .voice-hint {
-            background: var(--max-input-bg, #1f2c38);
-            padding: 12px;
-            border-radius: 16px;
-            margin-bottom: 20px;
-            text-align: center;
+        .voice-input-area {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--glass-border, rgba(255,255,255,0.1));
+            justify-content: center;
         }
         
         .question-input-area {
@@ -895,23 +844,69 @@
             cursor: pointer;
         }
         
-        .profile-badge, .mode-badge {
-            background: var(--max-input-bg, #1f2c38);
-            padding: 12px;
-            border-radius: 16px;
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        
-        .badge-label {
-            font-size: 12px;
+        .voice-hint-text {
+            font-size: 13px;
             color: var(--max-text-secondary, #8e9aa6);
-            margin-right: 8px;
+            text-align: center;
+            margin-top: 8px;
         }
         
-        .badge-code {
+        .voice-hold-hint {
+            display: inline-block;
+            background: rgba(36, 139, 242, 0.2);
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 10px;
+            margin-left: 8px;
+            font-weight: normal;
+        }
+        
+        #hiddenAudioPlayer {
+            display: none;
+        }
+        
+        .login-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 400px;
+            text-align: center;
+            padding: 40px 20px;
+        }
+        
+        .login-icon {
+            font-size: 64px;
+            margin-bottom: 24px;
+        }
+        
+        .login-title {
+            font-size: 28px;
             font-weight: bold;
-            font-family: monospace;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, var(--max-blue, #248bf2), #6c5ce7);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        
+        .login-text {
+            font-size: 16px;
+            color: var(--max-text-secondary, #8e9aa6);
+            line-height: 1.6;
+            margin-bottom: 32px;
+            max-width: 400px;
+        }
+        
+        .login-btn {
+            background: var(--max-blue, #248bf2);
+            border: none;
+            border-radius: 40px;
+            padding: 14px 32px;
+            font-size: 18px;
+            font-weight: 600;
+            color: white;
+            cursor: pointer;
         }
         
         .mode-cards {
@@ -946,12 +941,6 @@
             margin-bottom: 8px;
         }
         
-        .mode-desc, .mode-what, .mode-get {
-            font-size: 13px;
-            color: var(--max-text-secondary, #8e9aa6);
-            margin-top: 4px;
-        }
-        
         .goals-list {
             display: flex;
             flex-direction: column;
@@ -959,7 +948,7 @@
             margin-bottom: 20px;
         }
         
-        .goal-card {
+        .goal-item {
             background: var(--max-input-bg, #1f2c38);
             border-radius: 16px;
             padding: 16px;
@@ -967,7 +956,7 @@
             transition: all 0.2s;
         }
         
-        .goal-card:hover {
+        .goal-item:hover {
             background: var(--max-hover, #2b3b4a);
         }
         
@@ -987,43 +976,226 @@
             white-space: pre-wrap;
         }
         
-        .question-back, .goal-back, .mode-back, .thought-buttons {
-            margin-top: 20px;
-        }
-        
-        .custom-goal {
-            margin-bottom: 16px;
-        }
-        
-        .dashboard-error {
+        .profile-badge, .mode-badge {
+            background: var(--max-input-bg, #1f2c38);
+            padding: 12px;
+            border-radius: 16px;
             text-align: center;
-            padding: 40px;
+            margin-bottom: 20px;
         }
         
-        .error-icon {
-            font-size: 48px;
-            margin-bottom: 16px;
-        }
-        
-        .error-title {
-            font-size: 20px;
-            font-weight: bold;
-            margin-bottom: 12px;
-        }
-        
-        .error-text {
+        .badge-label {
+            font-size: 12px;
             color: var(--max-text-secondary, #8e9aa6);
+            margin-right: 8px;
+        }
+        
+        .badge-code {
+            font-weight: bold;
+            font-family: monospace;
+        }
+        
+        /* Стили для чата */
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            height: calc(100vh - 120px);
+        }
+        
+        .messages-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        .message {
+            display: flex;
+            width: 100%;
+        }
+        
+        .message.user-message {
+            justify-content: flex-end;
+        }
+        
+        .message.bot-message {
+            justify-content: flex-start;
+        }
+        
+        .message-bubble {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 18px;
+        }
+        
+        .user-message .message-bubble {
+            background: var(--max-message-user, #2b5278);
+            border-bottom-right-radius: 4px;
+        }
+        
+        .bot-message .message-bubble {
+            background: var(--max-message-bot, #1f2c38);
+            border-bottom-left-radius: 4px;
+        }
+        
+        .message-text {
+            font-size: 15px;
+            line-height: 1.4;
+        }
+        
+        .message-time {
+            font-size: 10px;
+            color: var(--max-text-secondary);
+            margin-top: 4px;
+            text-align: right;
+        }
+        
+        .input-panel {
+            padding: 12px 16px;
+            background: var(--max-panel-bg);
+            border-top: 1px solid var(--max-border);
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        
+        .attach-btn, .voice-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: var(--glass-bg);
+            border: none;
+            color: var(--max-text);
+            font-size: 20px;
+            cursor: pointer;
+        }
+        
+        .message-input-wrapper {
+            flex: 1;
+            display: flex;
+            gap: 8px;
+            background: var(--glass-bg);
+            border-radius: 24px;
+            padding: 4px 4px 4px 16px;
+        }
+        
+        .message-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--max-text);
+            font-size: 16px;
+            outline: none;
+            padding: 8px 0;
+        }
+        
+        .send-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: var(--max-blue);
+            border: none;
+            color: white;
+            font-size: 18px;
+            cursor: pointer;
+        }
+        
+        .smart-questions-container {
+            padding: 20px;
+            overflow-y: auto;
+            height: 100%;
+        }
+        
+        .smart-questions-header {
+            text-align: center;
             margin-bottom: 24px;
         }
         
-        .test-required-btn {
-            background: var(--max-blue, #248bf2);
-            border: none;
-            border-radius: 40px;
-            padding: 12px 24px;
-            color: white;
-            font-weight: bold;
+        .smart-questions-emoji {
+            font-size: 48px;
+        }
+        
+        .smart-questions-title {
+            font-size: 22px;
+            margin-bottom: 8px;
+            color: var(--max-text);
+        }
+        
+        .smart-questions-desc {
+            color: var(--max-text-secondary);
+        }
+        
+        .smart-questions-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        
+        .smart-question-item {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 14px 18px;
             cursor: pointer;
+            display: flex;
+            gap: 12px;
+            transition: all 0.2s;
+        }
+        
+        .smart-question-item:hover {
+            border-color: var(--max-blue);
+            transform: translateX(4px);
+        }
+        
+        .smart-question-input {
+            flex: 1;
+            padding: 14px 18px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 30px;
+            color: var(--max-text);
+        }
+        
+        .smart-question-submit {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: var(--max-blue);
+            border: none;
+            color: white;
+            cursor: pointer;
+        }
+        
+        .thought-loading-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 300px;
+        }
+        
+        .thought-loading-content {
+            text-align: center;
+        }
+        
+        .loading-time {
+            margin-top: 12px;
+            font-size: 12px;
+            color: var(--max-text-secondary);
+        }
+        
+        @supports (padding: max(0px)) {
+            .screen-container {
+                padding-left: max(20px, env(safe-area-inset-left));
+                padding-right: max(20px, env(safe-area-inset-right));
+                padding-bottom: max(20px, env(safe-area-inset-bottom));
+            }
+            .chat-header {
+                padding-top: max(12px, env(safe-area-inset-top));
+            }
+            .recording-timer {
+                bottom: max(120px, env(safe-area-inset-bottom) + 80px);
+            }
         }
     </style>
 </head>
@@ -1344,248 +1516,71 @@
         </div>
     </template>
 
-    <link rel="stylesheet" href="/static/styles.css?v=3">
-    <script src="/static/context.js?v=3"></script>
-    <script src="/static/onboarding.js?v=3"></script>
-    <script src="/static/script.js?v=3"></script>
-    <script src="/static/test.js?v=3"></script>
-    <script src="/static/animations.js?v=3"></script>
-    <script src="/static/animated-avatar.js?v=3"></script>
-    <script src="/static/dynamic-bg.js?v=3"></script>
-    <script src="/static/challenges.js?v=3"></script>
-    <script src="/static/notifications.js?v=3"></script>
-    <script src="/static/psychometric.js?v=3"></script>
-    <script src="/static/api.js?v=3"></script>
-    <script src="/static/dashboard.js?v=3"></script>
-
-        <!-- ===== ОСНОВНАЯ ИНИЦИАЛИЗАЦИЯ ===== -->
-    <script>
-        window.dashboard = null;
-        window.api = new FrediAPI();
-        window.animationManager = null;
-        window.dynamicBg = null;
-
-        function showLoading() {
-            const container = document.getElementById('screenContainer');
-            if (container) container.innerHTML = '<div class="loading-screen"><div class="loading-spinner">🧠</div><div class="loading-text">Загрузка личного кабинета...</div></div>';
-        }
-
-        function showLoginScreen() {
-            const container = document.getElementById('screenContainer');
-            if (container) container.innerHTML = '<div class="login-screen"><div class="login-icon">🔐</div><div class="login-title">Личный кабинет Фреди</div><div class="login-text">Для доступа к личному кабинету необходимо открыть приложение через MAX.</div><button class="login-btn" onclick="location.reload()">🔄 ПОВТОРИТЬ</button></div>';
-        }
-
-        async function initDashboard() {
-            const userId = window.maxContext?.user_id || localStorage.getItem('fredi_user_id');
-            if (!userId) { showLoginScreen(); return; }
-            console.log('🚀 Загрузка для:', userId);
-            showLoading();
-            try {
-                window.animationManager = new AnimationManager({ rootMargin: '0px 0px -50px 0px', threshold: 0.1, animationDuration: 0.4, staggerDelay: 0.05 });
-                window.dynamicBg = new DynamicBackground('app', { particlesCount: 50, particleSpeed: 0.5, gradientSpeed: 0.002, waveIntensity: 0.6 });
-                window.dashboard = new FrediDashboard();
-                window.dashboard.userId = userId;
-                await window.dashboard.loadUserData();
-                window.dashboard.renderDashboard();
-                
-                setTimeout(() => {
-                    if (window.dashboard && window.dashboard.isTestCompleted && window.dashboard.initAnimatedAvatar) {
-                        window.dashboard.initAnimatedAvatar();
-                    }
-                }, 500);
-                
-                const userNameEl = document.getElementById('userName');
-                if (userNameEl && window.dashboard.userName) userNameEl.textContent = window.dashboard.userName;
-                const userStatusEl = document.getElementById('userStatus');
-                if (userStatusEl) userStatusEl.innerHTML = window.dashboard.isTestCompleted ? `🧠 ${window.dashboard.profileCode || 'профиль готов'}` : `📝 тест не пройден`;
-                if (window.dynamicBg && window.dashboard.userId) window.dynamicBg.updateFromProfile(window.dashboard.userId);
-                console.log('✅ Личный кабинет загружен');
-            } catch (error) {
-                console.error('❌ Ошибка:', error);
-                const container = document.getElementById('screenContainer');
-                if (container) container.innerHTML = '<div class="dashboard-error"><div class="error-icon">⚠️</div><div class="error-title">Ошибка загрузки</div><div class="error-text">Не удалось загрузить данные профиля.</div><button class="test-required-btn" onclick="location.reload()">🔄 ПОВТОРИТЬ</button></div>';
-            }
-        }
-
-        (function() {
-            let userId = null;
-            let userData = null;
-            let chatData = null;
-            let authData = {};
-            
-            const hash = window.location.hash.substring(1);
-            const hashParams = new URLSearchParams(hash);
-            console.log('🔍 Все параметры из хэша:', Array.from(hashParams.entries()));
-            
-            const userParam = hashParams.get('user');
-            if (userParam) {
-                try {
-                    const decoded = decodeURIComponent(userParam);
-                    userData = JSON.parse(decoded);
-                    console.log('✅ Данные пользователя:', userData);
-                    userId = userData.id;
-                } catch (e) {
-                    console.error('❌ Ошибка парсинга user:', e);
-                }
-            }
-            
-            const chatParam = hashParams.get('chat');
-            if (chatParam) {
-                try {
-                    const decoded = decodeURIComponent(chatParam);
-                    chatData = JSON.parse(decoded);
-                    console.log('📦 Данные чата:', chatData);
-                    if (!userId && chatData.id) {
-                        userId = chatData.id;
-                    }
-                } catch (e) {
-                    console.error('Ошибка парсинга chat:', e);
-                }
-            }
-            
-            authData = {
-                hash: hashParams.get('hash'),
-                auth_date: hashParams.get('auth_date'),
-                query_id: hashParams.get('query_id'),
-                ip: hashParams.get('ip')
-            };
-            console.log('🔐 Данные аутентификации:', authData);
-            
-            window.maxData = {
-                user: userData,
-                chat: chatData,
-                auth: authData,
-                raw_hash: hash,
-                user_id: userId
-            };
-            
-            if (userData && userData.first_name) {
-                window.maxUserName = userData.first_name;
-            }
-            
-            if (!userId) {
-                const urlParams = new URLSearchParams(window.location.search);
-                userId = urlParams.get('user_id');
-                if (userId) console.log('✅ user_id из query-параметров:', userId);
-            }
-            
-            if (!userId && window.MAX?.WebApp?.initDataUnsafe?.user?.id) {
-                userId = window.MAX.WebApp.initDataUnsafe.user.id;
-                console.log('✅ user_id из MAX.WebApp:', userId);
-                window.maxData = window.maxData || {};
-                window.maxData.user = window.MAX.WebApp.initDataUnsafe.user;
-            }
-            
-            if (!userId && window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
-                userId = window.Telegram.WebApp.initDataUnsafe.user.id;
-                console.log('✅ user_id из Telegram.WebApp:', userId);
-                window.maxData = window.maxData || {};
-                window.maxData.user = window.Telegram.WebApp.initDataUnsafe.user;
-            }
-            
-            if (!userId) {
-                userId = localStorage.getItem('fredi_user_id');
-                if (userId) console.log('✅ user_id из localStorage:', userId);
-            }
-            
-            if (userId && userId !== '213102077') {
-                localStorage.setItem('fredi_user_id', userId);
-                if (userData && userData.first_name) {
-                    localStorage.setItem('fredi_user_name', userData.first_name);
-                }
-            }
-            
-            window.maxContext = { 
-                user_id: userId,
-                user_data: userData,
-                chat_data: chatData,
-                auth_data: authData
-            };
-            console.log('🎯 Итоговый user_id:', userId);
-            console.log('📊 Полные данные:', window.maxContext);
-            
-            if (window.MAX?.WebApp) {
-                window.MAX.WebApp.ready();
-                window.MAX.WebApp.expand();
-            }
-            if (window.Telegram?.WebApp) {
-                window.Telegram.WebApp.ready();
-                window.Telegram.WebApp.expand();
-            }
-            
-            if (!userId) {
-                console.log('❌ Нет user_id! Показываем экран входа');
-                showLoginScreen();
-            } else {
-                console.log('✅ Загружаем дашборд для user_id:', userId);
-                initDashboard();
-            }
-        })();
-    </script>
+    <!-- ========== СКРИПТЫ (с увеличенной версией для обновления кэша) ========== -->
+    <script src="/context.js?v=8"></script>
+    <script src="/onboarding.js?v=8"></script>
+    <script src="/script.js?v=8"></script>
+    <script src="/test.js?v=8"></script>
+    <script src="/animations.js?v=8"></script>
+    <script src="/animated-avatar.js?v=8"></script>
+    <script src="/dynamic-bg.js?v=8"></script>
+    <script src="/challenges.js?v=8"></script>
+    <script src="/notifications.js?v=8"></script>
+    <script src="/psychometric.js?v=8"></script>
+    <script src="/dashboard.js?v=8"></script>
     
-    <!-- ===== МИКРОФОН ДЛЯ MAX - УДЕРЖАНИЕ ДЛЯ ЗАПИСИ ===== -->
+    <!-- Микрофон для мобильных -->
     <script>
-        class MaxMicrophoneManager {
+        class MicrophoneManager {
             constructor() {
                 this.hasPermission = false;
                 this.isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
                 this.isAndroid = /Android/i.test(navigator.userAgent);
             }
-
+            
             async requestMicrophone() {
                 console.log('🎤 Запрос микрофона...');
-                this.showLoading();
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                     this.hasPermission = true;
-                    this.hideLoading();
-                    this.showToast('✅ Микрофон готов!', 'success');
                     stream.getTracks().forEach(track => track.stop());
+                    this.showToast('✅ Микрофон готов!', 'success');
                     return true;
                 } catch (error) {
-                    this.hideLoading();
-                    console.error('❌ Ошибка:', error);
-                    if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    console.error('Microphone error:', error);
+                    if (error.name === 'NotAllowedError') {
                         this.showPermissionInstructions();
-                    } else if (error.name === 'NotFoundError') {
-                        this.showToast('❌ Микрофон не найден на устройстве', 'error');
-                    } else if (error.name === 'NotReadableError') {
-                        this.showToast('❌ Микрофон занят другим приложением', 'error');
                     } else {
-                        this.showToast(`❌ Ошибка: ${error.message}`, 'error');
+                        this.showToast('❌ Не удалось получить доступ к микрофону', 'error');
                     }
                     return false;
                 }
             }
-
+            
             showPermissionInstructions() {
-                let instructions = '';
-                if (this.isAndroid) {
-                    instructions = '🔊 <b>МИКРОФОН ЗАБЛОКИРОВАН В MAX</b><br><br>1️⃣ Закройте чат с ботом<br>2️⃣ Откройте <b>Настройки</b> телефона<br>3️⃣ <b>Приложения</b> → <b>MAX</b><br>4️⃣ <b>Разрешения</b> → <b>Микрофон</b><br>5️⃣ Выберите <b>Разрешить</b><br><br>6️⃣ Вернитесь и нажмите 🎤 ещё раз';
-                } else if (this.isIOS) {
-                    instructions = '🎤 <b>МИКРОФОН ЗАБЛОКИРОВАН В MAX</b><br><br>1️⃣ Закройте чат с ботом<br>2️⃣ Откройте <b>Настройки</b> iPhone<br>3️⃣ Прокрутите вниз → найдите <b>MAX</b><br>4️⃣ Включите <b>Микрофон</b><br><br>5️⃣ Вернитесь и нажмите 🎤 ещё раз';
-                } else {
-                    instructions = '🎤 <b>МИКРОФОН ЗАБЛОКИРОВАН</b><br><br>В настройках браузера разрешите доступ к микрофону.';
-                }
-                
                 const modal = document.createElement('div');
                 modal.className = 'microphone-modal';
                 modal.innerHTML = `
                     <div class="microphone-modal-content">
                         <div style="font-size:48px;margin-bottom:16px;">🎤</div>
-                        <h3 style="margin:0 0 12px 0;">Нужен доступ к микрофону</h3>
-                        <div style="color:var(--max-text-secondary,#8e9aa6);line-height:1.6;text-align:left;font-size:14px;">${instructions}</div>
-                        <div style="display:flex;gap:12px;margin-top:28px;">
+                        <h3>Нужен доступ к микрофону</h3>
+                        <div style="color:var(--max-text-secondary);line-height:1.6;margin:16px 0;">
+                            В настройках приложения MAX разрешите доступ к микрофону.
+                        </div>
+                        <div style="display:flex;gap:12px;">
                             <button id="microphoneRetryBtn" class="modal-btn primary">🔄 ПРОВЕРИТЬ</button>
                             <button id="microphoneCloseBtn" class="modal-btn secondary">📱 ЗАКРЫТЬ</button>
                         </div>
                     </div>
                 `;
                 document.body.appendChild(modal);
-                document.getElementById('microphoneRetryBtn')?.addEventListener('click', () => { modal.remove(); this.requestMicrophone(); });
+                document.getElementById('microphoneRetryBtn')?.addEventListener('click', () => {
+                    modal.remove();
+                    this.requestMicrophone();
+                });
                 document.getElementById('microphoneCloseBtn')?.addEventListener('click', () => modal.remove());
             }
-
+            
             showToast(message, type) {
                 const toast = document.getElementById('toastMessage');
                 if (toast) {
@@ -1594,324 +1589,19 @@
                     setTimeout(() => toast.classList.remove('show'), 3000);
                 }
             }
-
-            showLoading() {
-                const btn = document.getElementById('voiceRecordBtn');
-                if (btn && !btn.disabled) {
-                    btn.textContent = '⏳';
-                    btn.disabled = true;
-                }
-            }
-
-            hideLoading() {
-                const btn = document.getElementById('voiceRecordBtn');
-                if (btn) {
-                    btn.textContent = '🎤';
-                    btn.disabled = false;
-                }
-            }
         }
-
-        window.maxMicrophoneManager = new MaxMicrophoneManager();
         
-        window.voiceRecorder = {
-            mediaRecorder: null,
-            audioChunks: [],
-            isRecording: false,
-            recordingStartTime: null,
-            recordingTimer: null,
-            stream: null,
-            pressTimer: null,
-            isLongPress: false
-        };
-
-        function getSupportedMimeType() {
-            const types = ['audio/webm', 'audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/mpeg'];
-            for (const type of types) {
-                if (MediaRecorder.isTypeSupported(type)) return type;
-            }
-            return 'audio/webm';
-        }
-
-        async function startActualRecording() {
-            if (window.voiceRecorder.isRecording) return false;
-            
-            try {
-                window.voiceRecorder.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-                
-                const mimeType = getSupportedMimeType();
-                window.voiceRecorder.mediaRecorder = new MediaRecorder(window.voiceRecorder.stream, { mimeType });
-                window.voiceRecorder.audioChunks = [];
-                
-                window.voiceRecorder.mediaRecorder.ondataavailable = (event) => {
-                    if (event.data.size > 0) window.voiceRecorder.audioChunks.push(event.data);
-                };
-                
-                window.voiceRecorder.mediaRecorder.onstop = async () => {
-                    if (window.voiceRecorder.stream) {
-                        window.voiceRecorder.stream.getTracks().forEach(track => track.stop());
-                        window.voiceRecorder.stream = null;
-                    }
-                    
-                    if (window.voiceRecorder.audioChunks.length > 0) {
-                        const totalSize = window.voiceRecorder.audioChunks.reduce((sum, chunk) => sum + chunk.size, 0);
-                        if (totalSize > 5000) {
-                            const audioBlob = new Blob(window.voiceRecorder.audioChunks, { type: mimeType });
-                            await sendVoiceToServer(audioBlob);
-                        } else {
-                            window.maxMicrophoneManager.showToast('Запись слишком короткая', 'error');
-                        }
-                    }
-                    window.voiceRecorder.audioChunks = [];
-                    window.voiceRecorder.isRecording = false;
-                };
-                
-                window.voiceRecorder.mediaRecorder.start(100);
-                window.voiceRecorder.isRecording = true;
-                window.voiceRecorder.recordingStartTime = Date.now();
-                
-                const voiceBtn = document.getElementById('voiceRecordBtn');
-                if (voiceBtn) {
-                    voiceBtn.textContent = '⏹️';
-                    voiceBtn.classList.add('recording');
-                }
-                
-                const voiceStatus = document.getElementById('voiceStatus');
-                if (voiceStatus) {
-                    voiceStatus.style.display = 'flex';
-                }
-                
-                startRecordingTimerUI();
-                
-                setTimeout(() => {
-                    if (window.voiceRecorder.isRecording) stopVoiceRecording();
-                }, 60000);
-                
-                return true;
-            } catch (error) {
-                console.error('Recording error:', error);
-                window.maxMicrophoneManager.showToast('❌ Ошибка записи', 'error');
-                return false;
-            }
-        }
-
-        window.startVoiceRecording = async function() {
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                window.maxMicrophoneManager.showToast('❌ Ваше устройство не поддерживает голосовой ввод', 'error');
-                return false;
-            }
-            
-            if (!window.maxMicrophoneManager.hasPermission) {
-                const granted = await window.maxMicrophoneManager.requestMicrophone();
-                if (!granted) return false;
-            }
-            
-            return await startActualRecording();
-        };
-
-        window.stopVoiceRecording = function() {
-            if (window.voiceRecorder.mediaRecorder && window.voiceRecorder.isRecording) {
-                window.voiceRecorder.mediaRecorder.stop();
-                window.voiceRecorder.isRecording = false;
-                stopRecordingTimerUI();
-                
-                const voiceBtn = document.getElementById('voiceRecordBtn');
-                if (voiceBtn) {
-                    voiceBtn.textContent = '🎤';
-                    voiceBtn.classList.remove('recording');
-                }
-                
-                const voiceStatus = document.getElementById('voiceStatus');
-                if (voiceStatus) voiceStatus.style.display = 'none';
-            }
-        };
-
-        window.cancelVoiceRecording = function() {
-            if (window.voiceRecorder.mediaRecorder && window.voiceRecorder.isRecording) {
-                window.voiceRecorder.mediaRecorder.onstop = null;
-                window.voiceRecorder.mediaRecorder.stop();
-                
-                if (window.voiceRecorder.stream) {
-                    window.voiceRecorder.stream.getTracks().forEach(track => track.stop());
-                    window.voiceRecorder.stream = null;
-                }
-                
-                window.voiceRecorder.isRecording = false;
-                window.voiceRecorder.audioChunks = [];
-                stopRecordingTimerUI();
-                
-                const voiceBtn = document.getElementById('voiceRecordBtn');
-                if (voiceBtn) {
-                    voiceBtn.textContent = '🎤';
-                    voiceBtn.classList.remove('recording');
-                }
-                
-                const voiceStatus = document.getElementById('voiceStatus');
-                if (voiceStatus) voiceStatus.style.display = 'none';
-            }
-        };
-
-        function startRecordingTimerUI() {
-            const timerEl = document.getElementById('recordingTimer');
-            if (!timerEl) return;
-            if (window.voiceRecorder.recordingTimer) clearInterval(window.voiceRecorder.recordingTimer);
-            
-            window.voiceRecorder.recordingTimer = setInterval(() => {
-                if (window.voiceRecorder.isRecording && window.voiceRecorder.recordingStartTime) {
-                    const elapsed = Math.floor((Date.now() - window.voiceRecorder.recordingStartTime) / 1000);
-                    timerEl.textContent = `${elapsed}s`;
-                    timerEl.style.display = 'block';
-                    
-                    if (elapsed >= 55) {
-                        timerEl.style.background = 'rgba(255,68,68,0.9)';
-                    }
-                    if (elapsed >= 60) {
-                        stopVoiceRecording();
-                    }
-                }
-            }, 200);
-        }
-
-        function stopRecordingTimerUI() {
-            if (window.voiceRecorder.recordingTimer) {
-                clearInterval(window.voiceRecorder.recordingTimer);
-                window.voiceRecorder.recordingTimer = null;
-            }
-            const timerEl = document.getElementById('recordingTimer');
-            if (timerEl) {
-                timerEl.style.display = 'none';
-                timerEl.style.background = 'rgba(0,0,0,0.9)';
-            }
-        }
-
-        async function sendVoiceToServer(audioBlob) {
-            window.maxMicrophoneManager.showToast('🎙️ Распознаю речь...', 'info');
-            
-            const formData = new FormData();
-            formData.append('user_id', window.maxContext?.user_id || localStorage.getItem('fredi_user_id'));
-            formData.append('voice', audioBlob, 'voice.webm');
-            
-            try {
-                const response = await fetch('/api/voice/process', { method: 'POST', body: formData, timeout: 30000 });
-                const result = await response.json();
-                
-                if (result.success) {
-                    if (result.recognized_text) {
-                        window.maxMicrophoneManager.showToast(`🎤 "${result.recognized_text}"`, 'success');
-                        const questionInput = document.getElementById('questionInput');
-                        if (questionInput) {
-                            questionInput.value = result.recognized_text;
-                            const sendBtn = document.getElementById('sendQuestionBtn');
-                            if (sendBtn && result.recognized_text.length > 3) {
-                                setTimeout(() => sendBtn.click(), 500);
-                            }
-                        }
-                    }
-                    if (result.answer && window.dashboard && window.dashboard.showFloatingMessage) {
-                        window.dashboard.showFloatingMessage(result.answer, 'info');
-                    }
-                    if (result.audio_url) {
-                        const audio = document.getElementById('hiddenAudioPlayer');
-                        if (audio) {
-                            audio.src = result.audio_url;
-                            audio.play().catch(e => console.warn('Audio play error:', e));
-                        }
-                    }
-                } else {
-                    window.maxMicrophoneManager.showToast(result.error || 'Не удалось распознать речь', 'error');
-                }
-            } catch (error) {
-                console.error('Send voice error:', error);
-                window.maxMicrophoneManager.showToast('❌ Ошибка отправки голоса', 'error');
-            }
-        }
-
-        // Инициализация кнопки с удержанием
-        function initVoiceButton() {
-            const voiceBtn = document.getElementById('voiceRecordBtn');
-            if (!voiceBtn) return;
-            
-            let pressTimer = null;
-            let isPressing = false;
-            
-            function onPointerDown(e) {
-                e.preventDefault();
-                if (isPressing) return;
-                isPressing = true;
-                
-                voiceBtn.style.transform = 'scale(0.95)';
-                
-                pressTimer = setTimeout(async () => {
-                    if (isPressing) {
-                        const started = await window.startVoiceRecording();
-                        if (!started) {
-                            isPressing = false;
-                            voiceBtn.style.transform = '';
-                        }
-                    }
-                }, 120);
-            }
-            
-            function onPointerUp(e) {
-                e.preventDefault();
-                
-                if (pressTimer) {
-                    clearTimeout(pressTimer);
-                    pressTimer = null;
-                }
-                
-                if (window.voiceRecorder.isRecording) {
-                    window.stopVoiceRecording();
-                }
-                
-                isPressing = false;
-                voiceBtn.style.transform = '';
-            }
-            
-            function onPointerCancel(e) {
-                e.preventDefault();
-                if (pressTimer) {
-                    clearTimeout(pressTimer);
-                    pressTimer = null;
-                }
-                if (window.voiceRecorder.isRecording) {
-                    window.cancelVoiceRecording();
-                    window.maxMicrophoneManager.showToast('Запись отменена', 'info');
-                }
-                isPressing = false;
-                voiceBtn.style.transform = '';
-            }
-            
-            voiceBtn.addEventListener('pointerdown', onPointerDown);
-            voiceBtn.addEventListener('pointerup', onPointerUp);
-            voiceBtn.addEventListener('pointercancel', onPointerCancel);
-            voiceBtn.addEventListener('touchstart', (e) => { e.preventDefault(); }, { passive: false });
-            
-            console.log('🎤 Голосовая кнопка инициализирована (удержание для записи)');
-        }
-
+        window.microphoneManager = new MicrophoneManager();
+        
+        // Инициализация dashboard
         document.addEventListener('DOMContentLoaded', () => {
-            initVoiceButton();
-            
-            if (window.maxMicrophoneManager.isIOS) {
-                document.body.addEventListener('touchstart', () => {
-                    const AudioContext = window.AudioContext || window.webkitAudioContext;
-                    if (AudioContext) {
-                        const audioCtx = new AudioContext();
-                        if (audioCtx.state === 'suspended') audioCtx.resume();
-                    }
-                }, { once: true });
+            console.log('📄 DOM загружен, создаём FrediDashboard');
+            if (typeof FrediDashboard !== 'undefined') {
+                window.dashboard = new FrediDashboard();
+            } else {
+                console.error('❌ FrediDashboard не загружен!');
             }
         });
-
-        window.sendVoiceToServer = sendVoiceToServer;
-        window.showToast = window.maxMicrophoneManager.showToast.bind(window.maxMicrophoneManager);
-        
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js').catch(error => console.error('Service Worker error:', error));
-            });
-        }
     </script>
 </body>
 </html>
