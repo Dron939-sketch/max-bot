@@ -145,6 +145,108 @@ from services import generate_psychologist_thought
 from weekend_planner import WeekendPlanner
 
 # ============================================
+# 🔥🔥🔥 ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ ФАЙЛОВ МИНИ-ПРИЛОЖЕНИЯ 🔥🔥🔥
+# ============================================
+
+import subprocess
+
+def ensure_miniapp_files():
+    """Скачивает файлы мини-приложения при запуске"""
+    miniapp_path = os.path.join(os.path.dirname(__file__), 'miniapp')
+    os.makedirs(miniapp_path, exist_ok=True)
+    
+    # Только те файлы, которые реально существуют в репозитории
+    files = {
+        'index.html': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/index.html',
+        'styles.css': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/styles.css',
+        'script.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/script.js',
+        'app.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/app.js',
+        'context.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/context.js',
+        'onboarding.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/onboarding.js',
+        'test.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/test.js',
+        'api.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/api.js',
+        'dashboard.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/dashboard.js',
+        'animated-avatar.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/animated-avatar.js',
+        'challenges.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/challenges.js',
+        'notifications.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/notifications.js',
+        'psychometric.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/psychometric.js',
+        'psychometric.css': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/psychometric.css',
+        'dynamic-bg.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/dynamic-bg.js',
+        'animations.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/animations.js',
+        'service-worker.js': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/service-worker.js',
+        'manifest.json': 'https://raw.githubusercontent.com/Dron939-sketch/max-bot-miniapp/main/manifest.json'
+    }
+    
+    for filename, url in files.items():
+        filepath = os.path.join(miniapp_path, filename)
+        
+        # Проверяем, существует ли файл и не пустой ли он
+        if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+            print(f"✅ Файл {filename} уже существует ({os.path.getsize(filepath)} байт)")
+            continue
+        
+        try:
+            print(f"📥 Скачиваю {filename}...")
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            
+            with open(filepath, 'wb') as f:
+                f.write(response.content)
+            
+            print(f"✅ Скачан {filename} ({os.path.getsize(filepath)} байт)")
+        except Exception as e:
+            print(f"⚠️ Не удалось скачать {filename}: {e}")
+            # Создаем минимальную заглушку
+            if filename.endswith('.js'):
+                with open(filepath, 'w') as f:
+                    f.write(f"// {filename} - заглушка\nconsole.log('{filename} загружен (заглушка)');")
+                print(f"📄 Создан JS-заглушка {filename}")
+            elif filename.endswith('.css'):
+                with open(filepath, 'w') as f:
+                    f.write(f"/* {filename} - заглушка */")
+                print(f"📄 Создан CSS-заглушка {filename}")
+            elif filename.endswith('.html'):
+                with open(filepath, 'w') as f:
+                    f.write("""<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Фреди - Ваш психолог</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div id="app">
+        <div class="loading">Загрузка...</div>
+    </div>
+    <script src="/static/api.js"></script>
+    <script src="/static/dashboard.js"></script>
+    <script src="/static/script.js"></script>
+</body>
+</html>""")
+                print(f"📄 Создан HTML-заглушка {filename}")
+            elif filename.endswith('.json'):
+                with open(filepath, 'w') as f:
+                    f.write('{"name": "Фреди", "short_name": "Фреди", "start_url": "/", "display": "standalone"}')
+                print(f"📄 Создан JSON-заглушка {filename}")
+    
+    # Создаем папку для аудио
+    audio_path = os.path.join(miniapp_path, 'audio')
+    os.makedirs(audio_path, exist_ok=True)
+    print(f"✅ Папка audio создана")
+
+# Вызываем функцию загрузки файлов
+ensure_miniapp_files()
+
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# ============================================
 # ЭКЗЕМПЛЯР БОТА
 # ============================================
 
@@ -249,12 +351,9 @@ async def init_database():
         logger.info("✅ Подключение к PostgreSQL установлено")
         await ensure_db_connection()
         await load_all_users_from_db()
-        
-        # ⚠️ ВРЕМЕННО ОТКЛЮЧАЕМ ФОНОВЫЕ ЗАДАЧИ (конфликт циклов asyncio)
-        # setup_auto_save(interval_seconds=300)
-        # asyncio.create_task(periodic_save_to_db())
-        # asyncio.create_task(periodic_cleanup_db())
-        
+        setup_auto_save(interval_seconds=300)
+        asyncio.create_task(periodic_save_to_db())
+        asyncio.create_task(periodic_cleanup_db())
         logger.info("✅ База данных инициализирована")
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации БД: {e}")
@@ -3509,63 +3608,6 @@ async def force_load_user(request: Request):
             status_code=500,
             content={"success": False, "error": str(e)}
         )
-
-# ============================================
-# ЭНДПОИНТЫ ДЛЯ КОРНЕВЫХ ФАЙЛОВ (без /static/)
-# ============================================
-
-@api_app.get("/")
-async def serve_index():
-    index_path = os.path.join(MINIAPP_PATH, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path, media_type="text/html")
-    return JSONResponse(status_code=404, content={"error": "index.html not found"})
-
-
-@api_app.get("/styles.css")
-async def serve_styles():
-    path = os.path.join(MINIAPP_PATH, "styles.css")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="text/css")
-    return JSONResponse(status_code=404, content={"error": "styles.css not found"})
-
-
-@api_app.get("/{filename}.js")
-async def serve_js(filename: str):
-    path = os.path.join(MINIAPP_PATH, f"{filename}.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": f"{filename}.js not found"})
-
-
-@api_app.get("/manifest.json")
-async def serve_manifest():
-    path = os.path.join(MINIAPP_PATH, "manifest.json")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/manifest+json")
-    return JSONResponse(status_code=404, content={"error": "manifest.json not found"})
-
-
-@api_app.get("/service-worker.js")
-async def serve_service_worker():
-    path = os.path.join(MINIAPP_PATH, "service-worker.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "service-worker.js not found"})
-
-
-@api_app.get("/sw.js")
-async def serve_sw():
-    # Пробуем sw.js
-    path = os.path.join(MINIAPP_PATH, "sw.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    # Если нет, пробуем service-worker.js
-    alt_path = os.path.join(MINIAPP_PATH, "service-worker.js")
-    if os.path.exists(alt_path):
-        return FileResponse(alt_path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "sw.js not found"})
-
 
 if __name__ == "__main__":
     main()
