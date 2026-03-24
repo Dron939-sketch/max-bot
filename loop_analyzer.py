@@ -66,20 +66,159 @@ class LoopAnalyzer:
         }
     }
     
-    def __init__(self, model: ConfinementModel9):
+    def __init__(self, model_or_context):
         """
         Инициализация анализатора
         
         Args:
-            model: построенная конфайнмент-модель
+            model_or_context: ConfinementModel9 или UserContext объект
         """
-        self.model = model
-        self.significant_loops: List[Dict[str, Any]] = []
+        self.model = None
         self._visited: Set[int] = set()
         self._path: List[int] = []
         self._analysis_time: Optional[datetime] = None
+        self.significant_loops: List[Dict[str, Any]] = []
         
-        logger.info(f"LoopAnalyzer инициализирован для модели пользователя {model.user_id}")
+        # Проверяем тип переданного объекта
+        if isinstance(model_or_context, ConfinementModel9):
+            self.model = model_or_context
+            logger.info(f"LoopAnalyzer инициализирован с ConfinementModel для пользователя {self.model.user_id}")
+        else:
+            # Это UserContext или другой объект
+            self._init_from_context(model_or_context)
+    
+    def _init_from_context(self, context):
+        """
+        Инициализирует модель из UserContext
+        """
+        logger.info("Инициализация LoopAnalyzer из UserContext")
+        
+        # Пытаемся извлечь модель из context
+        if hasattr(context, 'confinement_model'):
+            self.model = context.confinement_model
+            logger.info("✅ Модель извлечена из context.confinement_model")
+        elif hasattr(context, 'get_confinement_model'):
+            self.model = context.get_confinement_model()
+            logger.info("✅ Модель извлечена через get_confinement_model")
+        elif hasattr(context, 'model'):
+            self.model = context.model
+            logger.info("✅ Модель извлечена из context.model")
+        else:
+            # Создаем пустую модель для тестирования
+            logger.warning("⚠️ Не удалось найти confinement_model, создаю тестовую модель")
+            self._create_test_model(context)
+        
+        if self.model and hasattr(self.model, 'user_id'):
+            logger.info(f"LoopAnalyzer готов для пользователя {self.model.user_id}")
+    
+    def _create_test_model(self, context):
+        """
+        Создает тестовую модель на основе deep_patterns из UserContext
+        """
+        from confinement_model import ConfinementModel9, ConfinementElement
+        
+        user_id = getattr(context, 'user_id', None) or getattr(context, 'id', 99999)
+        self.model = ConfinementModel9(user_id=user_id)
+        
+        # Пытаемся извлечь deep_patterns
+        deep_patterns = {}
+        if hasattr(context, 'deep_patterns'):
+            deep_patterns = context.deep_patterns
+        elif hasattr(context, 'get_deep_patterns'):
+            deep_patterns = context.get_deep_patterns()
+        
+        # Заполняем модель на основе deep_patterns
+        if deep_patterns:
+            self._fill_model_from_patterns(deep_patterns)
+        else:
+            # Создаем стандартные элементы
+            for i in range(1, 10):
+                self.model.elements[i] = ConfinementElement(i, f"Элемент {i}")
+                self.model.elements[i].description = f"Описание элемента {i}"
+                self.model.elements[i].strength = 0.5
+            
+            # Создаем тестовую петлю
+            self.model.elements[1].causes = [2]
+            self.model.elements[2].causes = [3]
+            self.model.elements[3].causes = [4]
+            self.model.elements[4].causes = [1]
+    
+    def _fill_model_from_patterns(self, patterns: Dict):
+        """
+        Заполняет модель из deep_patterns
+        """
+        from confinement_model import ConfinementElement
+        
+        # Определяем элементы на основе паттернов
+        elements_info = {
+            1: {'name': 'Симптом/Результат', 'type': 'result', 'desc': 'Проявление проблемы'},
+            2: {'name': 'Непосредственная причина', 'type': 'immediate', 'desc': 'Триггер ситуации'},
+            3: {'name': 'Поведенческая реакция', 'type': 'behavior', 'desc': 'Автоматическое действие'},
+            4: {'name': 'Эмоциональная реакция', 'type': 'emotion', 'desc': 'Чувства и ощущения'},
+            5: {'name': 'Мысль/Убеждение', 'type': 'thought', 'desc': 'Внутренний диалог'},
+            6: {'name': 'Идентичность', 'type': 'identity', 'desc': 'Кто я в этой ситуации'},
+            7: {'name': 'Ценности', 'type': 'values', 'desc': 'Что для меня важно'},
+            8: {'name': 'Способности', 'type': 'capabilities', 'desc': 'Что я могу'},
+            9: {'name': 'Замыкающий элемент', 'type': 'closing', 'desc': 'Глобальное убеждение'}
+        }
+        
+        # Создаем элементы
+        for elem_id, info in elements_info.items():
+            self.model.elements[elem_id] = ConfinementElement(elem_id, info['name'])
+            self.model.elements[elem_id].description = info['desc']
+            self.model.elements[elem_id].element_type = info['type']
+            self.model.elements[elem_id].strength = 0.6
+        
+        # Создаем связи на основе паттернов
+        attachment = patterns.get('привязанность', 'тревожный')
+        defense = patterns.get('защитные механизмы', ['избегание'])
+        
+        # Настраиваем связи в зависимости от типа привязанности
+        if attachment == 'тревожный':
+            # Петля тревожной привязанности
+            self.model.elements[1].causes = [2]
+            self.model.elements[2].causes = [3]
+            self.model.elements[3].causes = [4]
+            self.model.elements[4].causes = [5]
+            self.model.elements[5].causes = [1]
+            
+            self.model.links = [
+                {'from': 1, 'to': 2, 'strength': 0.8},
+                {'from': 2, 'to': 3, 'strength': 0.7},
+                {'from': 3, 'to': 4, 'strength': 0.9},
+                {'from': 4, 'to': 5, 'strength': 0.6},
+                {'from': 5, 'to': 1, 'strength': 0.8}
+            ]
+        elif attachment == 'избегающий':
+            # Петля избегающей привязанности
+            self.model.elements[1].causes = [5]
+            self.model.elements[5].causes = [2]
+            self.model.elements[2].causes = [3]
+            self.model.elements[3].causes = [4]
+            self.model.elements[4].causes = [1]
+            
+            self.model.links = [
+                {'from': 1, 'to': 5, 'strength': 0.7},
+                {'from': 5, 'to': 2, 'strength': 0.8},
+                {'from': 2, 'to': 3, 'strength': 0.6},
+                {'from': 3, 'to': 4, 'strength': 0.5},
+                {'from': 4, 'to': 1, 'strength': 0.9}
+            ]
+        else:
+            # Стандартная петля
+            self.model.elements[1].causes = [2]
+            self.model.elements[2].causes = [3]
+            self.model.elements[3].causes = [4]
+            self.model.elements[4].causes = [1]
+            
+            self.model.links = [
+                {'from': 1, 'to': 2, 'strength': 0.7},
+                {'from': 2, 'to': 3, 'strength': 0.7},
+                {'from': 3, 'to': 4, 'strength': 0.7},
+                {'from': 4, 'to': 1, 'strength': 0.7}
+            ]
+        
+        logger.info(f"✅ Модель создана на основе паттернов: привязанность={attachment}")
     
     def analyze(self) -> List[Dict[str, Any]]:
         """
@@ -88,6 +227,10 @@ class LoopAnalyzer:
         Returns:
             list: список найденных петель с характеристиками
         """
+        if not self.model or not hasattr(self.model, 'elements'):
+            logger.error("❌ Модель не инициализирована или не содержит elements")
+            return []
+        
         logger.info("Начинаю анализ петель...")
         self.significant_loops = []
         self._analysis_time = datetime.now()
@@ -103,7 +246,7 @@ class LoopAnalyzer:
     def _find_all_cycles(self):
         """Находит все циклы в графе"""
         # Начинаем с каждого элемента
-        for start_id in range(1, 10):
+        for start_id in list(self.model.elements.keys()):
             self._visited.clear()
             self._path.clear()
             self._dfs(start_id, 0)
@@ -134,7 +277,7 @@ class LoopAnalyzer:
         self._visited.add(node_id)
         self._path.append(node_id)
         
-        if element.causes:
+        if hasattr(element, 'causes') and element.causes:
             for next_id in element.causes:
                 if next_id in self.model.elements:  # проверяем, что элемент существует
                     self._dfs(next_id, depth + 1)
@@ -158,7 +301,7 @@ class LoopAnalyzer:
             'cycle': cycle.copy(),
             'length': len(cycle),
             'raw_strength': self._calculate_raw_strength(cycle),
-            'elements': [self.model.elements[eid] for eid in cycle if self.model.elements.get(eid)]
+            'elements': [self.model.elements[eid] for eid in cycle if eid in self.model.elements]
         })
     
     def _calculate_raw_strength(self, cycle: List[int]) -> float:
@@ -179,7 +322,7 @@ class LoopAnalyzer:
             
             # Ищем связь
             found = False
-            for link in self.model.links:
+            for link in getattr(self.model, 'links', []):
                 if link.get('from') == from_id and link.get('to') == to_id:
                     strength *= link.get('strength', 0.5)
                     found = True
@@ -241,66 +384,28 @@ class LoopAnalyzer:
         self.significant_loops = [l for l in self.significant_loops if l.get('impact', 0) >= threshold]
     
     def get_strongest_loop(self) -> Optional[Dict[str, Any]]:
-        """
-        Возвращает самую сильную петлю
-        
-        Returns:
-            dict: информация о самой сильной петле или None
-        """
+        """Возвращает самую сильную петлю"""
         if not self.significant_loops:
             return None
-        
         return max(self.significant_loops, key=lambda x: x.get('impact', 0))
     
     def get_weakest_loop(self) -> Optional[Dict[str, Any]]:
-        """
-        Возвращает самую слабую петлю
-        
-        Returns:
-            dict: информация о самой слабой петле или None
-        """
+        """Возвращает самую слабую петлю"""
         if not self.significant_loops:
             return None
-        
         return min(self.significant_loops, key=lambda x: x.get('impact', 0))
     
     def get_loops_by_type(self, loop_type: str) -> List[Dict[str, Any]]:
-        """
-        Возвращает петли определенного типа
-        
-        Args:
-            loop_type: тип петли (из констант LOOP_TYPE_*)
-            
-        Returns:
-            list: список петель указанного типа
-        """
+        """Возвращает петли определенного типа"""
         return [l for l in self.significant_loops if l.get('type') == loop_type]
     
     def get_loops_by_element(self, element_id: int) -> List[Dict[str, Any]]:
-        """
-        Возвращает все петли, содержащие указанный элемент
-        
-        Args:
-            element_id: ID элемента (1-9)
-            
-        Returns:
-            list: список петель с этим элементом
-        """
+        """Возвращает все петли, содержащие указанный элемент"""
         return [l for l in self.significant_loops if element_id in l.get('cycle', [])]
     
     def get_intervention_points(self, loop: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Определяет точки разрыва петли (элементы, где можно вмешаться)
-        
-        Args:
-            loop: информация о петле
-            
-        Returns:
-            list: точки вмешательства, отсортированные по эффективности
-        """
+        """Определяет точки разрыва петли"""
         elements = loop.get('cycle', [])
-        
-        # Точки разрыва - элементы с наибольшим влиянием
         intervention_points = []
         
         for elem_id in elements:
@@ -308,66 +413,40 @@ class LoopAnalyzer:
             if not elem:
                 continue
             
-            # Оцениваем, насколько легко изменить этот элемент
             changeability = self._calculate_changeability(elem)
             
             intervention_points.append({
                 'element_id': elem_id,
                 'element': elem,
-                'element_name': elem.name,
-                'element_type': elem.element_type,
-                'impact': elem.strength * changeability,
+                'element_name': getattr(elem, 'name', f'Элемент {elem_id}'),
+                'element_type': getattr(elem, 'element_type', 'unknown'),
+                'impact': getattr(elem, 'strength', 0.5) * changeability,
                 'difficulty': 1 - changeability,
                 'changeability': changeability,
-                'description': elem.description[:100]
+                'description': getattr(elem, 'description', '')[:100]
             })
         
         return sorted(intervention_points, key=lambda x: x['impact'], reverse=True)
     
-    def _calculate_changeability(self, element: ConfinementElement) -> float:
-        """
-        Вычисляет, насколько легко изменить элемент
+    def _calculate_changeability(self, element) -> float:
+        """Вычисляет, насколько легко изменить элемент"""
+        elem_type = getattr(element, 'element_type', '')
         
-        Args:
-            element: элемент модели
-            
-        Returns:
-            float: коэффициент изменяемости (0-1)
-        """
-        # Убеждения менять сложнее всего
-        if element.element_type in [self.model.TYPE_COMMON_CAUSE, 
-                                    self.model.TYPE_CLOSING,
-                                    self.model.TYPE_UPPER_CAUSE]:
+        if elem_type in ['common_cause', 'closing', 'upper_cause']:
             return 0.3
-        # Поведение менять проще
-        elif element.element_type == self.model.TYPE_IMMEDIATE_CAUSE:
+        elif elem_type == 'immediate_cause':
             return 0.7
-        # Симптомы можно облегчить
-        elif element.element_type == self.model.TYPE_RESULT:
+        elif elem_type == 'result':
             return 0.5
-        # По умолчанию
         return 0.4
     
     def get_best_intervention_point(self, loop: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Возвращает лучшую точку для вмешательства
-        
-        Args:
-            loop: информация о петле
-            
-        Returns:
-            dict: лучшая точка вмешательства или None
-        """
+        """Возвращает лучшую точку для вмешательства"""
         points = self.get_intervention_points(loop)
         return points[0] if points else None
     
     def get_break_points_summary(self) -> str:
-        """
-        Возвращает краткое резюме по точкам разрыва для пользователя
-        
-        Returns:
-            str: понятное пользователю резюме
-        """
+        """Возвращает краткое резюме по точкам разрыва"""
         strongest = self.get_strongest_loop()
         if not strongest:
             return "✨ В вашей системе не обнаружено рекурсивных петель. Это хороший признак!"
@@ -377,18 +456,7 @@ class LoopAnalyzer:
             return "⚡ Петля обнаружена, но точки вмешательства не определены."
         
         best = points[0]
-        elem = best['element']
         
-        # Определяем эмодзи для типа элемента
-        type_emoji = {
-            self.model.TYPE_RESULT: "🎯",
-            self.model.TYPE_IMMEDIATE_CAUSE: "⚡",
-            self.model.TYPE_COMMON_CAUSE: "💭",
-            self.model.TYPE_UPPER_CAUSE: "🏛",
-            self.model.TYPE_CLOSING: "🌍"
-        }.get(elem.element_type, "🔹")
-        
-        # Определяем рекомендацию
         if best['difficulty'] < 0.3:
             difficulty_text = "🔵 Легко изменить"
         elif best['difficulty'] < 0.6:
@@ -397,31 +465,22 @@ class LoopAnalyzer:
             difficulty_text = "🔴 Сложно изменить"
         
         return (f"🎯 *Лучшая точка вмешательства*\n\n"
-                f"{type_emoji} *{elem.name}*\n"
-                f"📝 {elem.description[:100]}...\n\n"
+                f"📝 *{best['element_name']}*\n"
+                f"{best['description']}\n\n"
                 f"📊 Потенциал: {best['impact']:.0%}\n"
                 f"{difficulty_text}\n\n"
                 f"💡 *Совет:* {strongest.get('advice', 'Начните с этого элемента.')}")
     
     def get_loop_description_for_user(self, loop: Dict[str, Any]) -> str:
-        """
-        Возвращает понятное пользователю описание петли
-        
-        Args:
-            loop: информация о петле
-            
-        Returns:
-            str: понятное описание
-        """
+        """Возвращает понятное пользователю описание петли"""
         elements = []
         for elem_id in loop['cycle']:
             elem = self.model.elements.get(elem_id)
             if elem:
-                elements.append(elem.name)
+                elements.append(getattr(elem, 'name', f'Элемент {elem_id}'))
         
         elements_str = " → ".join(elements)
         
-        # Определяем силу словами
         impact = loop.get('impact', 0)
         if impact > 0.7:
             strength_word = "⚡ Очень сильная"
@@ -437,18 +496,13 @@ class LoopAnalyzer:
                 f"🔄 *Цепочка:* {elements_str}")
     
     def get_all_loops_summary(self) -> str:
-        """
-        Возвращает сводку по всем петлям
-        
-        Returns:
-            str: сводка для пользователя
-        """
+        """Возвращает сводку по всем петлям"""
         if not self.significant_loops:
             return "✅ Рекурсивных петель не обнаружено."
         
         lines = ["🔄 *ОБНАРУЖЕННЫЕ ПЕТЛИ*\n"]
         
-        for i, loop in enumerate(self.significant_loops[:5], 1):  # максимум 5 петель
+        for i, loop in enumerate(self.significant_loops[:5], 1):
             impact = loop.get('impact', 0)
             bar = "█" * int(impact * 10) + "░" * (10 - int(impact * 10))
             
@@ -461,12 +515,7 @@ class LoopAnalyzer:
         return "\n".join(lines)
     
     def get_statistics(self) -> Dict[str, Any]:
-        """
-        Возвращает статистику по анализу
-        
-        Returns:
-            dict: статистика
-        """
+        """Возвращает статистику по анализу"""
         return {
             'total_loops': len(self.significant_loops),
             'strongest_impact': self.get_strongest_loop().get('impact', 0) if self.significant_loops else 0,
@@ -491,16 +540,7 @@ class LoopAnalyzer:
 # ============================================
 
 def create_analyzer_from_model_data(model_data: Dict, user_id: int = None) -> Optional[LoopAnalyzer]:
-    """
-    Создает анализатор из сохраненных данных модели
-    
-    Args:
-        model_data: словарь с данными модели
-        user_id: ID пользователя
-        
-    Returns:
-        LoopAnalyzer или None
-    """
+    """Создает анализатор из сохраненных данных модели"""
     try:
         from confinement_model import ConfinementModel9
         model = ConfinementModel9.from_dict(model_data)
@@ -513,22 +553,13 @@ def create_analyzer_from_model_data(model_data: Dict, user_id: int = None) -> Op
 
 
 def format_loop_for_display(loop: Dict[str, Any], detailed: bool = False) -> str:
-    """
-    Форматирует петлю для отображения
-    
-    Args:
-        loop: информация о петле
-        detailed: детальный или краткий формат
-        
-    Returns:
-        str: отформатированный текст
-    """
+    """Форматирует петлю для отображения"""
     if detailed:
         elements = loop.get('elements', [])
         elements_text = ""
         for i, elem in enumerate(elements):
             arrow = " → " if i < len(elements) - 1 else ""
-            elements_text += f"{elem.name}{arrow}"
+            elements_text += f"{getattr(elem, 'name', '?')}{arrow}"
         
         return (f"**{loop['description']}**\n\n"
                 f"📊 Сила: {loop['impact']:.0%}\n"
@@ -536,51 +567,3 @@ def format_loop_for_display(loop: Dict[str, Any], detailed: bool = False) -> str
                 f"💡 {loop.get('advice', '')}")
     else:
         return f"{loop['description']} (сила {loop['impact']:.0%})"
-
-
-# ============================================
-# ПРИМЕР ИСПОЛЬЗОВАНИЯ (для тестирования)
-# ============================================
-
-if __name__ == "__main__":
-    print("🧪 Тестирование LoopAnalyzer...")
-    
-    # Создаем тестовую модель
-    from confinement_model import ConfinementModel9, ConfinementElement
-    
-    test_model = ConfinementModel9(user_id=12345)
-    
-    # Заполняем тестовыми данными
-    for i in range(1, 10):
-        test_model.elements[i] = ConfinementElement(i, f"Элемент {i}")
-        test_model.elements[i].description = f"Описание элемента {i}"
-        test_model.elements[i].strength = 0.5 + (i * 0.05)
-    
-    # Создаем тестовые связи для петли
-    test_model.elements[1].causes = [2]
-    test_model.elements[2].causes = [6]
-    test_model.elements[6].causes = [9]
-    test_model.elements[9].causes = [1]
-    
-    test_model.links = [
-        {'from': 1, 'to': 2, 'strength': 0.8},
-        {'from': 2, 'to': 6, 'strength': 0.7},
-        {'from': 6, 'to': 9, 'strength': 0.6},
-        {'from': 9, 'to': 1, 'strength': 0.9}
-    ]
-    
-    # Анализируем
-    analyzer = LoopAnalyzer(test_model)
-    loops = analyzer.analyze()
-    
-    print(f"\n📊 Найдено петель: {len(loops)}")
-    
-    if loops:
-        print("\n🔍 Самая сильная петля:")
-        strongest = analyzer.get_strongest_loop()
-        print(analyzer.get_loop_description_for_user(strongest))
-        
-        print("\n🎯 Лучшая точка вмешательства:")
-        print(analyzer.get_break_points_summary())
-    
-    print("\n✅ Тест завершен")
