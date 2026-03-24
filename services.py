@@ -1212,6 +1212,92 @@ async def generate_suggestions(question: str, answer: str, profile_code: str, mo
         "Какие есть варианты?"
     ]
 
+# ============================================
+# ФУНКЦИИ ДЛЯ СОХРАНЕНИЯ В БД
+# ============================================
+
+async def save_generated_content_to_db(
+    user_id: int,
+    thought_text: str,
+    thought_type: str,
+    data: dict,
+    test_result_id: int = None
+) -> Optional[int]:
+    """
+    Сохраняет сгенерированный контент в БД
+    """
+    try:
+        from db_sync import sync_db
+        
+        if test_result_id is None:
+            test_result_id = data.get('last_test_result_id')
+        
+        # Формируем метаданные
+        metadata = {
+            'profile_code': data.get('profile_data', {}).get('display_name'),
+            'perception_type': data.get('perception_type'),
+            'thinking_level': data.get('thinking_level'),
+            'generation_time': datetime.now().isoformat(),
+            'model': 'deepseek'
+        }
+        
+        # Сохраняем
+        content_id = sync_db.save_psychologist_thought(
+            user_id=user_id,
+            thought_text=thought_text,
+            test_result_id=test_result_id,
+            thought_type=thought_type,
+            metadata=metadata
+        )
+        
+        if content_id:
+            logger.info(f"💾 Контент сохранен: user={user_id}, type={thought_type}, id={content_id}")
+            return content_id
+        else:
+            logger.warning(f"⚠️ Не удалось сохранить контент: user={user_id}, type={thought_type}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения контента: {e}")
+        traceback.print_exc()
+        return None
+
+
+# Модифицированная версия generate_psychologist_thought с сохранением
+async def generate_psychologist_thought_with_save(user_id: int, data: dict) -> Optional[str]:
+    """
+    Генерирует мысли психолога и сохраняет в БД
+    """
+    thought = await generate_psychologist_thought(user_id, data)
+    
+    if thought:
+        await save_generated_content_to_db(
+            user_id=user_id,
+            thought_text=thought,
+            thought_type='psychologist_thought',
+            data=data
+        )
+    
+    return thought
+
+
+# Модифицированная версия generate_ai_profile с сохранением
+async def generate_ai_profile_with_save(user_id: int, data: dict) -> Optional[str]:
+    """
+    Генерирует AI-профиль и сохраняет в БД
+    """
+    profile = await generate_ai_profile(user_id, data)
+    
+    if profile:
+        await save_generated_content_to_db(
+            user_id=user_id,
+            thought_text=profile,
+            thought_type='profile_description',
+            data=data
+        )
+    
+    return profile
+
 
 # ============================================
 # ЭКСПОРТ
