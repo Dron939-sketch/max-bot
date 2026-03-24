@@ -675,7 +675,7 @@ def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_
 
 async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
     """
-    Асинхронная версия сохранения результатов теста
+    Асинхронная версия сохранения результатов теста (простая версия)
     """
     try:
         # Проверяем соединение с повторными попытками
@@ -748,7 +748,7 @@ async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
 
 def save_test_result_to_db(user_id, test_type, user_data_dict=None):
     """
-    Синхронная обертка для сохранения результатов теста
+    Синхронная обертка для сохранения результатов теста (простая версия)
     """
     try:
         result = db_loop_manager.run_coro(
@@ -765,6 +765,138 @@ def save_test_result_to_db(user_id, test_type, user_data_dict=None):
 
 
 # ============================================
+# НОВАЯ ФУНКЦИЯ ДЛЯ СОХРАНЕНИЯ РЕЗУЛЬТАТОВ С ПОЛНЫМИ ПАРАМЕТРАМИ
+# ============================================
+
+async def save_test_result_full_async(
+    user_id: int,
+    test_type: str,
+    results: Dict,
+    profile_code: str = None,
+    perception_type: str = None,
+    thinking_level: int = None,
+    vectors: Dict = None,
+    deep_patterns: Dict = None,
+    confinement_model: Dict = None
+) -> Optional[int]:
+    """
+    Асинхронная версия сохранения результатов теста с полными параметрами
+    Принимает 9 параметров для совместимости с db_sync.py
+    """
+    try:
+        # Проверяем соединение с повторными попытками
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения результатов {user_id}")
+            return None
+        
+        # Если vectors не передан, но есть behavioral_levels в results
+        if vectors is None and results.get("behavioral_levels"):
+            vectors = results.get("behavioral_levels")
+        
+        # Если profile_code не передан, пытаемся извлечь из results
+        if profile_code is None:
+            if results.get("profile_data"):
+                profile_code = results["profile_data"].get("display_name")
+            elif results.get("ai_generated_profile"):
+                import re
+                match = re.search(r'СБ-\d+_ТФ-\d+_УБ-\d+_ЧВ-\d+', results.get("ai_generated_profile", ""))
+                if match:
+                    profile_code = match.group(0)
+        
+        # Если perception_type не передан, берем из results
+        if perception_type is None:
+            perception_type = results.get("perception_type")
+        
+        # Если thinking_level не передан, берем из results
+        if thinking_level is None:
+            thinking_level = results.get("thinking_level")
+        
+        # Если deep_patterns не передан, берем из results
+        if deep_patterns is None:
+            deep_patterns = results.get("deep_patterns")
+        
+        # Если confinement_model не передан, берем из results
+        if confinement_model is None:
+            confinement_model = results.get("confinement_model")
+        
+        # Сохраняем результат теста
+        test_id = await db.save_test_result(
+            user_id=user_id,
+            test_type=test_type,
+            results=results,
+            profile_code=profile_code,
+            perception_type=perception_type,
+            thinking_level=thinking_level,
+            vectors=vectors,
+            deep_patterns=deep_patterns,
+            confinement_model=confinement_model
+        )
+        
+        # Сохраняем все ответы, если есть
+        all_answers = results.get("all_answers", [])
+        if all_answers and test_id:
+            for answer in all_answers:
+                await db.save_test_answer(
+                    user_id=user_id,
+                    test_result_id=test_id,
+                    stage=answer.get('stage', 0),
+                    question_index=answer.get('question_index', 0),
+                    question_text=answer.get('question', ''),
+                    answer_text=answer.get('answer', ''),
+                    answer_value=answer.get('option', ''),
+                    scores=answer.get('scores'),
+                    measures=answer.get('measures'),
+                    strategy=answer.get('strategy'),
+                    dilts=answer.get('dilts'),
+                    pattern=answer.get('pattern'),
+                    target=answer.get('target')
+                )
+        
+        logger.info(f"📝 Результаты теста для пользователя {user_id} сохранены (ID: {test_id})")
+        return test_id
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения результатов теста для {user_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def save_test_result_to_db_full(
+    user_id: int,
+    test_type: str,
+    results: Dict,
+    profile_code: str = None,
+    perception_type: str = None,
+    thinking_level: int = None,
+    vectors: Dict = None,
+    deep_patterns: Dict = None,
+    confinement_model: Dict = None
+) -> Optional[int]:
+    """
+    Синхронная обертка для сохранения результатов теста с полными параметрами
+    """
+    try:
+        result = db_loop_manager.run_coro(
+            save_test_result_full_async,
+            user_id,
+            test_type,
+            results,
+            profile_code,
+            perception_type,
+            thinking_level,
+            vectors,
+            deep_patterns,
+            confinement_model,
+            timeout=30
+        )
+        return result if result is not None else None
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_test_result_to_db_full: {e}")
+        return None
+
+
+# ============================================
 # ЭКСПОРТ
 # ============================================
 
@@ -777,6 +909,7 @@ __all__ = [
     'save_user',  # алиас
     'save_user_to_db',
     'save_test_result_to_db',
+    'save_test_result_to_db_full',  # новая функция с полными параметрами
     'log_event',
     'ensure_db_connection',
     'execute_with_retry',
