@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ ДЛЯ PYTHON 3.11 - ИСПРАВЛЕНО: единый цикл событий + save_telegram_user + close_db + retry + log_event
+ВЕРСИЯ ДЛЯ PYTHON 3.11 - ПОЛНАЯ ВЕРСИЯ С ВСЕМИ ФУНКЦИЯМИ
 """
 
 import os
@@ -392,7 +392,6 @@ def save_telegram_user(
         return False
 
 
-# ✅ ФУНКЦИЯ save_user - АЛИАС ДЛЯ СОВМЕСТИМОСТИ
 def save_user(
     user_id: int,
     username: str = None,
@@ -402,25 +401,10 @@ def save_user(
 ) -> bool:
     """
     Алиас для save_telegram_user (для совместимости с другими модулями)
-    Используется в handlers/goals.py и других модулях
     """
     return save_telegram_user(user_id, username, first_name, last_name, language_code)
 
 
-async def save_user_async(
-    user_id: int,
-    username: str = None,
-    first_name: str = None,
-    last_name: str = None,
-    language_code: str = None
-) -> bool:
-    """
-    Асинхронный алиас для save_telegram_user_async
-    """
-    return await save_telegram_user_async(user_id, username, first_name, last_name, language_code)
-
-
-# ✅ ФУНКЦИЯ log_event_async И log_event
 async def log_event_async(user_id: int, event_type: str, event_data: Dict = None) -> bool:
     """Асинхронная версия логирования"""
     try:
@@ -447,6 +431,161 @@ def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
         return result if result is not None else False
     except Exception as e:
         logger.error(f"❌ Ошибка log_event: {e}")
+        return False
+
+
+# ============================================
+# ФУНКЦИИ ДЛЯ РАБОТЫ С ДАННЫМИ ПОЛЬЗОВАТЕЛЯ
+# ============================================
+
+async def save_user_data_async(user_id: int, data: Dict[str, Any]) -> bool:
+    """Асинхронное сохранение данных пользователя"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения данных пользователя {user_id}")
+            return False
+        
+        result = await db.save_user_data(user_id, data)
+        logger.debug(f"💾 Данные пользователя {user_id} сохранены в БД")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения данных пользователя {user_id}: {e}")
+        return False
+
+
+def save_user_data(user_id: int, data: Dict[str, Any]) -> bool:
+    """Синхронная обертка для сохранения данных пользователя"""
+    try:
+        result = db_loop_manager.run_coro(
+            save_user_data_async,
+            user_id,
+            data,
+            timeout=30
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_user_data: {e}")
+        return False
+
+
+async def get_user_data_async(user_id: int) -> Optional[Dict[str, Any]]:
+    """Асинхронное получение данных пользователя"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для получения данных пользователя {user_id}")
+            return None
+        
+        data = await db.get_user_data(user_id)
+        return data
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения данных пользователя {user_id}: {e}")
+        return None
+
+
+def get_user_data(user_id: int) -> Optional[Dict[str, Any]]:
+    """Синхронная обертка для получения данных пользователя"""
+    try:
+        result = db_loop_manager.run_coro(
+            get_user_data_async,
+            user_id,
+            timeout=10
+        )
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_user_data: {e}")
+        return None
+
+
+async def save_user_context_async(user_id: int, context: Dict[str, Any]) -> bool:
+    """Асинхронное сохранение контекста пользователя"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения контекста пользователя {user_id}")
+            return False
+        
+        result = await db.save_user_context(user_id, context)
+        logger.debug(f"💾 Контекст пользователя {user_id} сохранен в БД")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения контекста пользователя {user_id}: {e}")
+        return False
+
+
+def save_user_context(user_id: int, context: Dict[str, Any]) -> bool:
+    """Синхронная обертка для сохранения контекста пользователя"""
+    try:
+        result = db_loop_manager.run_coro(
+            save_user_context_async,
+            user_id,
+            context,
+            timeout=30
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_user_context: {e}")
+        return False
+
+
+async def get_user_context_async(user_id: int) -> Optional[Dict[str, Any]]:
+    """Асинхронное получение контекста пользователя"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для получения контекста пользователя {user_id}")
+            return None
+        
+        context = await db.get_user_context(user_id)
+        return context
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения контекста пользователя {user_id}: {e}")
+        return None
+
+
+def get_user_context(user_id: int) -> Optional[Dict[str, Any]]:
+    """Синхронная обертка для получения контекста пользователя"""
+    try:
+        result = db_loop_manager.run_coro(
+            get_user_context_async,
+            user_id,
+            timeout=10
+        )
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_user_context: {e}")
+        return None
+
+
+async def save_route_data_async(user_id: int, route_data: Dict[str, Any]) -> bool:
+    """Асинхронное сохранение маршрута пользователя"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения маршрута пользователя {user_id}")
+            return False
+        
+        result = await db.save_user_route(
+            user_id=user_id,
+            route_data=route_data,
+            current_step=route_data.get('current_step', 1),
+            progress=route_data.get('progress', [])
+        )
+        logger.debug(f"💾 Маршрут пользователя {user_id} сохранен в БД")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения маршрута пользователя {user_id}: {e}")
+        return False
+
+
+def save_route_data(user_id: int, route_data: Dict[str, Any]) -> bool:
+    """Синхронная обертка для сохранения маршрута пользователя"""
+    try:
+        result = db_loop_manager.run_coro(
+            save_route_data_async,
+            user_id,
+            route_data,
+            timeout=30
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_route_data: {e}")
         return False
 
 
@@ -635,13 +774,19 @@ __all__ = [
     'init_db',
     'close_db',
     'save_telegram_user',
-    'save_user',  # ✅ ДОБАВЛЕН АЛИАС
+    'save_user',  # алиас
     'save_user_to_db',
     'save_test_result_to_db',
     'log_event',
     'ensure_db_connection',
     'execute_with_retry',
-    'sync_db_call'
+    'sync_db_call',
+    # Функции для работы с данными
+    'save_user_data',
+    'get_user_data',
+    'save_user_context',
+    'get_user_context',
+    'save_route_data'
 ]
 
 logger.info("✅ db_instance инициализирован")
