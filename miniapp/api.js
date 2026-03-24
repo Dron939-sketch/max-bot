@@ -1,14 +1,33 @@
 // ============================================
 // API КЛАСС ДЛЯ РАБОТЫ С СЕРВЕРОМ
-// Версия 2.1 - добавлены методы для новых модулей
+// Версия 2.2 - добавлена поддержка разных доменов и автоконфигурация
 // ============================================
 
 class FrediAPI {
-    constructor() {
-        this.baseUrl = '';
+    constructor(baseUrl = null) {
+        // Автоматическое определение базового URL
+        if (baseUrl) {
+            this.baseUrl = baseUrl;
+        } else if (window.API_BASE_URL) {
+            // Если задана глобальная переменная
+            this.baseUrl = window.API_BASE_URL;
+        } else {
+            // По умолчанию - пустая строка (относительные запросы)
+            this.baseUrl = '';
+        }
+        
         this.userId = null;
         this.cache = new Map();
         this.cacheTTL = 5 * 60 * 1000; // 5 минут кэш
+        
+        console.log('📡 FrediAPI инициализирован');
+        console.log('   baseUrl:', this.baseUrl || '(текущий домен)');
+    }
+    
+    // Установить базовый URL (можно изменить в любой момент)
+    setBaseUrl(url) {
+        this.baseUrl = url;
+        console.log('📡 API baseUrl изменён на:', url || '(текущий домен)');
     }
     
     setUserId(userId) {
@@ -16,7 +35,16 @@ class FrediAPI {
     }
     
     async request(endpoint, options = {}) {
-        const url = `${this.baseUrl}${endpoint}`;
+        // Формируем полный URL
+        let url;
+        if (this.baseUrl) {
+            // Если baseUrl указан, используем его
+            url = `${this.baseUrl}${endpoint}`;
+        } else {
+            // Иначе используем относительный путь
+            url = endpoint;
+        }
+        
         const headers = {
             'Content-Type': 'application/json',
             ...options.headers
@@ -28,6 +56,7 @@ class FrediAPI {
         };
         
         try {
+            console.log(`📡 API ${options.method || 'GET'} ${url}`);
             const response = await fetch(url, config);
             const data = await response.json();
             
@@ -182,7 +211,7 @@ class FrediAPI {
         formData.append('voice', audioBlob, 'voice.webm');
         
         try {
-            const response = await fetch('/api/voice/process', {
+            const response = await fetch(`${this.baseUrl}/api/voice/process`, {
                 method: 'POST',
                 body: formData
             });
@@ -405,7 +434,10 @@ class FrediAPI {
     }
 }
 
-// Глобальный экземпляр API
-window.api = new FrediAPI();
-
-console.log('✅ API модуль загружен');
+// Глобальный экземпляр API - будет создан после настройки baseUrl
+// ВАЖНО: В HTML перед загрузкой этого файла задайте window.API_BASE_URL
+if (typeof window !== 'undefined') {
+    // Если window.API_BASE_URL уже задан, создаём экземпляр сразу
+    window.api = new FrediAPI();
+    console.log('✅ API модуль загружен');
+}
