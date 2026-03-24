@@ -48,21 +48,18 @@
                         const webAppData = decodeURIComponent(webAppDataMatch[1]);
                         console.log('📦 [SUPER] WebAppData получен');
                         
-                        // Поиск chat_id (основной ID пользователя)
                         const chatIdMatch = webAppData.match(/chat%3D%257B%2522id%2522%253A(\d+)/);
                         if (chatIdMatch) {
                             console.log('✅ [SUPER] CHAT_ID из hash:', chatIdMatch[1]);
                             localStorage.setItem('fredi_user_id', chatIdMatch[1]);
                         }
                         
-                        // Поиск user_id (если chat_id не найден)
                         const userIdMatch = webAppData.match(/user%3D%257B%2522id%2522%253A(\d+)/);
                         if (userIdMatch && !localStorage.getItem('fredi_user_id')) {
                             console.log('✅ [SUPER] USER_ID из hash:', userIdMatch[1]);
                             localStorage.setItem('fredi_user_id', userIdMatch[1]);
                         }
                         
-                        // Сохраняем имя пользователя
                         const nameMatch = webAppData.match(/first_name%22%3A%22([^%]+)/);
                         if (nameMatch) {
                             const firstName = decodeURIComponent(nameMatch[1]);
@@ -70,7 +67,6 @@
                             localStorage.setItem('userName', firstName);
                         }
                         
-                        // Убираем hash из URL, чтобы он не мешал
                         if (window.history && window.history.replaceState) {
                             window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
                             console.log('🔄 [SUPER] Hash удален из URL');
@@ -88,18 +84,15 @@
         async function getUserIdFromMax() {
             console.log('🔍 [SUPER] Получение user_id...');
             
-            // ПРИОРИТЕТ 1: из localStorage (сохраненный ранее)
             const savedUserId = localStorage.getItem('fredi_user_id');
             if (savedUserId && savedUserId !== 'null' && !savedUserId.startsWith('test_') && !isNaN(parseInt(savedUserId))) {
                 console.log('✅ [SUPER] user_id из localStorage:', savedUserId);
                 return parseInt(savedUserId);
             }
             
-            // ПРИОРИТЕТ 2: из MAX.WebApp (мобильная версия)
             if (window.MAX && window.MAX.WebApp) {
                 console.log('🔄 [SUPER] Пробуем MAX.WebApp...');
                 
-                // getUser() - асинхронный метод
                 if (window.MAX.WebApp.getUser) {
                     try {
                         const user = await window.MAX.WebApp.getUser();
@@ -113,7 +106,6 @@
                     }
                 }
                 
-                // initDataUnsafe - синхронный
                 if (window.MAX.WebApp.initDataUnsafe) {
                     const initData = window.MAX.WebApp.initDataUnsafe;
                     console.log('📦 [SUPER] initDataUnsafe:', initData);
@@ -131,7 +123,6 @@
                 }
             }
             
-            // ПРИОРИТЕТ 3: из URL параметров
             const urlParams = new URLSearchParams(window.location.search);
             const urlUserId = urlParams.get('user_id') || urlParams.get('userId') || urlParams.get('uid');
             if (urlUserId && !isNaN(parseInt(urlUserId))) {
@@ -140,7 +131,6 @@
                 return parseInt(urlUserId);
             }
             
-            // ПРИОРИТЕТ 4: режим отладки (для разработки)
             const isDebug = urlParams.get('debug') === '1';
             if (isDebug) {
                 const debugId = parseInt(urlParams.get('user_id') || '213102077');
@@ -148,7 +138,6 @@
                 return debugId;
             }
             
-            // ПРИОРИТЕТ 5: если есть имя в localStorage, используем временный ID (только для разработки)
             const savedName = localStorage.getItem('userName');
             const isLocalhost = window.location.hostname === 'localhost' || 
                                window.location.hostname === '127.0.0.1' ||
@@ -169,14 +158,12 @@
         // 3. ПОЛУЧЕНИЕ ИМЕНИ ПОЛЬЗОВАТЕЛЯ
         // ============================================
         async function getUserNameFromMax() {
-            // ПРИОРИТЕТ 1: из localStorage
             const savedName = localStorage.getItem('userName');
             if (savedName && savedName !== 'Друг') {
                 console.log('✅ [SUPER] Имя из localStorage:', savedName);
                 return savedName;
             }
             
-            // ПРИОРИТЕТ 2: из MAX.WebApp
             if (window.MAX && window.MAX.WebApp) {
                 if (window.MAX.WebApp.getUser) {
                     try {
@@ -197,7 +184,6 @@
                 }
             }
             
-            // ПРИОРИТЕТ 3: из Telegram
             if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe?.user?.first_name) {
                 const firstName = window.Telegram.WebApp.initDataUnsafe.user.first_name;
                 console.log('✅ [SUPER] Имя из Telegram:', firstName);
@@ -283,9 +269,6 @@
             }
         }
         
-        // ============================================
-        // 6. СЛУШАЕМ СОБЫТИЕ ГОТОВНОСТИ MAX
-        // ============================================
         if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.ready) {
             window.MAX.WebApp.ready(() => {
                 console.log('✅ [SUPER] MAX.ready() вызван, обновляем maxContext');
@@ -304,7 +287,6 @@
             });
         }
         
-        // Запускаем инициализацию
         initMaxContext();
     </script>
     
@@ -325,10 +307,8 @@
         localStorage.setItem('api_base_url', window.API_BASE_URL);
     </script>
     
-    <!-- ========== СТИЛИ (ваши существующие стили) ========== -->
+    <!-- ========== СТИЛИ ========== -->
     <style>
-        /* ===== ВСЕ ВАШИ СТИЛИ ОСТАЮТСЯ БЕЗ ИЗМЕНЕНИЙ ===== */
-        /* Скопируйте сюда все ваши стили из существующего index.html */
         * {
             margin: 0;
             padding: 0;
@@ -358,8 +338,8 @@
         
         .chats-panel {
             width: 280px;
-            background: var(--max-panel-bg, #17212b);
-            border-right: 1px solid var(--max-border, #0f1b26);
+            background: #17212b;
+            border-right: 1px solid #0f1b26;
             display: flex;
             flex-direction: column;
             transition: transform 0.3s ease;
@@ -386,7 +366,7 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 1px solid var(--max-border, #0f1b26);
+            border-bottom: 1px solid #0f1b26;
         }
         
         .chats-title {
@@ -399,7 +379,7 @@
             border: none;
             font-size: 24px;
             cursor: pointer;
-            color: var(--max-blue, #248bf2);
+            color: #248bf2;
             padding: 8px;
         }
         
@@ -410,10 +390,10 @@
         .chats-search input {
             width: 100%;
             padding: 10px 14px;
-            background: var(--max-input-bg, #1f2c38);
+            background: #1f2c38;
             border: none;
             border-radius: 20px;
-            color: var(--max-text, white);
+            color: white;
             font-size: 14px;
         }
         
@@ -431,11 +411,11 @@
         }
         
         .chat-item:hover {
-            background: var(--max-hover, #2b3b4a);
+            background: #2b3b4a;
         }
         
         .chat-item.active {
-            background: var(--max-hover, #2b3b4a);
+            background: #2b3b4a;
         }
         
         .chat-avatar {
@@ -463,7 +443,7 @@
         
         .chat-preview {
             font-size: 12px;
-            color: var(--max-text-secondary, #8e9aa6);
+            color: #8e9aa6;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -471,12 +451,12 @@
         
         .chat-time {
             font-size: 11px;
-            color: var(--max-text-secondary, #8e9aa6);
+            color: #8e9aa6;
         }
         
         .chats-footer {
             padding: 16px;
-            border-top: 1px solid var(--max-border, #0f1b26);
+            border-top: 1px solid #0f1b26;
         }
         
         .user-mini-profile {
@@ -506,14 +486,14 @@
         
         .user-mini-status {
             font-size: 11px;
-            color: var(--max-text-secondary, #8e9aa6);
+            color: #8e9aa6;
         }
         
         .chat-panel {
             flex: 1;
             display: flex;
             flex-direction: column;
-            background: var(--max-bg, #0e1621);
+            background: #0e1621;
             overflow: hidden;
         }
         
@@ -522,8 +502,8 @@
             justify-content: space-between;
             align-items: center;
             padding: 12px 16px;
-            background: var(--max-header-bg, #1f2c38);
-            border-bottom: 1px solid var(--max-border, #0f1b26);
+            background: #1f2c38;
+            border-bottom: 1px solid #0f1b26;
         }
         
         .chat-header-left {
@@ -538,7 +518,7 @@
             border: none;
             font-size: 24px;
             cursor: pointer;
-            color: var(--max-text, white);
+            color: white;
             padding: 8px;
         }
         
@@ -568,7 +548,7 @@
         
         .chat-header-status {
             font-size: 12px;
-            color: var(--max-text-secondary, #8e9aa6);
+            color: #8e9aa6;
         }
         
         .header-btn {
@@ -576,7 +556,7 @@
             border: none;
             font-size: 20px;
             cursor: pointer;
-            color: var(--max-text, white);
+            color: white;
             padding: 8px;
         }
         
@@ -611,14 +591,14 @@
         .loading-text {
             margin-top: 20px;
             font-size: 16px;
-            color: var(--max-text-secondary, #8e9aa6);
+            color: #8e9aa6;
         }
         
         .voice-record-btn {
             width: 64px;
             height: 64px;
             border-radius: 50%;
-            background: var(--max-blue, #248bf2);
+            background: #248bf2;
             border: none;
             color: white;
             font-size: 32px;
@@ -669,7 +649,7 @@
             align-items: center;
             gap: 8px;
             font-size: 14px;
-            color: var(--max-text-secondary, #8e9aa6);
+            color: #8e9aa6;
             margin-top: 12px;
             justify-content: center;
         }
@@ -731,7 +711,7 @@
         }
         
         .microphone-modal-content {
-            background: var(--max-panel-bg, #17212b);
+            background: #17212b;
             border-radius: 28px;
             max-width: 340px;
             width: 90%;
@@ -750,14 +730,14 @@
         }
         
         .modal-btn.primary {
-            background: var(--max-blue, #248bf2);
+            background: #248bf2;
             color: white;
         }
         
         .modal-btn.secondary {
             background: transparent;
-            border: 1px solid var(--max-border, #2b3b4a);
-            color: var(--max-text, white);
+            border: 1px solid #2b3b4a;
+            color: white;
         }
         
         #hiddenAudioPlayer {
@@ -772,7 +752,7 @@
         
         .onboarding-content, .context-content, .benefits-content, .final-profile-content, 
         .ask-question-content, .choose-goal-content, .choose-mode-content, .thought-result-content {
-            background: var(--max-panel-bg, #17212b);
+            background: #17212b;
             border-radius: 24px;
             padding: 24px;
         }
@@ -794,14 +774,14 @@
         }
         
         .onboarding-btn.primary {
-            background: var(--max-blue, #248bf2);
+            background: #248bf2;
             color: white;
         }
         
         .onboarding-btn.secondary {
             background: transparent;
-            border: 1px solid var(--max-border, #2b3b4a);
-            color: var(--max-text, white);
+            border: 1px solid #2b3b4a;
+            color: white;
         }
         
         .dashboard-container {
@@ -815,7 +795,7 @@
             align-items: center;
             margin-bottom: 24px;
             padding: 16px;
-            background: var(--max-panel-bg, #17212b);
+            background: #17212b;
             border-radius: 24px;
         }
         
@@ -844,7 +824,7 @@
         
         .user-profile {
             font-size: 12px;
-            color: var(--max-text-secondary, #8e9aa6);
+            color: #8e9aa6;
         }
         
         .user-stats {
@@ -864,7 +844,7 @@
         
         .stat-label {
             font-size: 12px;
-            color: var(--max-text-secondary, #8e9aa6);
+            color: #8e9aa6;
         }
         
         .voice-input-dashboard {
@@ -914,7 +894,7 @@
         }
         
         .module-card {
-            background: var(--max-panel-bg, #17212b);
+            background: #17212b;
             border-radius: 20px;
             padding: 16px;
             text-align: center;
@@ -925,7 +905,7 @@
         
         .module-card:hover {
             transform: translateY(-4px);
-            background: var(--max-hover, #2b3b4a);
+            background: #2b3b4a;
         }
         
         .module-icon {
@@ -939,7 +919,7 @@
         }
         
         .quick-actions {
-            background: var(--max-panel-bg, #17212b);
+            background: #17212b;
             border-radius: 24px;
             padding: 16px;
         }
@@ -959,14 +939,14 @@
         .quick-action {
             text-align: center;
             padding: 12px;
-            background: var(--max-input-bg, #1f2c38);
+            background: #1f2c38;
             border-radius: 16px;
             cursor: pointer;
             transition: background 0.2s;
         }
         
         .quick-action:hover {
-            background: var(--max-hover, #2b3b4a);
+            background: #2b3b4a;
         }
         
         .action-icon {
@@ -1005,7 +985,7 @@
         }
         
         .floating-message.info {
-            background: var(--max-blue, #248bf2);
+            background: #248bf2;
         }
         
         .floating-message-content {
@@ -1037,7 +1017,7 @@
         }
         
         .test-required-text {
-            color: var(--max-text-secondary, #8e9aa6);
+            color: #8e9aa6;
             line-height: 1.6;
             margin-bottom: 32px;
             max-width: 500px;
@@ -1046,7 +1026,7 @@
         }
         
         .test-required-btn {
-            background: var(--max-blue, #248bf2);
+            background: #248bf2;
             border: none;
             border-radius: 40px;
             padding: 14px 32px;
@@ -1065,6 +1045,272 @@
             .recording-timer {
                 bottom: max(120px, env(safe-area-inset-bottom) + 80px);
             }
+        }
+        
+        .question-input-area {
+            margin: 20px 0;
+        }
+        
+        .input-group {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        
+        .question-input {
+            flex: 1;
+            padding: 14px 18px;
+            background: #1f2c38;
+            border: 1px solid #2b3b4a;
+            border-radius: 30px;
+            color: white;
+            font-size: 16px;
+            outline: none;
+        }
+        
+        .question-input:focus {
+            border-color: #248bf2;
+        }
+        
+        .question-submit {
+            background: #248bf2;
+            border: none;
+            border-radius: 30px;
+            padding: 0 24px;
+            font-size: 20px;
+            color: white;
+            cursor: pointer;
+        }
+        
+        .voice-input-area {
+            display: flex;
+            justify-content: center;
+            margin: 16px 0;
+        }
+        
+        .voice-hint-text {
+            text-align: center;
+            font-size: 12px;
+            color: #8e9aa6;
+            margin-top: 12px;
+        }
+        
+        .voice-hint {
+            text-align: center;
+            font-size: 14px;
+            color: #8e9aa6;
+            margin-bottom: 16px;
+        }
+        
+        .gender-buttons {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            margin: 20px 0;
+        }
+        
+        .gender-btn {
+            flex: 1;
+            padding: 16px;
+            background: #1f2c38;
+            border: 1px solid #2b3b4a;
+            border-radius: 20px;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .gender-btn.active {
+            border-color: #248bf2;
+            background: #248bf220;
+        }
+        
+        .gender-emoji {
+            font-size: 32px;
+        }
+        
+        .context-input-group {
+            display: flex;
+            gap: 12px;
+            margin: 20px 0;
+        }
+        
+        .context-input {
+            flex: 1;
+            padding: 14px 18px;
+            background: #1f2c38;
+            border: 1px solid #2b3b4a;
+            border-radius: 30px;
+            color: white;
+            font-size: 16px;
+        }
+        
+        .context-submit {
+            background: #248bf2;
+            border: none;
+            border-radius: 30px;
+            padding: 0 24px;
+            font-size: 20px;
+            color: white;
+            cursor: pointer;
+        }
+        
+        .context-skip {
+            background: transparent;
+            border: none;
+            color: #8e9aa6;
+            padding: 12px;
+            cursor: pointer;
+            width: 100%;
+        }
+        
+        .mode-cards {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            margin: 20px 0;
+        }
+        
+        .mode-card {
+            background: #1f2c38;
+            border-radius: 20px;
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 2px solid transparent;
+        }
+        
+        .mode-card.selected {
+            border-color: #248bf2;
+            background: #248bf220;
+        }
+        
+        .mode-emoji {
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
+        
+        .mode-name {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+        
+        .mode-desc {
+            font-size: 12px;
+            color: #8e9aa6;
+        }
+        
+        .goals-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin: 20px 0;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .goal-item {
+            background: #1f2c38;
+            border-radius: 16px;
+            padding: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .goal-item:hover {
+            background: #2b3b4a;
+            transform: translateX(4px);
+        }
+        
+        .goal-name {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        
+        .goal-meta {
+            display: flex;
+            gap: 12px;
+            font-size: 11px;
+            color: #8e9aa6;
+        }
+        
+        .profile-badge {
+            background: #1f2c38;
+            border-radius: 30px;
+            padding: 8px 16px;
+            text-align: center;
+            margin-bottom: 16px;
+        }
+        
+        .badge-label {
+            color: #8e9aa6;
+            margin-right: 8px;
+        }
+        
+        .badge-code {
+            font-weight: bold;
+            color: #248bf2;
+            font-family: monospace;
+        }
+        
+        .profile-header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .profile-emoji {
+            font-size: 48px;
+            margin-bottom: 8px;
+        }
+        
+        .profile-title {
+            font-size: 20px;
+        }
+        
+        .profile-text {
+            line-height: 1.6;
+            margin-bottom: 24px;
+            white-space: pre-wrap;
+        }
+        
+        .button-row {
+            display: flex;
+            gap: 12px;
+            margin: 12px 0;
+        }
+        
+        .profile-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        .thought-header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .thought-emoji {
+            font-size: 48px;
+            margin-bottom: 8px;
+        }
+        
+        .thought-title {
+            font-size: 20px;
+        }
+        
+        .thought-text {
+            line-height: 1.6;
+            margin-bottom: 24px;
+            white-space: pre-wrap;
+            background: #1f2c38;
+            border-radius: 16px;
+            padding: 20px;
         }
     </style>
 </head>
@@ -1310,73 +1556,158 @@
     </template>
 
     <!-- ========== СКРИПТЫ ========== -->
-    <script src="/api.js?v=14"></script>
-    <script src="/context.js?v=14"></script>
-    <script src="/onboarding.js?v=14"></script>
-    <script src="/script.js?v=14"></script>
-    <script src="/test.js?v=14"></script>
-    <script src="/animations.js?v=14"></script>
-    <script src="/animated-avatar.js?v=14"></script>
-    <script src="/dynamic-bg.js?v=14"></script>
-    <script src="/challenges.js?v=14"></script>
-    <script src="/notifications.js?v=14"></script>
-    <script src="/psychometric.js?v=14"></script>
-    <script src="/dashboard.js?v=14"></script>
+    <script src="/api.js?v=15"></script>
+    <script src="/context.js?v=15"></script>
+    <script src="/onboarding.js?v=15"></script>
+    <script src="/script.js?v=15"></script>
+    <script src="/test.js?v=15"></script>
+    <script src="/animations.js?v=15"></script>
+    <script src="/animated-avatar.js?v=15"></script>
+    <script src="/dynamic-bg.js?v=15"></script>
+    <script src="/challenges.js?v=15"></script>
+    <script src="/notifications.js?v=15"></script>
+    <script src="/psychometric.js?v=15"></script>
+    <script src="/dashboard.js?v=15"></script>
     
-    <!-- ========== ИНИЦИАЛИЗАЦИЯ МИКРОФОНА ========== -->
+    <!-- ========== РАСШИРЕННЫЙ МЕНЕДЖЕР МИКРОФОНА ДЛЯ MAX ========== -->
     <script>
         window.maxMicrophoneManager = {
             hasPermission: false,
+            isRecording: false,
+            mediaRecorder: null,
+            audioChunks: [],
             
             async requestMicrophone() {
                 console.log('🎤 Запрос доступа к микрофону...');
-                try {
-                    let stream = null;
-                    
-                    if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUserMedia) {
-                        try {
-                            stream = await window.MAX.WebApp.getUserMedia({ audio: true });
-                            console.log('✅ Доступ через MAX.WebApp');
-                        } catch (e) {
-                            console.warn('MAX getUserMedia failed:', e);
-                        }
-                    }
-                    
-                    if (!stream) {
-                        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                        console.log('✅ Доступ через Web API');
-                    }
-                    
-                    stream.getTracks().forEach(track => track.stop());
-                    this.hasPermission = true;
-                    this.showToast('✅ Микрофон готов!', 'success');
-                    return true;
-                    
-                } catch (error) {
-                    console.error('Microphone error:', error);
-                    this.hasPermission = false;
-                    
-                    if (error.name === 'NotAllowedError') {
-                        this.showPermissionInstructions();
-                    } else {
-                        this.showToast('❌ Не удалось получить доступ к микрофону', 'error');
-                    }
+                console.log('  - navigator.mediaDevices:', !!navigator.mediaDevices);
+                console.log('  - navigator.mediaDevices.getUserMedia:', !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
+                console.log('  - window.MAX:', !!window.MAX);
+                console.log('  - window.MAX.WebApp:', !!(window.MAX && window.MAX.WebApp));
+                
+                const hasMediaDevices = navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
+                const hasMaxGetUserMedia = window.MAX && window.MAX.WebApp && typeof window.MAX.WebApp.getUserMedia === 'function';
+                
+                if (!hasMediaDevices && !hasMaxGetUserMedia) {
+                    console.error('❌ Микрофон недоступен в этом окружении');
+                    this.showNoMicrophoneSupport();
                     return false;
                 }
+                
+                let stream = null;
+                
+                // Попытка 1: через MAX API
+                if (hasMaxGetUserMedia) {
+                    try {
+                        console.log('🔄 Пробуем MAX.WebApp.getUserMedia...');
+                        stream = await window.MAX.WebApp.getUserMedia({ audio: true });
+                        if (stream) {
+                            console.log('✅ Доступ через MAX.WebApp.getUserMedia');
+                        }
+                    } catch (e) {
+                        console.warn('MAX.WebApp.getUserMedia ошибка:', e);
+                    }
+                }
+                
+                // Попытка 2: через стандартный Web API
+                if (!stream && hasMediaDevices) {
+                    try {
+                        console.log('🔄 Пробуем navigator.mediaDevices.getUserMedia...');
+                        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        console.log('✅ Доступ через navigator.mediaDevices');
+                    } catch (e) {
+                        console.warn('navigator.mediaDevices.getUserMedia ошибка:', e);
+                    }
+                }
+                
+                // Попытка 3: через устаревший getUserMedia
+                if (!stream && navigator.getUserMedia) {
+                    try {
+                        console.log('🔄 Пробуем устаревший navigator.getUserMedia...');
+                        stream = await new Promise((resolve, reject) => {
+                            navigator.getUserMedia({ audio: true }, resolve, reject);
+                        });
+                        console.log('✅ Доступ через navigator.getUserMedia');
+                    } catch (e) {
+                        console.warn('navigator.getUserMedia ошибка:', e);
+                    }
+                }
+                
+                // Попытка 4: с дополнительными параметрами
+                if (!stream && hasMediaDevices) {
+                    try {
+                        console.log('🔄 Пробуем MediaDevices с настройками...');
+                        stream = await navigator.mediaDevices.getUserMedia({ 
+                            audio: {
+                                echoCancellation: true,
+                                noiseSuppression: true,
+                                autoGainControl: true
+                            }
+                        });
+                        console.log('✅ Доступ через MediaDevices с настройками');
+                    } catch (e) {
+                        console.warn('MediaDevices с настройками ошибка:', e);
+                    }
+                }
+                
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                    this.hasPermission = true;
+                    localStorage.setItem('microphone_permission_granted', 'true');
+                    this.showToast('✅ Микрофон готов!', 'success');
+                    return true;
+                }
+                
+                console.error('❌ Все попытки получить микрофон не удались');
+                this.hasPermission = false;
+                this.showPermissionInstructions();
+                return false;
+            },
+            
+            showNoMicrophoneSupport() {
+                const modal = document.createElement('div');
+                modal.className = 'microphone-modal';
+                modal.innerHTML = `
+                    <div class="microphone-modal-content">
+                        <div style="font-size:48px;margin-bottom:16px;">🎤</div>
+                        <h3>Микрофон не поддерживается</h3>
+                        <div style="color:#8e9aa6;line-height:1.6;margin:16px 0;">
+                            ⚠️ Ваше приложение не поддерживает голосовой ввод.<br><br>
+                            Вы можете написать вопрос текстом в поле ввода.
+                        </div>
+                        <div style="display:flex;gap:12px;">
+                            <button id="microphoneCloseBtn" class="modal-btn primary">📝 ПОНЯТНО</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+                
+                document.getElementById('microphoneCloseBtn')?.addEventListener('click', () => {
+                    modal.remove();
+                    const textInput = document.getElementById('questionInput');
+                    if (textInput) textInput.focus();
+                });
             },
             
             showPermissionInstructions() {
-                const isAndroid = /Android/i.test(navigator.userAgent);
-                const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+                const isMax = !!(window.MAX && window.MAX.WebApp);
                 
-                let instructions = '';
-                if (isAndroid) {
-                    instructions = '🔊 <b>ВКЛЮЧИТЕ МИКРОФОН В MAX</b><br><br>1️⃣ Закройте чат<br>2️⃣ Настройки телефона → Приложения → MAX<br>3️⃣ Разрешения → Микрофон → Разрешить<br>4️⃣ Вернитесь и нажмите 🎤';
-                } else if (isIOS) {
-                    instructions = '🎤 <b>ВКЛЮЧИТЕ МИКРОФОН В MAX</b><br><br>1️⃣ Закройте чат<br>2️⃣ Настройки iPhone → MAX<br>3️⃣ Включите Микрофон<br>4️⃣ Вернитесь и нажмите 🎤';
-                } else {
-                    instructions = '🎤 <b>НУЖЕН ДОСТУП К МИКРОФОНУ</b><br><br>В настройках браузера разрешите доступ к микрофону.';
-                }
+                const instructions = isMax ? `
+                    🔊 <b>ДЛЯ MAX (мессенджер)</b><br><br>
+                    <b>СПОСОБ 1 (самый надежный):</b><br>
+                    Напишите вопрос текстом в поле ввода — это всегда работает.<br><br>
+                    <b>СПОСОБ 2 (если хотите голос):</b><br>
+                    1️⃣ Закройте этот чат<br>
+                    2️⃣ Откройте настройки телефона<br>
+                    3️⃣ Приложения → MAX → Разрешения<br>
+                    4️⃣ Микрофон → Разрешить<br>
+                    5️⃣ Вернитесь и нажмите 🎤<br><br>
+                    <b>СПОСОБ 3 (если не работает):</b><br>
+                    Перезагрузите телефон и откройте MAX заново.
+                ` : `
+                    🎤 <b>НУЖЕН ДОСТУП К МИКРОФОНУ</b><br><br>
+                    В настройках браузера разрешите доступ к микрофону.<br>
+                    Или просто напишите вопрос текстом.
+                `;
                 
                 const modal = document.createElement('div');
                 modal.className = 'microphone-modal';
@@ -1385,9 +1716,9 @@
                         <div style="font-size:48px;margin-bottom:16px;">🎤</div>
                         <h3>Нужен доступ к микрофону</h3>
                         <div style="color:#8e9aa6;line-height:1.6;margin:16px 0;text-align:left;">${instructions}</div>
-                        <div style="display:flex;gap:12px;">
+                        <div style="display:flex;gap:12px;flex-wrap:wrap;">
                             <button id="microphoneRetryBtn" class="modal-btn primary">🔄 ПРОВЕРИТЬ</button>
-                            <button id="microphoneCloseBtn" class="modal-btn secondary">📱 ЗАКРЫТЬ</button>
+                            <button id="microphoneTextBtn" class="modal-btn secondary">📝 НАПИСАТЬ ТЕКСТ</button>
                         </div>
                     </div>
                 `;
@@ -1397,7 +1728,133 @@
                     modal.remove();
                     this.requestMicrophone();
                 });
-                document.getElementById('microphoneCloseBtn')?.addEventListener('click', () => modal.remove());
+                
+                document.getElementById('microphoneTextBtn')?.addEventListener('click', () => {
+                    modal.remove();
+                    const textInput = document.getElementById('questionInput');
+                    if (textInput) textInput.focus();
+                });
+            },
+            
+            async startRecording() {
+                if (!this.hasPermission) {
+                    const granted = await this.requestMicrophone();
+                    if (!granted) return false;
+                }
+                
+                console.log('🎤 Начинаем запись...');
+                
+                try {
+                    let stream = null;
+                    
+                    if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUserMedia) {
+                        try {
+                            stream = await window.MAX.WebApp.getUserMedia({ audio: true });
+                        } catch(e) {}
+                    }
+                    
+                    if (!stream && navigator.mediaDevices) {
+                        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    }
+                    
+                    if (!stream) {
+                        throw new Error('Не удалось получить поток микрофона');
+                    }
+                    
+                    this.mediaRecorder = new MediaRecorder(stream);
+                    this.audioChunks = [];
+                    
+                    this.mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            this.audioChunks.push(event.data);
+                        }
+                    };
+                    
+                    this.mediaRecorder.onstop = () => {
+                        const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+                        stream.getTracks().forEach(track => track.stop());
+                        this.processAudio(audioBlob);
+                    };
+                    
+                    this.mediaRecorder.start(1000);
+                    this.isRecording = true;
+                    
+                    // Показываем таймер
+                    const timerDiv = document.getElementById('recordingTimer');
+                    if (timerDiv) {
+                        timerDiv.style.display = 'block';
+                        let seconds = 0;
+                        this.timerInterval = setInterval(() => {
+                            seconds++;
+                            timerDiv.textContent = `${seconds}s`;
+                        }, 1000);
+                    }
+                    
+                    return true;
+                    
+                } catch (error) {
+                    console.error('Ошибка старта записи:', error);
+                    this.showToast('❌ Не удалось начать запись', 'error');
+                    return false;
+                }
+            },
+            
+            stopRecording() {
+                if (this.mediaRecorder && this.isRecording) {
+                    this.mediaRecorder.stop();
+                    this.isRecording = false;
+                    
+                    // Останавливаем таймер
+                    if (this.timerInterval) {
+                        clearInterval(this.timerInterval);
+                        this.timerInterval = null;
+                    }
+                    const timerDiv = document.getElementById('recordingTimer');
+                    if (timerDiv) timerDiv.style.display = 'none';
+                }
+            },
+            
+            async processAudio(audioBlob) {
+                console.log('🎤 Обработка аудио, размер:', audioBlob.size);
+                
+                if (audioBlob.size < 1000) {
+                    this.showToast('🎤 Слишком тихо, попробуйте говорить громче', 'error');
+                    return;
+                }
+                
+                this.showToast('🎤 Распознаю...', 'info');
+                
+                try {
+                    const userId = window.maxContext?.user_id || localStorage.getItem('fredi_user_id');
+                    const formData = new FormData();
+                    formData.append('user_id', userId);
+                    formData.append('voice', audioBlob, 'recording.webm');
+                    
+                    const apiBase = window.API_BASE_URL || '';
+                    const response = await fetch(`${apiBase}/api/voice/process`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success && result.recognized_text) {
+                        console.log('🎤 Распознано:', result.recognized_text);
+                        this.showToast('✅ Распознано!', 'success');
+                        
+                        const questionInput = document.getElementById('questionInput');
+                        if (questionInput) {
+                            questionInput.value = result.recognized_text;
+                            const sendBtn = document.getElementById('sendQuestionBtn');
+                            if (sendBtn) sendBtn.click();
+                        }
+                    } else {
+                        this.showToast(result.answer || '❌ Не удалось распознать', 'error');
+                    }
+                } catch (error) {
+                    console.error('Ошибка отправки аудио:', error);
+                    this.showToast('❌ Ошибка отправки', 'error');
+                }
             },
             
             showToast(message, type) {
@@ -1410,8 +1867,48 @@
             }
         };
         
-        window.maxMicrophoneManager.requestMicrophone();
+        // ========== ИНИЦИАЛИЗАЦИЯ МИКРОФОНА ==========
+        setTimeout(() => {
+            window.maxMicrophoneManager.requestMicrophone();
+        }, 1000);
         
+        // ========== ОБРАБОТЧИКИ КНОПКИ ЗАПИСИ ==========
+        document.addEventListener('DOMContentLoaded', () => {
+            const voiceBtn = document.getElementById('voiceRecordBtn');
+            if (voiceBtn) {
+                let pressTimer = null;
+                let isLongPress = false;
+                
+                const startPress = (e) => {
+                    e.preventDefault();
+                    pressTimer = setTimeout(() => {
+                        isLongPress = true;
+                        voiceBtn.classList.add('recording');
+                        window.maxMicrophoneManager.startRecording();
+                    }, 200);
+                };
+                
+                const endPress = (e) => {
+                    e.preventDefault();
+                    if (pressTimer) clearTimeout(pressTimer);
+                    if (isLongPress) {
+                        isLongPress = false;
+                        voiceBtn.classList.remove('recording');
+                        window.maxMicrophoneManager.stopRecording();
+                    } else {
+                        window.maxMicrophoneManager.requestMicrophone();
+                    }
+                };
+                
+                voiceBtn.addEventListener('mousedown', startPress);
+                voiceBtn.addEventListener('mouseup', endPress);
+                voiceBtn.addEventListener('mouseleave', endPress);
+                voiceBtn.addEventListener('touchstart', startPress);
+                voiceBtn.addEventListener('touchend', endPress);
+            }
+        });
+        
+        // ========== ИНИЦИАЛИЗАЦИЯ ДАШБОРДА ==========
         document.addEventListener('DOMContentLoaded', () => {
             console.log('📄 DOM загружен, создаём FrediDashboard');
             if (typeof FrediDashboard !== 'undefined') {
