@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 # ========== ИМПОРТЫ ДЛЯ FASTAPI ==========
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.encoders import jsonable_encoder
 import uvicorn
@@ -327,26 +327,31 @@ if os.path.exists(MINIAPP_PATH) and os.path.isdir(MINIAPP_PATH):
 else:
     logger.warning(f"⚠️ Папка {MINIAPP_PATH} не найдена")
 
-@api_app.get("/")
-async def root():
+# ============================================
+# MIDDLEWARE ДЛЯ ОБРАБОТКИ ОШИБОК
+# ============================================
+
+@api_app.middleware("http")
+async def catch_errors_middleware(request: Request, call_next):
+    """Middleware для отлова и логирования ошибок"""
     try:
-        index_path = os.path.join(MINIAPP_PATH, "index.html")
-        if os.path.exists(index_path):
-            return FileResponse(index_path)
+        response = await call_next(request)
+        
+        # Логируем предупреждения для favicon
+        if request.url.path == "/favicon.ico" and response.status_code != 200:
+            logger.debug(f"Favicon response: {response.status_code}")
+        
+        return response
+        
     except Exception as e:
-        logger.warning(f"⚠️ Не удалось вернуть index.html: {e}")
-    return JSONResponse({
-        "name": "MAX Bot",
-        "version": "9.6",
-        "status": "online",
-        "message": "API работает. Мини-приложение доступно по пути /static/",
-        "endpoints": {
-            "health": "/health",
-            "docs": "/docs",
-            "api": "/api/*",
-            "miniapp": "/static/"
-        }
-    })
+        logger.error(f"Error processing {request.url.path}: {e}", exc_info=True)
+        
+        # Возвращаем корректный ответ даже при ошибке
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": "Internal server error"},
+            headers={"Content-Length": "0"}
+        )
 
 # ============================================
 # API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
@@ -2002,72 +2007,137 @@ def shutdown_handler():
     except Exception as e:
         logger.error(f"❌ Ошибка при закрытии БД: {e}")
 
-def main():
-    print("\n" + "="*80)
-    print("🚀 ВИРТУАЛЬНЫЙ ПСИХОЛОГ - МАТРИЦА ПОВЕДЕНИЙ 4×6 v9.6 (MAX)")
-    print("="*80)
-    print(f"👤 Ваш ID: {ADMIN_IDS[0] if ADMIN_IDS else 'не указан'}")
-    print("🎙 Распознавание: " + ("✅" if DEEPGRAM_API_KEY else "❌"))
-    print("🎙 Синтез речи: " + ("✅" if YANDEX_API_KEY else "❌"))
-    print("🌍 Погода: " + ("✅" if OPENWEATHER_API_KEY else "❌"))
-    print("🎭 Режимы: 🔮 КОУЧ | 🧠 ПСИХОЛОГ | ⚡ ТРЕНЕР")
-    print("📊 5 этапов тестирования: ✅")
-    print("🎯 Динамический подбор целей: ✅")
-    print("🔍 Проверка реальности: ✅")
-    print("🎤 Голосовые сообщения: " + ("✅" if DEEPGRAM_API_KEY and YANDEX_API_KEY else "❌"))
-    print("🗓 Планировщик задач: ✅")
-    print("🎨 Идеи на выходные: ✅")
-    print("🔬 Глубинный анализ вопросов: ✅")
-    print("📱 Мини-приложение: ✅ (FastAPI + полная синхронизация)")
-    print("🗄️ Постоянное хранение: ✅ (PostgreSQL)")
-    print("="*80 + "\n")
+# ============================================
+# УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК СТАТИЧЕСКИХ ФАЙЛОВ
+# ============================================
+
+# Словарь разрешенных расширений и их MIME-типов
+ALLOWED_EXTENSIONS = {
+    '.html': 'text/html',
+    '.css': 'text/css',
+    '.js': 'application/javascript',
+    '.json': 'application/json',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.ico': 'image/x-icon',
+    '.webp': 'image/webp',
+    '.ogg': 'audio/ogg',
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.txt': 'text/plain',
+    '.xml': 'application/xml',
+    '.pdf': 'application/pdf',
+}
+
+async def handle_favicon():
+    """Специальный обработчик для favicon.ico"""
+    icon_path = os.path.join(MINIAPP_PATH, "favicon.ico")
     
-    logger.info("🚀 Бот для MAX запущен!")
+    if os.path.exists(icon_path):
+        file_size = os.path.getsize(icon_path)
+        if file_size > 0:
+            return FileResponse(
+                icon_path,
+                media_type="image/x-icon",
+                headers={
+                    "Content-Length": str(file_size),
+                    "Cache-Control": "public, max-age=86400"  # 24 часа
+                }
+            )
     
-    # Инициализируем БД синхронно
-    init_database_sync()
+    # Возвращаем 204 No Content с явным Content-Length
+    return Response(
+        status_code=204,
+        headers={
+            "Content-Length": "0",
+            "Cache-Control": "no-cache"
+        }
+    )
+
+@api_app.get("/{file_path:path}")
+async def serve_static_files(file_path: str):
+    """
+    Универсальный обработчик для всех статических файлов.
+    Заменяет все отдельные эндпоинты для .js, .css, .json и т.д.
+    """
+    # Защита от path traversal атак
+    if ".." in file_path or file_path.startswith("/"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid file path"}
+        )
     
-    scheduler.start()
-    async_thread = threading.Thread(target=run_async_tasks, daemon=True)
-    async_thread.start()
-    api_thread = threading.Thread(target=run_fastapi, daemon=True)
-    api_thread.start()
-    logger.info("✅ FastAPI сервер запущен")
+    # Специальная обработка favicon.ico
+    if file_path == "favicon.ico":
+        return await handle_favicon()
     
-    try:
-        import signal
-        def signal_handler(signum, frame):
-            shutdown_handler()
-            sys.exit(0)
-        signal.signal(signal.SIGTERM, signal_handler)
-        signal.signal(signal.SIGINT, signal_handler)
-    except Exception as e:
-        logger.warning(f"⚠️ Не удалось установить обработчик сигналов: {e}")
+    # Определяем полный путь к файлу
+    full_path = os.path.join(MINIAPP_PATH, file_path)
     
-    is_render = os.environ.get('RENDER') is not None
-    retry_count = 0
-    max_retries = 5 if not is_render else 1
+    # Проверяем существование файла
+    if not os.path.exists(full_path) or not os.path.isfile(full_path):
+        # Для корневого index.html обрабатываем отдельно
+        if file_path == "" or file_path == "index.html":
+            index_path = os.path.join(MINIAPP_PATH, "index.html")
+            if os.path.exists(index_path):
+                return FileResponse(index_path, media_type="text/html")
+        
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"File not found: {file_path}"}
+        )
     
-    try:
-        while retry_count < max_retries:
-            try:
-                bot.polling()
-            except KeyboardInterrupt:
-                logger.info("👋 Бот остановлен пользователем")
-                shutdown_handler()
-                break
-            except Exception as e:
-                retry_count += 1
-                logger.error(f"❌ Ошибка: {e}")
-                if retry_count < max_retries:
-                    delay = random.randint(3, 7)
-                    logger.info(f"🔄 Перезапуск {retry_count}/{max_retries} через {delay}с...")
-                    time.sleep(delay)
-                else:
-                    logger.error("❌ Превышено количество попыток")
-                    shutdown_handler()
-    finally:
-        cleanup_resources()
+    # Получаем расширение файла
+    ext = os.path.splitext(file_path)[1].lower()
+    media_type = ALLOWED_EXTENSIONS.get(ext, 'application/octet-stream')
+    
+    # Получаем размер файла для правильного Content-Length
+    file_size = os.path.getsize(full_path)
+    
+    # Определяем политику кэширования
+    cache_control = "public, max-age=3600"  # 1 час для статики
+    if ext in ['.html', '.json']:
+        cache_control = "no-cache"  # Не кэшируем HTML и JSON
+    
+    # Возвращаем файл с правильными заголовками
+    return FileResponse(
+        path=full_path,
+        media_type=media_type,
+        headers={
+            "Content-Length": str(file_size),
+            "Cache-Control": cache_control
+        }
+    )
+
+# ============================================
+# ОСТАВЛЯЕМ ТОЛЬКО АУДИО ЭНДПОИНТ (если нужен отдельно)
+# ============================================
+
+@api_app.get("/static/audio/{filename}")
+async def get_audio_file(filename: str):
+    """Специальный обработчик для аудиофайлов с правильным Content-Length"""
+    # Защита от path traversal
+    if ".." in filename or filename.startswith("/"):
+        return JSONResponse(status_code=400, content={"error": "Invalid filename"})
+    
+    audio_path = os.path.join(MINIAPP_PATH, "audio", filename)
+    
+    if os.path.exists(audio_path) and os.path.isfile(audio_path):
+        file_size = os.path.getsize(audio_path)
+        return FileResponse(
+            audio_path,
+            media_type="audio/ogg",
+            headers={
+                "Content-Length": str(file_size),
+                "Cache-Control": "public, max-age=3600",
+                "Accept-Ranges": "bytes"  # Поддержка частичной загрузки
+            }
+        )
+    
+    return JSONResponse(status_code=404, content={"error": "Audio file not found"})
 
 # ============================================
 # ДОПОЛНИТЕЛЬНЫЕ API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
@@ -2672,205 +2742,6 @@ async def force_load_user(request: Request):
             status_code=500,
             content={"success": False, "error": str(e)}
         )
-
-
-# ============================================
-# ЭНДПОИНТЫ ДЛЯ КОРНЕВЫХ ФАЙЛОВ (без /static/)
-# ============================================
-
-@api_app.get("/")
-async def serve_index():
-    index_path = os.path.join(MINIAPP_PATH, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path, media_type="text/html")
-    return JSONResponse(status_code=404, content={"error": "index.html not found"})
-
-
-@api_app.get("/styles.css")
-async def serve_styles():
-    path = os.path.join(MINIAPP_PATH, "styles.css")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="text/css")
-    return JSONResponse(status_code=404, content={"error": "styles.css not found"})
-
-
-@api_app.get("/{filename}.js")
-async def serve_js(filename: str):
-    path = os.path.join(MINIAPP_PATH, f"{filename}.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": f"{filename}.js not found"})
-
-
-@api_app.get("/manifest.json")
-async def serve_manifest():
-    path = os.path.join(MINIAPP_PATH, "manifest.json")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/manifest+json")
-    return JSONResponse(status_code=404, content={"error": "manifest.json not found"})
-
-
-@api_app.get("/service-worker.js")
-async def serve_service_worker():
-    path = os.path.join(MINIAPP_PATH, "service-worker.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "service-worker.js not found"})
-
-
-@api_app.get("/sw.js")
-async def serve_sw():
-    path = os.path.join(MINIAPP_PATH, "sw.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    alt_path = os.path.join(MINIAPP_PATH, "service-worker.js")
-    if os.path.exists(alt_path):
-        return FileResponse(alt_path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "sw.js not found"})
-
-
-@api_app.get("/static/dashboard.js")
-async def get_dashboard_js():
-    path = os.path.join(MINIAPP_PATH, "dashboard.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "dashboard.js not found"})
-
-
-@api_app.get("/static/api.js")
-async def get_api_js():
-    path = os.path.join(MINIAPP_PATH, "api.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "api.js not found"})
-
-
-@api_app.get("/static/test.js")
-async def get_test_js():
-    path = os.path.join(MINIAPP_PATH, "test.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "test.js not found"})
-
-
-@api_app.get("/static/context.js")
-async def get_context_js():
-    path = os.path.join(MINIAPP_PATH, "context.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "context.js not found"})
-
-
-@api_app.get("/static/onboarding.js")
-async def get_onboarding_js():
-    path = os.path.join(MINIAPP_PATH, "onboarding.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "onboarding.js not found"})
-
-
-@api_app.get("/static/script.js")
-async def get_script_js():
-    path = os.path.join(MINIAPP_PATH, "script.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "script.js not found"})
-
-
-@api_app.get("/static/app.js")
-async def get_app_js():
-    path = os.path.join(MINIAPP_PATH, "app.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "app.js not found"})
-
-
-@api_app.get("/static/styles.css")
-async def get_styles_css():
-    path = os.path.join(MINIAPP_PATH, "styles.css")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="text/css")
-    return JSONResponse(status_code=404, content={"error": "styles.css not found"})
-
-
-@api_app.get("/static/animated-avatar.js")
-async def get_animated_avatar_js():
-    path = os.path.join(MINIAPP_PATH, "animated-avatar.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "animated-avatar.js not found"})
-
-
-@api_app.get("/static/challenges.js")
-async def get_challenges_js():
-    path = os.path.join(MINIAPP_PATH, "challenges.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "challenges.js not found"})
-
-
-@api_app.get("/static/notifications.js")
-async def get_notifications_js():
-    path = os.path.join(MINIAPP_PATH, "notifications.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "notifications.js not found"})
-
-
-@api_app.get("/static/psychometric.js")
-async def get_psychometric_js():
-    path = os.path.join(MINIAPP_PATH, "psychometric.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "psychometric.js not found"})
-
-
-@api_app.get("/static/dynamic-bg.js")
-async def get_dynamic_bg_js():
-    path = os.path.join(MINIAPP_PATH, "dynamic-bg.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "dynamic-bg.js not found"})
-
-
-@api_app.get("/static/animations.js")
-async def get_animations_js():
-    path = os.path.join(MINIAPP_PATH, "animations.js")
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/javascript")
-    return JSONResponse(status_code=404, content={"error": "animations.js not found"})
-
-
-@api_app.get("/static/audio/{filename}")
-async def get_audio_file(filename: str):
-    audio_path = os.path.join(MINIAPP_PATH, "audio", filename)
-    if os.path.exists(audio_path):
-        return FileResponse(audio_path, media_type="audio/ogg")
-    return JSONResponse(status_code=404, content={"error": "Audio file not found"})
-
-
-@api_app.get("/favicon.ico")
-async def favicon():
-    icon_path = os.path.join(MINIAPP_PATH, "favicon.ico")
-    if os.path.exists(icon_path):
-        return FileResponse(icon_path, media_type="image/x-icon")
-    return JSONResponse(status_code=204, content=None)
-
-
-@api_app.get("/icon-192.png")
-async def get_icon_192():
-    icon_path = os.path.join(MINIAPP_PATH, "icon-192.png")
-    if os.path.exists(icon_path):
-        return FileResponse(icon_path, media_type="image/png")
-    return JSONResponse(status_code=404, content={"error": "icon not found"})
-
-
-@api_app.get("/icon-512.png")
-async def get_icon_512():
-    icon_path = os.path.join(MINIAPP_PATH, "icon-512.png")
-    if os.path.exists(icon_path):
-        return FileResponse(icon_path, media_type="image/png")
-    return JSONResponse(status_code=404, content={"error": "icon not found"})
 
 
 # ============================================
