@@ -605,12 +605,15 @@ async def get_test_progress(user_id: int):
             "answers_count": len(data.get('all_answers', [])),
             "current_stage": data.get('current_stage', 1)
         }
-        return JSONResponse(progress)
+        return JSONResponse({
+            "success": True,
+            "progress": progress
+        })
     except Exception as e:
         logger.error(f"❌ Error in get_test_progress: {e}")
         return JSONResponse(
             status_code=500,
-            content={"error": str(e)}
+            content={"success": False, "error": str(e)}
         )
 
 # ============================================
