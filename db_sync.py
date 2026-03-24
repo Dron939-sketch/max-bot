@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Синхронные обертки для работы с БД - для вызовов из любого потока
-ВЕРСИЯ 2.5 - ИСПРАВЛЕНО: импорт save_test_result_full_async
+ВЕРСИЯ 2.6 - ДОБАВЛЕНЫ ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
 """
 
 import logging
@@ -186,6 +186,70 @@ class SyncDB:
             traceback.print_exc()
             return None
     
+    # ============================================
+    # НОВЫЕ ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
+    # ============================================
+    
+    @staticmethod
+    def save_psychologist_thought(
+        user_id: int,
+        thought_text: str,
+        test_result_id: int = None,
+        thought_type: str = 'psychologist_thought',
+        thought_summary: str = None,
+        metadata: Dict = None
+    ) -> Optional[int]:
+        """
+        Синхронное сохранение мысли психолога
+        """
+        try:
+            from db_instance import save_psychologist_thought
+            result = save_psychologist_thought(
+                user_id, 
+                thought_text, 
+                test_result_id, 
+                thought_type, 
+                thought_summary, 
+                metadata
+            )
+            return result
+        except Exception as e:
+            logger.error(f"❌ Ошибка save_psychologist_thought: {e}")
+            traceback.print_exc()
+            return None
+    
+    @staticmethod
+    def get_psychologist_thought(
+        user_id: int,
+        thought_type: str = 'psychologist_thought',
+        only_active: bool = True
+    ) -> Optional[str]:
+        """
+        Синхронное получение последней мысли психолога
+        """
+        try:
+            from db_instance import get_psychologist_thought
+            return get_psychologist_thought(user_id, thought_type, only_active)
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_psychologist_thought: {e}")
+            return None
+    
+    @staticmethod
+    def get_psychologist_thought_history(
+        user_id: int,
+        thought_type: str = None,
+        limit: int = 10
+    ) -> List[Dict]:
+        """
+        Синхронное получение истории мыслей психолога
+        """
+        try:
+            from db_instance import get_psychologist_thought_history
+            return get_psychologist_thought_history(user_id, thought_type, limit)
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_psychologist_thought_history: {e}")
+            return []
+    
     @staticmethod
     def save_test_answer(
         user_id: int,
@@ -333,4 +397,4 @@ class SyncDB:
 # Создаем глобальный экземпляр
 sync_db = SyncDB()
 
-logger.info("✅ sync_db инициализирован")
+logger.info("✅ sync_db инициализирован (версия 2.6 с поддержкой мыслей психолога)")
