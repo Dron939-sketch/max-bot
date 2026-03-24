@@ -3053,6 +3053,86 @@ async def update_notification_settings(request: Request):
             content={"success": False, "error": str(e)}
         )
 
+# ============================================
+# ГЛАВНАЯ ФУНКЦИЯ
+# ============================================
+
+def main():
+    """Главная функция запуска бота"""
+    print("\n" + "="*80)
+    print("🚀 ВИРТУАЛЬНЫЙ ПСИХОЛОГ - МАТРИЦА ПОВЕДЕНИЙ 4×6 v9.6 (MAX)")
+    print("="*80)
+    print(f"👤 Ваш ID: {ADMIN_IDS[0] if ADMIN_IDS else 'не указан'}")
+    print("🎙 Распознавание: " + ("✅" if DEEPGRAM_API_KEY else "❌"))
+    print("🎙 Синтез речи: " + ("✅" if YANDEX_API_KEY else "❌"))
+    print("🌍 Погода: " + ("✅" if OPENWEATHER_API_KEY else "❌"))
+    print("🎭 Режимы: 🔮 КОУЧ | 🧠 ПСИХОЛОГ | ⚡ ТРЕНЕР")
+    print("📊 5 этапов тестирования: ✅")
+    print("🎯 Динамический подбор целей: ✅")
+    print("🔍 Проверка реальности: ✅")
+    print("🎤 Голосовые сообщения: " + ("✅" if DEEPGRAM_API_KEY and YANDEX_API_KEY else "❌"))
+    print("🗓 Планировщик задач: ✅")
+    print("🎨 Идеи на выходные: ✅")
+    print("🔬 Глубинный анализ вопросов: ✅")
+    print("📱 Мини-приложение: ✅ (FastAPI + полная синхронизация)")
+    print("🗄️ Постоянное хранение: ✅ (PostgreSQL)")
+    print("="*80 + "\n")
+    
+    logger.info("🚀 Бот для MAX запущен!")
+    
+    # Инициализируем БД синхронно
+    init_database_sync()
+    
+    scheduler.start()
+    async_thread = threading.Thread(target=run_async_tasks, daemon=True)
+    async_thread.start()
+    api_thread = threading.Thread(target=run_fastapi, daemon=True)
+    api_thread.start()
+    logger.info("✅ FastAPI сервер запущен")
+    
+    try:
+        import signal
+        def signal_handler(signum, frame):
+            shutdown_handler()
+            sys.exit(0)
+        signal.signal(signal.SIGTERM, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось установить обработчик сигналов: {e}")
+    
+    is_render = os.environ.get('RENDER') is not None
+    retry_count = 0
+    max_retries = 5 if not is_render else 1
+    
+    try:
+        while retry_count < max_retries:
+            try:
+                bot.polling()
+            except KeyboardInterrupt:
+                logger.info("👋 Бот остановлен пользователем")
+                shutdown_handler()
+                break
+            except Exception as e:
+                retry_count += 1
+                logger.error(f"❌ Ошибка: {e}")
+                if retry_count < max_retries:
+                    delay = random.randint(3, 7)
+                    logger.info(f"🔄 Перезапуск {retry_count}/{max_retries} через {delay}с...")
+                    time.sleep(delay)
+                else:
+                    logger.error("❌ Превышено количество попыток")
+                    shutdown_handler()
+    finally:
+        cleanup_resources()
+
+
+# ============================================
+# ТОЧКА ВХОДА
+# ============================================
+
+if __name__ == "__main__":
+    main()
+
 
 if __name__ == "__main__":
     main()
