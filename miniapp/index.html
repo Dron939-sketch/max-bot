@@ -66,14 +66,13 @@
             }
             
             // 5. Тестовый ID только для разработки (если не в MAX)
-        if (!window.MAX || !window.MAX.WebApp) {
-            console.warn('⚠️ Режим разработки: используется тестовый user_id');
-            // ✅ ИСПРАВЛЕНО: числовой ID вместо строки с test_
-            const testId = Math.floor(Math.random() * 1000000000).toString();
-            localStorage.setItem('fredi_user_id', testId);
-            console.log('🔧 Создан тестовый ID:', testId);
-            return testId;
-        }
+            if (!window.MAX || !window.MAX.WebApp) {
+                console.warn('⚠️ Режим разработки: используется тестовый user_id');
+                const testId = Math.floor(Math.random() * 1000000000).toString();
+                localStorage.setItem('fredi_user_id', testId);
+                console.log('🔧 Создан тестовый ID:', testId);
+                return testId;
+            }
             
             console.error('❌ Не удалось получить user_id!');
             return null;
@@ -144,7 +143,7 @@
         }
     </script>
     
-    <!-- ========== КОНФИГУРАЦИЯ API (ИСПРАВЛЕНО) ========== -->
+    <!-- ========== КОНФИГУРАЦИЯ API ========== -->
     <script>
         // FastAPI запущен на основном сервере
         const MAIN_API_URL = 'https://max-bot-1-ywpz.onrender.com';
@@ -153,20 +152,16 @@
         const hostname = window.location.hostname;
         
         if (hostname === 'max-bot-miniapp.onrender.com') {
-            // Мини-приложение открыто отдельно — API на основном сервере
             window.API_BASE_URL = MAIN_API_URL;
             console.log('🌐 Мини-приложение на отдельном домене, API:', window.API_BASE_URL);
         } else if (hostname === 'max-bot-1-ywpz.onrender.com') {
-            // Открыто на основном домене — API там же
             window.API_BASE_URL = window.location.origin;
             console.log('🌐 Основной домен, API:', window.API_BASE_URL);
         } else {
-            // Локальная разработка
             window.API_BASE_URL = 'http://localhost:10000';
             console.log('🌐 Локальная разработка, API:', window.API_BASE_URL);
         }
         
-        // Сохраняем в localStorage для других скриптов
         localStorage.setItem('api_base_url', window.API_BASE_URL);
     </script>
     
@@ -1516,71 +1511,83 @@
         </div>
     </template>
 
-    <!-- ========== СКРИПТЫ (с увеличенной версией для обновления кэша) ========== -->
-    <script src="/context.js?v=8"></script>
-    <script src="/onboarding.js?v=8"></script>
-    <script src="/script.js?v=8"></script>
-    <script src="/test.js?v=8"></script>
-    <script src="/animations.js?v=8"></script>
-    <script src="/animated-avatar.js?v=8"></script>
-    <script src="/dynamic-bg.js?v=8"></script>
-    <script src="/challenges.js?v=8"></script>
-    <script src="/notifications.js?v=8"></script>
-    <script src="/psychometric.js?v=8"></script>
-    <script src="/dashboard.js?v=8"></script>
+    <!-- ========== СКРИПТЫ (ПРАВИЛЬНЫЙ ПОРЯДОК, API ПЕРВЫЙ) ========== -->
+    <script src="/api.js?v=9"></script>
+    <script src="/context.js?v=9"></script>
+    <script src="/onboarding.js?v=9"></script>
+    <script src="/script.js?v=9"></script>
+    <script src="/test.js?v=9"></script>
+    <script src="/animations.js?v=9"></script>
+    <script src="/animated-avatar.js?v=9"></script>
+    <script src="/dynamic-bg.js?v=9"></script>
+    <script src="/challenges.js?v=9"></script>
+    <script src="/notifications.js?v=9"></script>
+    <script src="/psychometric.js?v=9"></script>
+    <script src="/dashboard.js?v=9"></script>
     
-    <!-- Микрофон для мобильных -->
+    <!-- ===== МИКРОФОН ДЛЯ MAX - УДЕРЖАНИЕ ДЛЯ ЗАПИСИ ===== -->
     <script>
-        class MicrophoneManager {
+        class MaxMicrophoneManager {
             constructor() {
                 this.hasPermission = false;
                 this.isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
                 this.isAndroid = /Android/i.test(navigator.userAgent);
             }
-            
+
             async requestMicrophone() {
                 console.log('🎤 Запрос микрофона...');
+                this.showLoading();
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                     this.hasPermission = true;
-                    stream.getTracks().forEach(track => track.stop());
+                    this.hideLoading();
                     this.showToast('✅ Микрофон готов!', 'success');
+                    stream.getTracks().forEach(track => track.stop());
                     return true;
                 } catch (error) {
-                    console.error('Microphone error:', error);
-                    if (error.name === 'NotAllowedError') {
+                    this.hideLoading();
+                    console.error('❌ Ошибка:', error);
+                    if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
                         this.showPermissionInstructions();
+                    } else if (error.name === 'NotFoundError') {
+                        this.showToast('❌ Микрофон не найден на устройстве', 'error');
+                    } else if (error.name === 'NotReadableError') {
+                        this.showToast('❌ Микрофон занят другим приложением', 'error');
                     } else {
-                        this.showToast('❌ Не удалось получить доступ к микрофону', 'error');
+                        this.showToast(`❌ Ошибка: ${error.message}`, 'error');
                     }
                     return false;
                 }
             }
-            
+
             showPermissionInstructions() {
+                let instructions = '';
+                if (this.isAndroid) {
+                    instructions = '🔊 <b>МИКРОФОН ЗАБЛОКИРОВАН В MAX</b><br><br>1️⃣ Закройте чат с ботом<br>2️⃣ Откройте <b>Настройки</b> телефона<br>3️⃣ <b>Приложения</b> → <b>MAX</b><br>4️⃣ <b>Разрешения</b> → <b>Микрофон</b><br>5️⃣ Выберите <b>Разрешить</b><br><br>6️⃣ Вернитесь и нажмите 🎤 ещё раз';
+                } else if (this.isIOS) {
+                    instructions = '🎤 <b>МИКРОФОН ЗАБЛОКИРОВАН В MAX</b><br><br>1️⃣ Закройте чат с ботом<br>2️⃣ Откройте <b>Настройки</b> iPhone<br>3️⃣ Прокрутите вниз → найдите <b>MAX</b><br>4️⃣ Включите <b>Микрофон</b><br><br>5️⃣ Вернитесь и нажмите 🎤 ещё раз';
+                } else {
+                    instructions = '🎤 <b>МИКРОФОН ЗАБЛОКИРОВАН</b><br><br>В настройках браузера разрешите доступ к микрофону.';
+                }
+                
                 const modal = document.createElement('div');
                 modal.className = 'microphone-modal';
                 modal.innerHTML = `
                     <div class="microphone-modal-content">
                         <div style="font-size:48px;margin-bottom:16px;">🎤</div>
-                        <h3>Нужен доступ к микрофону</h3>
-                        <div style="color:var(--max-text-secondary);line-height:1.6;margin:16px 0;">
-                            В настройках приложения MAX разрешите доступ к микрофону.
-                        </div>
-                        <div style="display:flex;gap:12px;">
+                        <h3 style="margin:0 0 12px 0;">Нужен доступ к микрофону</h3>
+                        <div style="color:var(--max-text-secondary,#8e9aa6);line-height:1.6;text-align:left;font-size:14px;">${instructions}</div>
+                        <div style="display:flex;gap:12px;margin-top:28px;">
                             <button id="microphoneRetryBtn" class="modal-btn primary">🔄 ПРОВЕРИТЬ</button>
                             <button id="microphoneCloseBtn" class="modal-btn secondary">📱 ЗАКРЫТЬ</button>
                         </div>
                     </div>
                 `;
                 document.body.appendChild(modal);
-                document.getElementById('microphoneRetryBtn')?.addEventListener('click', () => {
-                    modal.remove();
-                    this.requestMicrophone();
-                });
+                document.getElementById('microphoneRetryBtn')?.addEventListener('click', () => { modal.remove(); this.requestMicrophone(); });
                 document.getElementById('microphoneCloseBtn')?.addEventListener('click', () => modal.remove());
             }
-            
+
             showToast(message, type) {
                 const toast = document.getElementById('toastMessage');
                 if (toast) {
@@ -1589,19 +1596,323 @@
                     setTimeout(() => toast.classList.remove('show'), 3000);
                 }
             }
+
+            showLoading() {
+                const btn = document.getElementById('voiceRecordBtn');
+                if (btn && !btn.disabled) {
+                    btn.textContent = '⏳';
+                    btn.disabled = true;
+                }
+            }
+
+            hideLoading() {
+                const btn = document.getElementById('voiceRecordBtn');
+                if (btn) {
+                    btn.textContent = '🎤';
+                    btn.disabled = false;
+                }
+            }
         }
+
+        window.maxMicrophoneManager = new MaxMicrophoneManager();
         
-        window.microphoneManager = new MicrophoneManager();
-        
-        // Инициализация dashboard
+        window.voiceRecorder = {
+            mediaRecorder: null,
+            audioChunks: [],
+            isRecording: false,
+            recordingStartTime: null,
+            recordingTimer: null,
+            stream: null,
+            pressTimer: null,
+            isLongPress: false
+        };
+
+        function getSupportedMimeType() {
+            const types = ['audio/webm', 'audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/mpeg'];
+            for (const type of types) {
+                if (MediaRecorder.isTypeSupported(type)) return type;
+            }
+            return 'audio/webm';
+        }
+
+        async function startActualRecording() {
+            if (window.voiceRecorder.isRecording) return false;
+            
+            try {
+                window.voiceRecorder.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                
+                const mimeType = getSupportedMimeType();
+                window.voiceRecorder.mediaRecorder = new MediaRecorder(window.voiceRecorder.stream, { mimeType });
+                window.voiceRecorder.audioChunks = [];
+                
+                window.voiceRecorder.mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) window.voiceRecorder.audioChunks.push(event.data);
+                };
+                
+                window.voiceRecorder.mediaRecorder.onstop = async () => {
+                    if (window.voiceRecorder.stream) {
+                        window.voiceRecorder.stream.getTracks().forEach(track => track.stop());
+                        window.voiceRecorder.stream = null;
+                    }
+                    
+                    if (window.voiceRecorder.audioChunks.length > 0) {
+                        const totalSize = window.voiceRecorder.audioChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+                        if (totalSize > 5000) {
+                            const audioBlob = new Blob(window.voiceRecorder.audioChunks, { type: mimeType });
+                            await sendVoiceToServer(audioBlob);
+                        } else {
+                            window.maxMicrophoneManager.showToast('Запись слишком короткая', 'error');
+                        }
+                    }
+                    window.voiceRecorder.audioChunks = [];
+                    window.voiceRecorder.isRecording = false;
+                };
+                
+                window.voiceRecorder.mediaRecorder.start(100);
+                window.voiceRecorder.isRecording = true;
+                window.voiceRecorder.recordingStartTime = Date.now();
+                
+                const voiceBtn = document.getElementById('voiceRecordBtn');
+                if (voiceBtn) {
+                    voiceBtn.textContent = '⏹️';
+                    voiceBtn.classList.add('recording');
+                }
+                
+                const voiceStatus = document.getElementById('voiceStatus');
+                if (voiceStatus) {
+                    voiceStatus.style.display = 'flex';
+                }
+                
+                startRecordingTimerUI();
+                
+                setTimeout(() => {
+                    if (window.voiceRecorder.isRecording) stopVoiceRecording();
+                }, 60000);
+                
+                return true;
+            } catch (error) {
+                console.error('Recording error:', error);
+                window.maxMicrophoneManager.showToast('❌ Ошибка записи', 'error');
+                return false;
+            }
+        }
+
+        window.startVoiceRecording = async function() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                window.maxMicrophoneManager.showToast('❌ Ваше устройство не поддерживает голосовой ввод', 'error');
+                return false;
+            }
+            
+            if (!window.maxMicrophoneManager.hasPermission) {
+                const granted = await window.maxMicrophoneManager.requestMicrophone();
+                if (!granted) return false;
+            }
+            
+            return await startActualRecording();
+        };
+
+        window.stopVoiceRecording = function() {
+            if (window.voiceRecorder.mediaRecorder && window.voiceRecorder.isRecording) {
+                window.voiceRecorder.mediaRecorder.stop();
+                window.voiceRecorder.isRecording = false;
+                stopRecordingTimerUI();
+                
+                const voiceBtn = document.getElementById('voiceRecordBtn');
+                if (voiceBtn) {
+                    voiceBtn.textContent = '🎤';
+                    voiceBtn.classList.remove('recording');
+                }
+                
+                const voiceStatus = document.getElementById('voiceStatus');
+                if (voiceStatus) voiceStatus.style.display = 'none';
+            }
+        };
+
+        window.cancelVoiceRecording = function() {
+            if (window.voiceRecorder.mediaRecorder && window.voiceRecorder.isRecording) {
+                window.voiceRecorder.mediaRecorder.onstop = null;
+                window.voiceRecorder.mediaRecorder.stop();
+                
+                if (window.voiceRecorder.stream) {
+                    window.voiceRecorder.stream.getTracks().forEach(track => track.stop());
+                    window.voiceRecorder.stream = null;
+                }
+                
+                window.voiceRecorder.isRecording = false;
+                window.voiceRecorder.audioChunks = [];
+                stopRecordingTimerUI();
+                
+                const voiceBtn = document.getElementById('voiceRecordBtn');
+                if (voiceBtn) {
+                    voiceBtn.textContent = '🎤';
+                    voiceBtn.classList.remove('recording');
+                }
+                
+                const voiceStatus = document.getElementById('voiceStatus');
+                if (voiceStatus) voiceStatus.style.display = 'none';
+            }
+        };
+
+        function startRecordingTimerUI() {
+            const timerEl = document.getElementById('recordingTimer');
+            if (!timerEl) return;
+            if (window.voiceRecorder.recordingTimer) clearInterval(window.voiceRecorder.recordingTimer);
+            
+            window.voiceRecorder.recordingTimer = setInterval(() => {
+                if (window.voiceRecorder.isRecording && window.voiceRecorder.recordingStartTime) {
+                    const elapsed = Math.floor((Date.now() - window.voiceRecorder.recordingStartTime) / 1000);
+                    timerEl.textContent = `${elapsed}s`;
+                    timerEl.style.display = 'block';
+                    
+                    if (elapsed >= 55) {
+                        timerEl.style.background = 'rgba(255,68,68,0.9)';
+                    }
+                    if (elapsed >= 60) {
+                        stopVoiceRecording();
+                    }
+                }
+            }, 200);
+        }
+
+        function stopRecordingTimerUI() {
+            if (window.voiceRecorder.recordingTimer) {
+                clearInterval(window.voiceRecorder.recordingTimer);
+                window.voiceRecorder.recordingTimer = null;
+            }
+            const timerEl = document.getElementById('recordingTimer');
+            if (timerEl) {
+                timerEl.style.display = 'none';
+                timerEl.style.background = 'rgba(0,0,0,0.9)';
+            }
+        }
+
+        async function sendVoiceToServer(audioBlob) {
+            window.maxMicrophoneManager.showToast('🎙️ Распознаю речь...', 'info');
+            
+            const formData = new FormData();
+            formData.append('user_id', window.maxContext?.user_id || localStorage.getItem('fredi_user_id'));
+            formData.append('voice', audioBlob, 'voice.webm');
+            
+            try {
+                const response = await fetch('/api/voice/process', { method: 'POST', body: formData, timeout: 30000 });
+                const result = await response.json();
+                
+                if (result.success) {
+                    if (result.recognized_text) {
+                        window.maxMicrophoneManager.showToast(`🎤 "${result.recognized_text}"`, 'success');
+                        const questionInput = document.getElementById('questionInput');
+                        if (questionInput) {
+                            questionInput.value = result.recognized_text;
+                            const sendBtn = document.getElementById('sendQuestionBtn');
+                            if (sendBtn && result.recognized_text.length > 3) {
+                                setTimeout(() => sendBtn.click(), 500);
+                            }
+                        }
+                    }
+                    if (result.answer && window.dashboard && window.dashboard.showFloatingMessage) {
+                        window.dashboard.showFloatingMessage(result.answer, 'info');
+                    }
+                    if (result.audio_url) {
+                        const audio = document.getElementById('hiddenAudioPlayer');
+                        if (audio) {
+                            audio.src = result.audio_url;
+                            audio.play().catch(e => console.warn('Audio play error:', e));
+                        }
+                    }
+                } else {
+                    window.maxMicrophoneManager.showToast(result.error || 'Не удалось распознать речь', 'error');
+                }
+            } catch (error) {
+                console.error('Send voice error:', error);
+                window.maxMicrophoneManager.showToast('❌ Ошибка отправки голоса', 'error');
+            }
+        }
+
+        function initVoiceButton() {
+            const voiceBtn = document.getElementById('voiceRecordBtn');
+            if (!voiceBtn) return;
+            
+            let pressTimer = null;
+            let isPressing = false;
+            
+            function onPointerDown(e) {
+                e.preventDefault();
+                if (isPressing) return;
+                isPressing = true;
+                
+                voiceBtn.style.transform = 'scale(0.95)';
+                
+                pressTimer = setTimeout(async () => {
+                    if (isPressing) {
+                        const started = await window.startVoiceRecording();
+                        if (!started) {
+                            isPressing = false;
+                            voiceBtn.style.transform = '';
+                        }
+                    }
+                }, 120);
+            }
+            
+            function onPointerUp(e) {
+                e.preventDefault();
+                
+                if (pressTimer) {
+                    clearTimeout(pressTimer);
+                    pressTimer = null;
+                }
+                
+                if (window.voiceRecorder.isRecording) {
+                    window.stopVoiceRecording();
+                }
+                
+                isPressing = false;
+                voiceBtn.style.transform = '';
+            }
+            
+            function onPointerCancel(e) {
+                e.preventDefault();
+                if (pressTimer) {
+                    clearTimeout(pressTimer);
+                    pressTimer = null;
+                }
+                if (window.voiceRecorder.isRecording) {
+                    window.cancelVoiceRecording();
+                    window.maxMicrophoneManager.showToast('Запись отменена', 'info');
+                }
+                isPressing = false;
+                voiceBtn.style.transform = '';
+            }
+            
+            voiceBtn.addEventListener('pointerdown', onPointerDown);
+            voiceBtn.addEventListener('pointerup', onPointerUp);
+            voiceBtn.addEventListener('pointercancel', onPointerCancel);
+            voiceBtn.addEventListener('touchstart', (e) => { e.preventDefault(); }, { passive: false });
+            
+            console.log('🎤 Голосовая кнопка инициализирована (удержание для записи)');
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
-            console.log('📄 DOM загружен, создаём FrediDashboard');
-            if (typeof FrediDashboard !== 'undefined') {
-                window.dashboard = new FrediDashboard();
-            } else {
-                console.error('❌ FrediDashboard не загружен!');
+            initVoiceButton();
+            
+            if (window.maxMicrophoneManager.isIOS) {
+                document.body.addEventListener('touchstart', () => {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    if (AudioContext) {
+                        const audioCtx = new AudioContext();
+                        if (audioCtx.state === 'suspended') audioCtx.resume();
+                    }
+                }, { once: true });
             }
         });
+
+        window.sendVoiceToServer = sendVoiceToServer;
+        window.showToast = window.maxMicrophoneManager.showToast.bind(window.maxMicrophoneManager);
+        
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').catch(error => console.error('Service Worker error:', error));
+            });
+        }
     </script>
 </body>
 </html>
