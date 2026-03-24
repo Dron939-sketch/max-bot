@@ -2,14 +2,15 @@
 # -*- coding: utf-8 -*-
 """
 Административные обработчики для MAX
-Версия 2.2 - ИСПРАВЛЕНО: замена асинхронных вызовов БД на синхронные
+Версия 2.1 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
+Восстановлено из оригинального bot3.py и адаптировано
 """
 
 import logging
 import time
 import datetime
 import asyncio
-import threading
+import threading  # ✅ УЖЕ ЕСТЬ
 from typing import Dict, Any, List, Optional
 
 from bot_instance import bot
@@ -20,59 +21,54 @@ from config import ADMIN_IDS
 from message_utils import safe_send_message, safe_edit_message, safe_delete_message
 from keyboards import get_back_keyboard
 
-# Импорты из state
+# ✅ ИСПРАВЛЕНО: Импортируем из state, а не из main
 from state import (
     user_data, user_contexts, user_names, user_state_data, user_states, user_routes,
     get_state, set_state, get_state_data, update_state_data, clear_state,
     save_all_users_to_db, get_stats as get_memory_stats
 )
 
-# Импорты из models
+# ✅ ИСПРАВЛЕНО: Импортируем Statistics из models, а не из main
 from models import Statistics
 
-# ✅ ИСПРАВЛЕНО: импорт синхронных функций из db_instance
-from db_instance import (
-    save_user,
-    save_user_data,
-    save_context,
-    save_test_result,
-    log_event,
-    add_reminder,
-    get_user_reminders,
-    complete_reminder,
-    load_user_data,
-    load_user_context,
-    load_all_users,
-    get_stats as db_get_stats,
-    ensure_connection as db_ensure
-)
+# ✅ ДОБАВЛЕНО: импорт для БД
+from db_instance import db, save_user_to_db, ensure_db_connection
 
 logger = logging.getLogger(__name__)
 
-
 # ============================================
-# ✅ ФУНКЦИЯ ДЛЯ ЗАПУСКА СИНХРОННЫХ ВЫЗОВОВ В ФОНЕ
+# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
 # ============================================
 
-def run_sync_in_background(func, *args, **kwargs):
-    """Запускает синхронную функцию в отдельном потоке"""
+def run_async_task(coro_func, *args, **kwargs):
+    """
+    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
+    """
     def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            func(*args, **kwargs)
+            # Проверяем соединение с БД перед выполнением
+            if 'db' in str(coro_func) or 'save' in str(coro_func) or 'log' in str(coro_func):
+                loop.run_until_complete(ensure_db_connection())
+            coro = coro_func(*args, **kwargs)
+            loop.run_until_complete(coro)
         except Exception as e:
-            logger.error(f"❌ Ошибка в фоновой задаче: {e}")
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+        finally:
+            loop.close()
+    
     threading.Thread(target=_wrapper, daemon=True).start()
-
 
 # ============================================
 # СОЗДАЕМ ЭКЗЕМПЛЯР STATISTICS
 # ============================================
 
+# Создаем экземпляр статистики
 stats = Statistics()
 
-
 # ============================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (теперь используют state)
 # ============================================
 
 def get_user_data(user_id: int) -> Dict[str, Any]:
@@ -99,68 +95,75 @@ def is_admin(user_id: int) -> bool:
     """Проверяет, является ли пользователь администратором"""
     return user_id in ADMIN_IDS
 
-
 # ============================================
-# ✅ ИСПРАВЛЕНО: СИНХРОННЫЕ ФУНКЦИИ ДЛЯ БД
+# ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
 # ============================================
 
-def get_db_stats_sync() -> Dict[str, Any]:
-    """Синхронно получает статистику из БД"""
+async def get_db_stats() -> Dict[str, Any]:
+    """Получает статистику из БД"""
     try:
-        db_ensure()
-        return db_get_stats()
+        # ✅ Проверяем соединение с БД
+        await ensure_db_connection()
+        return await db.get_stats(days=30)
     except Exception as e:
         logger.error(f"❌ Ошибка получения статистики из БД: {e}")
         return {}
 
-def sync_user_to_db_sync(user_id: int) -> bool:
+async def sync_user_to_db(user_id: int):
     """Синхронизирует конкретного пользователя с БД"""
     try:
-        db_ensure()
-        save_user(user_id, user_names.get(user_id), None)
-        if user_id in user_data:
-            save_user_data(user_id, user_data[user_id])
-        if user_id in user_contexts:
-            context = user_contexts[user_id]
-            save_context(
-                user_id,
-                name=getattr(context, 'name', None),
-                age=getattr(context, 'age', None),
-                gender=getattr(context, 'gender', None),
-                city=getattr(context, 'city', None),
-                mode=getattr(context, 'communication_mode', None)
-            )
+        # ✅ Проверяем соединение с БД
+        await ensure_db_connection()
+        await save_user_to_db(user_id, user_data, user_contexts, user_routes)
         return True
     except Exception as e:
         logger.error(f"❌ Ошибка синхронизации пользователя {user_id}: {e}")
         return False
 
-def sync_all_users_to_db_sync() -> Dict[str, int]:
+async def sync_all_users_to_db() -> Dict[str, int]:
     """Синхронизирует всех пользователей с БД"""
-    saved = 0
-    for user_id in list(user_data.keys()):
-        if sync_user_to_db_sync(user_id):
-            saved += 1
+    # ✅ Проверяем соединение с БД
+    await ensure_db_connection()
+    saved = await save_all_users_to_db(db)
     return {"saved": saved}
 
-def get_db_size_sync() -> Dict[str, int]:
-    """Синхронно получает размер таблиц в БД"""
+async def get_db_size() -> Dict[str, int]:
+    """Получает размер таблиц в БД"""
     try:
-        db_ensure()
-        # Получаем статистику через get_stats
-        stats_data = db_get_stats()
-        return {
-            "users": stats_data.get('users', 0),
-            "contexts": stats_data.get('contexts', 0),
-            "data": stats_data.get('data', 0),
-            "routes": 0,  # TODO: добавить в get_stats
-            "tests": stats_data.get('tests', 0),
-            "events_30d": stats_data.get('events', 0)
-        }
+        # ✅ Проверяем соединение с БД
+        await ensure_db_connection()
+        async with db.get_connection() as conn:
+            # Количество пользователей
+            users_count = await conn.fetchval("SELECT COUNT(*) FROM fredi_users")
+            
+            # Количество контекстов
+            contexts_count = await conn.fetchval("SELECT COUNT(*) FROM fredi_user_contexts")
+            
+            # Количество данных
+            data_count = await conn.fetchval("SELECT COUNT(*) FROM fredi_user_data")
+            
+            # Количество маршрутов
+            routes_count = await conn.fetchval("SELECT COUNT(*) FROM fredi_user_routes")
+            
+            # Количество результатов тестов
+            tests_count = await conn.fetchval("SELECT COUNT(*) FROM fredi_test_results")
+            
+            # Количество событий за последние 30 дней
+            events_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM fredi_events WHERE created_at > NOW() - INTERVAL '30 days'"
+            )
+            
+            return {
+                "users": users_count or 0,
+                "contexts": contexts_count or 0,
+                "data": data_count or 0,
+                "routes": routes_count or 0,
+                "tests": tests_count or 0,
+                "events_30d": events_count or 0
+            }
     except Exception as e:
         logger.error(f"❌ Ошибка получения размера БД: {e}")
         return {}
-
 
 # ============================================
 # ПРОВЕРКА ПРАВ ДОСТУПА
@@ -179,6 +182,7 @@ def check_admin_access(message_or_call) -> bool:
     
     if not user_id or not is_admin(user_id):
         if hasattr(message_or_call, 'message') and hasattr(message_or_call.message, 'chat'):
+            # Это callback
             safe_send_message(
                 message_or_call.message,
                 "⛔ <b>Доступ запрещён</b>\n\nЭта команда только для администраторов.",
@@ -186,6 +190,7 @@ def check_admin_access(message_or_call) -> bool:
                 delete_previous=True
             )
         elif hasattr(message_or_call, 'chat'):
+            # Это message
             safe_send_message(
                 message_or_call,
                 "⛔ <b>Доступ запрещён</b>\n\nЭта команда только для администраторов.",
@@ -194,7 +199,6 @@ def check_admin_access(message_or_call) -> bool:
             )
         return False
     return True
-
 
 # ============================================
 # КОМАНДЫ АДМИНИСТРАТОРОВ
@@ -221,16 +225,12 @@ def cmd_dbstats(message: Message):
     if not check_admin_access(message):
         return
     
-    def run_sync():
+    def run_async():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            status_msg = safe_send_message(
-                message,
-                "🔄 Получение статистики базы данных...",
-                delete_previous=True
-            )
-            
             # Получаем размер таблиц
-            db_sizes = get_db_size_sync()
+            db_sizes = loop.run_until_complete(get_db_size())
             
             # Получаем статистику из памяти
             memory_stats = get_memory_stats()
@@ -241,8 +241,9 @@ def cmd_dbstats(message: Message):
             text += f"• Пользователей: {db_sizes.get('users', 0)}\n"
             text += f"• Контекстов: {db_sizes.get('contexts', 0)}\n"
             text += f"• Данных: {db_sizes.get('data', 0)}\n"
+            text += f"• Маршрутов: {db_sizes.get('routes', 0)}\n"
             text += f"• Результатов тестов: {db_sizes.get('tests', 0)}\n"
-            text += f"• Событий: {db_sizes.get('events_30d', 0)}\n\n"
+            text += f"• Событий (30 дн): {db_sizes.get('events_30d', 0)}\n\n"
             
             text += f"<b>Память (кэш):</b>\n"
             text += f"• user_data: {memory_stats.get('users_in_data', 0)}\n"
@@ -250,17 +251,13 @@ def cmd_dbstats(message: Message):
             text += f"• user_routes: {memory_stats.get('users_in_routes', 0)}\n"
             text += f"• user_states: {memory_stats.get('users_in_states', 0)}\n"
             
-            if status_msg:
-                try:
-                    safe_delete_message(message.chat.id, status_msg.message_id)
-                except:
-                    pass
-            
             safe_send_message(message, text, parse_mode='HTML', delete_previous=True)
         except Exception as e:
             logger.error(f"❌ Ошибка в dbstats: {e}")
+        finally:
+            loop.close()
     
-    threading.Thread(target=run_sync, daemon=True).start()
+    threading.Thread(target=run_async, daemon=True).start()
 
 @bot.message_handler(commands=['apistatus'])
 def cmd_apistatus(message: Message):
@@ -313,6 +310,7 @@ def cmd_broadcast(message: Message):
     
     safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     
+    # ✅ ИСПРАВЛЕНО: используем импортированный user_states из state
     user_states[message.from_user.id] = "awaiting_broadcast"
 
 @bot.message_handler(commands=['users'])
@@ -330,6 +328,8 @@ def cmd_sync(message: Message):
         return
     
     def run_sync():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
             status_msg = safe_send_message(
                 message,
@@ -337,7 +337,7 @@ def cmd_sync(message: Message):
                 delete_previous=True
             )
             
-            result = sync_all_users_to_db_sync()
+            result = loop.run_until_complete(sync_all_users_to_db())
             
             if status_msg:
                 try:
@@ -352,9 +352,10 @@ def cmd_sync(message: Message):
             )
         except Exception as e:
             logger.error(f"❌ Ошибка синхронизации: {e}")
+        finally:
+            loop.close()
     
     threading.Thread(target=run_sync, daemon=True).start()
-
 
 # ============================================
 # АДМИНСКАЯ ПАНЕЛЬ
@@ -367,6 +368,7 @@ def show_admin_panel(message_or_call):
     if not check_admin_access(message_or_call):
         return
     
+    # Собираем статистику из памяти
     memory_stats = get_memory_stats()
     
     text = f"""
@@ -401,6 +403,7 @@ def show_admin_panel(message_or_call):
     keyboard.row(InlineKeyboardButton("◀️ В МЕНЮ", callback_data="main_menu"))
     
     if hasattr(message_or_call, 'message'):
+        # Это callback
         safe_send_message(
             message_or_call.message,
             text,
@@ -409,6 +412,7 @@ def show_admin_panel(message_or_call):
             delete_previous=True
         )
     else:
+        # Это message
         safe_send_message(
             message_or_call,
             text,
@@ -416,7 +420,6 @@ def show_admin_panel(message_or_call):
             parse_mode='HTML',
             delete_previous=True
         )
-
 
 # ============================================
 # ОБРАБОТЧИКИ АДМИНСКИХ CALLBACK'ОВ
@@ -458,16 +461,12 @@ def show_admin_stats(call: CallbackQuery):
     if not check_admin_access(call):
         return
     
-    def run_sync():
+    def run_async():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            status_msg = safe_send_message(
-                call.message,
-                "🔄 Получение статистики...",
-                delete_previous=True
-            )
-            
             # Получаем статистику из БД
-            db_stats = get_db_stats_sync()
+            db_stats = loop.run_until_complete(get_db_stats())
             
             # Статистика из памяти
             memory_stats = get_memory_stats()
@@ -481,17 +480,16 @@ def show_admin_stats(call: CallbackQuery):
             text += f"• user_routes: {memory_stats.get('users_in_routes', 0)}\n"
             text += f"• user_states: {memory_stats.get('users_in_states', 0)}\n\n"
             
-            text += f"<b>POSTGRESQL:</b>\n"
-            text += f"• Всего пользователей: {db_stats.get('users', 0)}\n"
-            text += f"• Контекстов: {db_stats.get('contexts', 0)}\n"
-            text += f"• Результатов тестов: {db_stats.get('tests', 0)}\n"
-            text += f"• Событий: {db_stats.get('events', 0)}\n"
+            text += f"<b>POSTGRESQL (30 дней):</b>\n"
+            text += f"• Всего пользователей: {db_stats.get('total_users', 0)}\n"
+            text += f"• Активных: {db_stats.get('active_users', 0)}\n"
+            text += f"• Завершённых тестов: {db_stats.get('completed_tests', 0)}\n\n"
             
-            if status_msg:
-                try:
-                    safe_delete_message(call.message.chat.id, status_msg.message_id)
-                except:
-                    pass
+            if db_stats.get('perception_types'):
+                text += f"<b>Типы восприятия:</b>\n"
+                for pt in db_stats.get('perception_types', []):
+                    text += f"• {pt.get('perception_type', 'unknown')}: {pt.get('count', 0)}\n"
+                text += f"\n"
             
             keyboard = get_back_keyboard("admin_panel")
             
@@ -504,38 +502,35 @@ def show_admin_stats(call: CallbackQuery):
             )
         except Exception as e:
             logger.error(f"❌ Ошибка в admin_stats: {e}")
+        finally:
+            loop.close()
     
-    threading.Thread(target=run_sync, daemon=True).start()
+    threading.Thread(target=run_async, daemon=True).start()
 
 def show_admin_db(call: CallbackQuery):
     """Показывает информацию о базе данных"""
     if not check_admin_access(call):
         return
     
-    def run_sync():
+    def run_async():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            status_msg = safe_send_message(
-                call.message,
-                "🔄 Получение информации о БД...",
-                delete_previous=True
-            )
-            
-            db_sizes = get_db_size_sync()
+            # Получаем размер таблиц
+            db_sizes = loop.run_until_complete(get_db_size())
             
             text = f"🗄 <b>БАЗА ДАННЫХ</b>\n\n"
             
             text += f"<b>Размер таблиц:</b>\n"
-            text += f"• Пользователей: {db_sizes.get('users', 0)} записей\n"
-            text += f"• Контекстов: {db_sizes.get('contexts', 0)} записей\n"
-            text += f"• Данных: {db_sizes.get('data', 0)} записей\n"
-            text += f"• Результатов тестов: {db_sizes.get('tests', 0)} записей\n"
-            text += f"• Событий: {db_sizes.get('events_30d', 0)} записей\n\n"
+            text += f"• fredi_users: {db_sizes.get('users', 0)} записей\n"
+            text += f"• fredi_user_contexts: {db_sizes.get('contexts', 0)} записей\n"
+            text += f"• fredi_user_data: {db_sizes.get('data', 0)} записей\n"
+            text += f"• fredi_user_routes: {db_sizes.get('routes', 0)} записей\n"
+            text += f"• fredi_test_results: {db_sizes.get('tests', 0)} записей\n"
+            text += f"• fredi_events (30 дн): {db_sizes.get('events_30d', 0)} записей\n\n"
             
-            if status_msg:
-                try:
-                    safe_delete_message(call.message.chat.id, status_msg.message_id)
-                except:
-                    pass
+            text += f"<b>URL подключения:</b>\n"
+            text += f"• {db.dsn[:50]}...\n"
             
             keyboard = InlineKeyboardMarkup()
             keyboard.row(
@@ -552,8 +547,10 @@ def show_admin_db(call: CallbackQuery):
             )
         except Exception as e:
             logger.error(f"❌ Ошибка в admin_db: {e}")
+        finally:
+            loop.close()
     
-    threading.Thread(target=run_sync, daemon=True).start()
+    threading.Thread(target=run_async, daemon=True).start()
 
 def start_sync(call: CallbackQuery):
     """Запускает синхронизацию с БД"""
@@ -561,6 +558,8 @@ def start_sync(call: CallbackQuery):
         return
     
     def run_sync():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
             status_msg = safe_send_message(
                 call.message,
@@ -568,7 +567,7 @@ def start_sync(call: CallbackQuery):
                 delete_previous=True
             )
             
-            result = sync_all_users_to_db_sync()
+            result = loop.run_until_complete(sync_all_users_to_db())
             
             if status_msg:
                 try:
@@ -587,6 +586,8 @@ def start_sync(call: CallbackQuery):
             )
         except Exception as e:
             logger.error(f"❌ Ошибка синхронизации: {e}")
+        finally:
+            loop.close()
     
     threading.Thread(target=run_sync, daemon=True).start()
 
@@ -614,6 +615,7 @@ def start_broadcast(call: CallbackQuery):
         delete_previous=True
     )
     
+    # ✅ ИСПРАВЛЕНО: используем импортированный user_states из state
     user_states[call.from_user.id] = "awaiting_broadcast"
 
 def process_broadcast(message: Message, text: str):
@@ -624,6 +626,7 @@ def process_broadcast(message: Message, text: str):
     if not is_admin(user_id):
         return
     
+    # Получаем список всех пользователей
     all_users = list(user_data.keys())
     
     if not all_users:
@@ -634,6 +637,7 @@ def process_broadcast(message: Message, text: str):
         )
         return
     
+    # Отправляем статусное сообщение
     status_msg = safe_send_message(
         message,
         f"📢 Отправка рассылки <b>{len(all_users)}</b> пользователям...\n\nЭто может занять несколько минут.",
@@ -641,9 +645,11 @@ def process_broadcast(message: Message, text: str):
         delete_previous=True
     )
     
+    # Счётчики
     sent = 0
     failed = 0
     
+    # Отправляем каждому пользователю
     for uid in all_users:
         try:
             bot.send_message(
@@ -652,16 +658,18 @@ def process_broadcast(message: Message, text: str):
                 parse_mode='HTML'
             )
             sent += 1
-            time.sleep(0.05)
+            time.sleep(0.05)  # Небольшая задержка, чтобы не заблокировали
         except Exception as e:
             logger.error(f"Ошибка отправки пользователю {uid}: {e}")
             failed += 1
     
+    # Удаляем статусное сообщение
     try:
         safe_delete_message(message.chat.id, status_msg.message_id)
     except:
         pass
     
+    # Отправляем отчёт
     result_text = f"""
 📊 <b>РЕЗУЛЬТАТ РАССЫЛКИ</b>
 
@@ -694,15 +702,19 @@ def show_users_list(message_or_call):
     else:
         text = f"👥 <b>ПОЛЬЗОВАТЕЛИ ({len(all_users)})</b>\n\n"
         
+        # Показываем первых 20
         for i, uid in enumerate(all_users[:20], 1):
             name = user_names.get(uid, "Без имени")
             context = user_contexts.get(uid)
             
+            # Определяем, прошел ли тест
             test_passed = "✅" if user_data[uid].get("profile_data") or user_data[uid].get("ai_generated_profile") else "❌"
             
+            # Режим
             mode = context.communication_mode if context else "coach"
             mode_emoji = "🔮" if mode == "coach" else "🧠" if mode == "psychologist" else "⚡"
             
+            # ID для копирования
             text += f"{i}. {test_passed} {mode_emoji} <b>{name}</b> (ID: <code>{uid}</code>)\n"
         
         if len(all_users) > 20:
@@ -767,6 +779,7 @@ def show_admin_logs(call: CallbackQuery):
     if not check_admin_access(call):
         return
     
+    # Здесь можно реализовать чтение логов из файла
     text = """
 📝 <b>ЛОГИ</b>
 
@@ -816,7 +829,6 @@ def show_admin_cleanup(call: CallbackQuery):
         delete_previous=True
     )
 
-
 # ============================================
 # ОБРАБОТЧИКИ КОНКРЕТНЫХ АДМИНСКИХ ДЕЙСТВИЙ
 # ============================================
@@ -826,6 +838,7 @@ def cleanup_cache(call: CallbackQuery):
     if not check_admin_access(call):
         return
     
+    # Очищаем state_data для всех пользователей
     user_state_data.clear()
     
     text = "✅ Кэш состояний очищен"
@@ -843,6 +856,7 @@ def cleanup_logs(call: CallbackQuery):
     if not check_admin_access(call):
         return
     
+    # Здесь можно реализовать очистку лог-файлов
     text = "✅ Логи очищены"
     keyboard = get_back_keyboard("admin_panel")
     
@@ -858,6 +872,7 @@ def cleanup_users(call: CallbackQuery):
     if not check_admin_access(call):
         return
     
+    # Оставляем только пользователей с профилями
     active_users = {}
     active_contexts = {}
     active_names = {}
@@ -875,6 +890,7 @@ def cleanup_users(call: CallbackQuery):
     
     removed = len(user_data) - len(active_users)
     
+    # Обновляем глобальные хранилища
     user_data.clear()
     user_data.update(active_users)
     
@@ -887,6 +903,7 @@ def cleanup_users(call: CallbackQuery):
     user_routes.clear()
     user_routes.update(active_routes)
     
+    # Очищаем state_data для всех
     user_state_data.clear()
     
     text = f"✅ Очищено неактивных пользователей: {removed}"
@@ -904,10 +921,12 @@ def cleanup_tests(call: CallbackQuery):
     if not check_admin_access(call):
         return
     
+    # Удаляем данные незавершённых тестов
     cleaned = 0
     for uid, data in user_data.items():
         if not data.get("profile_data") and not data.get("ai_generated_profile"):
             if any(key in data for key in ["stage1_current", "stage2_current", "stage3_current", "stage4_current", "stage5_current"]):
+                # Очищаем только данные теста, оставляем остальное
                 for key in list(data.keys()):
                     if key.startswith("stage") or key in ["perception_scores", "strategy_levels", "dilts_counts"]:
                         del data[key]
@@ -929,6 +948,8 @@ def cleanup_db(call: CallbackQuery):
         return
     
     def run_cleanup():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
             status_msg = safe_send_message(
                 call.message,
@@ -936,9 +957,9 @@ def cleanup_db(call: CallbackQuery):
                 delete_previous=True
             )
             
-            db_ensure()
-            # В новой версии cleanup_old_data нет, используем get_stats для проверки
-            result = "✅ База данных доступна"
+            loop.run_until_complete(ensure_db_connection())
+            loop.run_until_complete(db.cleanup_old_data(days=30))
+            result = "✅ База данных очищена"
             
             if status_msg:
                 try:
@@ -955,6 +976,8 @@ def cleanup_db(call: CallbackQuery):
             )
         except Exception as e:
             logger.error(f"❌ Ошибка очистки БД: {e}")
+        finally:
+            loop.close()
     
     threading.Thread(target=run_cleanup, daemon=True).start()
 
