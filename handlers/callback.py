@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик всех callback-запросов для MAX
-Версия 2.7 - ИСПРАВЛЕНО: удален импорт несуществующих функций
+Версия 2.6 - ИСПРАВЛЕНЫ ВЫЗОВЫ ФУНКЦИЙ ЭТАПОВ
 """
 
 import logging
@@ -79,8 +79,7 @@ from handlers.profile import (
     show_ai_profile, 
     show_psychologist_thought,
     show_ai_profile_async,
-    show_psychologist_thought_async,
-    save_profile_to_db_sync  # ✅ ДОБАВЛЕНО
+    show_psychologist_thought_async
 )
 
 # Импорты обработчиков старта
@@ -166,6 +165,7 @@ async def async_callback_handler(call: CallbackQuery):
     
     logger.info(f"🔔 Асинхронный обратный вызов: {data} от пользователя {user_id}")
     
+    # 👇 ИСПРАВЛЕНО: отправляем непустой ответ
     try:
         call.answer("⏳ Обрабатываю...", show_alert=False)
     except Exception as e:
@@ -197,6 +197,7 @@ async def async_callback_handler(call: CallbackQuery):
 
 async def handle_sync_callback(call: CallbackQuery):
     """Обработчик синхронных callback'ов"""
+    # 🔥 ДОБАВЛЯЕМ ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
     global user_data, user_contexts, user_names, user_routes
     
     user_id = call.from_user.id
@@ -244,14 +245,18 @@ async def handle_sync_callback(call: CallbackQuery):
     elif data == "start_stage_1_direct":
         logger.info(f"🎬 Прямой старт этапа 1 для пользователя {user_id}")
         
+        # Очищаем данные теста, но сохраняем контекст
         if user_id in user_data:
+            # Сохраняем контекст, но очищаем данные теста
             user_context = user_contexts.get(user_id)
             user_data[user_id] = {}
             if user_context:
                 user_contexts[user_id] = user_context
         
+        # Устанавливаем состояние для этапа 1
         set_state(user_id, TestStates.stage_1)
         
+        # Обновляем данные состояния
         update_state_data(user_id,
             stage1_current=0,
             stage1_last_answered=-1,
@@ -259,6 +264,7 @@ async def handle_sync_callback(call: CallbackQuery):
             perception_scores={"EXTERNAL": 0, "INTERNAL": 0, "SYMBOLIC": 0, "MATERIAL": 0}
         )
         
+        # Показываем введение в этап 1
         from handlers.stages import show_stage_1_intro
         show_stage_1_intro(call.message, user_id, state_data)
     
@@ -358,7 +364,7 @@ async def handle_sync_callback(call: CallbackQuery):
         handle_clarifying_answer(call)
     
     # ============================================
-    # РЕЖИМЫ ОБЩЕНИЯ
+    # РЕЖИМЫ ОБЩЕНИЯ (НОВЫЙ ФОРМАТ)
     # ============================================
     elif data == "show_mode_selection":
         logger.info(f"🎭 show_mode_selection для пользователя {user_id}")
@@ -380,119 +386,119 @@ async def handle_sync_callback(call: CallbackQuery):
         show_mode_selected(call.message, "trainer")
     
     # ============================================
-    # РЕЖИМЫ (старый формат)
+    # РЕЖИМЫ ОБЩЕНИЯ (СТАРЫЙ ФОРМАТ - ДЛЯ СОВМЕСТИМОСТИ)
     # ============================================
     elif data == "mode_coach":
-        logger.info(f"🎭 Выбран режим: coach (старый) для {user_id}")
+        logger.info(f"🎭 Выбран режим: coach (старый формат) для пользователя {user_id}")
         update_state_data(user_id, communication_mode="coach")
         show_mode_selected(call.message, "coach")
     
     elif data == "mode_psychologist":
-        logger.info(f"🎭 Выбран режим: psychologist (старый) для {user_id}")
+        logger.info(f"🎭 Выбран режим: psychologist (старый формат) для пользователя {user_id}")
         update_state_data(user_id, communication_mode="psychologist")
         show_mode_selected(call.message, "psychologist")
     
     elif data == "mode_trainer":
-        logger.info(f"🎭 Выбран режим: trainer (старый) для {user_id}")
+        logger.info(f"🎭 Выбран режим: trainer (старый формат) для пользователя {user_id}")
         update_state_data(user_id, communication_mode="trainer")
         show_mode_selected(call.message, "trainer")
     
     elif data == "back_to_mode_selected":
-        logger.info(f"◀️ back_to_mode_selected для {user_id}")
+        logger.info(f"◀️ back_to_mode_selected для пользователя {user_id}")
         context = user_contexts.get(user_id)
         if context:
             mode = context.communication_mode or "coach"
             show_mode_selected(call.message, mode)
     
     # ============================================
-    # КОНТЕКСТ
+    # КОНТЕКСТ (пол, возраст и т.д.)
     # ============================================
     elif data in ["set_gender_male", "set_gender_female", "set_gender_other"]:
-        logger.info(f"👤 Выбор пола: {data} для {user_id}")
+        logger.info(f"👤 Выбор пола: {data} для пользователя {user_id}")
         handle_context_callback(call)
     
     # ============================================
     # REALITY CHECK
     # ============================================
     elif data == "check_reality":
-        logger.info(f"🔍 check_reality для {user_id}")
+        logger.info(f"🔍 check_reality для пользователя {user_id}")
         await show_reality_check(call, state_data)
     
     elif data == "skip_life_context":
-        logger.info(f"⏭ skip_life_context для {user_id}")
+        logger.info(f"⏭ skip_life_context для пользователя {user_id}")
         await skip_life_context(call, state_data)
     
     elif data == "skip_goal_questions":
-        logger.info(f"⏭ skip_goal_questions для {user_id}")
+        logger.info(f"⏭ skip_goal_questions для пользователя {user_id}")
         await skip_goal_questions(call, state_data)
     
     elif data == "skip_to_route":
-        logger.info(f"⏭ skip_to_route для {user_id}")
+        logger.info(f"⏭ skip_to_route для пользователя {user_id}")
         await skip_to_route(call, state_data)
     
     elif data == "accept_feasibility_plan":
-        logger.info(f"✅ accept_feasibility_plan для {user_id}")
+        logger.info(f"✅ accept_feasibility_plan для пользователя {user_id}")
         await accept_feasibility_plan(call, state_data)
     
     elif data == "adjust_timeline":
-        logger.info(f"🔄 adjust_timeline для {user_id}")
+        logger.info(f"🔄 adjust_timeline для пользователя {user_id}")
         await adjust_timeline(call, state_data)
     
     elif data == "reduce_goal":
-        logger.info(f"📉 reduce_goal для {user_id}")
+        logger.info(f"📉 reduce_goal для пользователя {user_id}")
         await reduce_goal(call, state_data)
     
     elif data == "apply_extended_timeline":
-        logger.info(f"⏱ apply_extended_timeline для {user_id}")
+        logger.info(f"⏱ apply_extended_timeline для пользователя {user_id}")
         await apply_extended_timeline(call, state_data)
     
     elif data == "select_goal_50":
-        logger.info(f"📈 select_goal_50 для {user_id}")
+        logger.info(f"📈 select_goal_50 для пользователя {user_id}")
         await select_goal_50(call, state_data)
     
     elif data == "select_goal_30":
-        logger.info(f"📈 select_goal_30 для {user_id}")
+        logger.info(f"📈 select_goal_30 для пользователя {user_id}")
         await select_goal_30(call, state_data)
     
     elif data == "select_goal_blocks":
-        logger.info(f"🧱 select_goal_blocks для {user_id}")
+        logger.info(f"🧱 select_goal_blocks для пользователя {user_id}")
         await select_goal_blocks(call, state_data)
     
     # ============================================
     # ЦЕЛИ И МАРШРУТЫ
     # ============================================
     elif data == "show_goals":
-        logger.info(f"🎯 show_goals для {user_id}")
+        logger.info(f"🎯 show_goals для пользователя {user_id}")
         show_goals_categories(call.message, user_id)
     
     elif data == "show_dynamic_destinations":
-        logger.info(f"🎯 show_dynamic_destinations для {user_id}")
+        logger.info(f"🎯 show_dynamic_destinations для пользователя {user_id}")
         await show_dynamic_destinations(call, state_data)
     
     elif data.startswith("goal_cat_"):
-        logger.info(f"🎯 Категория: {data} для {user_id}")
+        logger.info(f"🎯 Категория целей: {data} для пользователя {user_id}")
         category = data.replace("goal_cat_", "")
         show_goals_for_category(call, category)
     
     elif data.startswith("select_goal_"):
-        logger.info(f"🎯 Выбор цели: {data} для {user_id}")
+        logger.info(f"🎯 Выбор цели: {data} для пользователя {user_id}")
         goal_id = data.replace("select_goal_", "")
         select_goal(call, goal_id)
     
     elif data.startswith("dynamic_dest_"):
-        logger.info(f"🎯 Динамическая цель: {data} для {user_id}")
+        logger.info(f"🎯 Выбор динамической цели: {data} для пользователя {user_id}")
         await handle_dynamic_destination(call, state_data)
     
     elif data == "custom_destination":
-        logger.info(f"✏️ custom_destination для {user_id}")
+        logger.info(f"✏️ custom_destination для пользователя {user_id}")
         await custom_destination(call, state_data)
     
     elif data == "route_step_done":
-        logger.info(f"✅ route_step_done для {user_id}")
+        logger.info(f"✅ route_step_done для пользователя {user_id}")
         await route_step_done(call, state_data)
     
     elif data.startswith("build_route_"):
-        logger.info(f"🛤 build_route: {data} для {user_id}")
+        logger.info(f"🛤 build_route: {data} для пользователя {user_id}")
         goal_id = data.replace("build_route_", "")
         await build_route(call, state_data, goal_id)
     
@@ -500,26 +506,28 @@ async def handle_sync_callback(call: CallbackQuery):
     # ВОПРОСЫ И ПОМОЩЬ
     # ============================================
     elif data == "show_help":
-        logger.info(f"❓ show_help для {user_id}")
+        logger.info(f"❓ show_help для пользователя {user_id}")
         show_help(call)
     
     elif data == "show_benefits":
-        logger.info(f"📖 show_benefits для {user_id}")
+        logger.info(f"📖 show_benefits для пользователя {user_id}")
         show_benefits(call)
     
     elif data == "show_tale" or data == "ask_tale":
-        logger.info(f"📚 show_tale для {user_id}")
+        logger.info(f"📚 show_tale для пользователя {user_id}")
         show_tale(call)
     
     elif data == "weekend_ideas":
-        logger.info(f"🎨 weekend_ideas для {user_id}")
+        logger.info(f"🎨 weekend_ideas для пользователя {user_id}")
         show_weekend_ideas(call)
     
     elif data == "smart_questions":
-        logger.info(f"🤔 smart_questions для {user_id}")
+        logger.info(f"🤔 smart_questions для пользователя {user_id}")
         
+        # Получаем контекст пользователя
         context_obj = user_contexts.get(user_id)
         
+        # Функция проверки завершения теста
         def check_test_completed(uid):
             user_info = user_data.get(uid, {})
             return bool(user_info.get("profile_data") or user_info.get("ai_generated_profile"))
@@ -527,46 +535,48 @@ async def handle_sync_callback(call: CallbackQuery):
         show_smart_questions(call, user_id, user_data, context_obj, check_test_completed)
     
     elif data.startswith("ask_"):
+        # Проверяем, что вторая часть - это число (для умных вопросов)
         parts = data.split("_")
         if len(parts) > 1 and parts[1].isdigit():
             idx = int(parts[1]) - 1
             state_data_local = get_state_data(user_id)
             questions = state_data_local.get("smart_questions", [])
             if 0 <= idx < len(questions):
-                logger.info(f"❓ smart question ответ: {data} для {user_id}")
+                logger.info(f"❓ smart question ответ: {data} для пользователя {user_id}")
                 handle_smart_question(call, questions[idx])
         else:
-            logger.info(f"❓ ask_question для {user_id}")
+            # Обычный запрос на вопрос
+            logger.info(f"❓ ask_question для пользователя {user_id}")
             show_question_input(call)
     
     elif data == "ask_pretest":
-        logger.info(f"❓ ask_pretest для {user_id}")
+        logger.info(f"❓ ask_pretest для пользователя {user_id}")
         show_question_input(call)
     
     elif data == "ask_question":
-        logger.info(f"❓ ask_question для {user_id}")
+        logger.info(f"❓ ask_question для пользователя {user_id}")
         show_question_input(call)
     
     elif data == "ask_hypnosis":
-        logger.info(f"🧠 ask_hypnosis для {user_id}")
+        logger.info(f"🧠 ask_hypnosis для пользователя {user_id}")
         show_tale(call)
     
     # ============================================
-    # ПРОФИЛЬ
+    # ПРОФИЛЬ (синхронные версии)
     # ============================================
     elif data == "show_profile":
-        logger.info(f"🧠 show_profile для {user_id}")
+        logger.info(f"🧠 show_profile для пользователя {user_id}")
         show_profile(call.message, user_id)
     
     elif data == "show_results":
-        logger.info(f"📊 show_results для {user_id}")
+        logger.info(f"📊 show_results для пользователя {user_id}")
         show_profile(call.message, user_id)
     
     # ============================================
-    # ПРОФИЛЬ НЕ ГОТОВ
+    # 👇 ПРОФИЛЬ НЕ ГОТОВ
     # ============================================
     elif data == "profile_not_ready":
-        logger.info(f"📊 profile_not_ready для {user_id}")
+        logger.info(f"📊 profile_not_ready для пользователя {user_id}")
         
         text = """
 📊 **ПРОФИЛЬ ПОКА НЕ СОЗДАН**
@@ -604,49 +614,50 @@ async def handle_sync_callback(call: CallbackQuery):
     # НАВИГАЦИЯ
     # ============================================
     elif data == "back_to_main":
-        logger.info(f"◀️ back_to_main для {user_id}")
+        logger.info(f"◀️ back_to_main для пользователя {user_id}")
         context = user_contexts.get(user_id)
         if context:
             from handlers.modes import show_main_menu_after_mode
             show_main_menu_after_mode(call.message, context)
     
     elif data == "back_to_results":
-        logger.info(f"◀️ back_to_results для {user_id}")
+        logger.info(f"◀️ back_to_results для пользователя {user_id}")
         show_profile(call.message, user_id)
     
     elif data == "back_to_intro":
-        logger.info(f"◀️ back_to_intro для {user_id}")
+        logger.info(f"◀️ back_to_intro для пользователя {user_id}")
         show_intro(call.message)
     
     elif data == "back_to_start":
-        logger.info(f"◀️ back_to_start для {user_id}")
+        logger.info(f"◀️ back_to_start для пользователя {user_id}")
         from handlers.start import cmd_start
-        
+        # Создаем фейковое сообщение для cmd_start
         class FakeMessage:
-            def __init__(self, user_id, chat_id, message_id):
+            def __init__(self, user_id, chat_id):
                 self.from_user = type('obj', (), {'id': user_id, 'first_name': get_user_name(user_id)})
                 self.chat = type('obj', (), {'id': chat_id})
                 self.text = '/start'
-                self.message_id = message_id
+                self.message_id = call.message.message_id
         
-        fake_msg = FakeMessage(user_id, call.message.chat.id, call.message.message_id)
+        fake_msg = FakeMessage(user_id, call.message.chat.id)
         cmd_start(fake_msg)
     
     elif data == "back_to_context":
-        logger.info(f"◀️ back_to_context для {user_id}")
+        logger.info(f"◀️ back_to_context для пользователя {user_id}")
         start_context_handler(call.message)
     
     # ============================================
-    # ИГНОРИРУЕМЫЕ
+    # ИГНОРИРУЕМЫЕ CALLBACK'И
     # ============================================
     elif data == "ignore":
         logger.debug(f"⏭ Игнорируем callback: {data}")
+        # Просто игнорируем
     
     # ============================================
-    # НЕИЗВЕСТНЫЙ
+    # НЕИЗВЕСТНЫЙ CALLBACK
     # ============================================
     else:
-        logger.warning(f"⚠️ Неизвестный callback: {data} от {user_id}")
+        logger.warning(f"⚠️ Неизвестный callback: {data} от пользователя {user_id}")
         handle_unknown_callback(call)
 
 
@@ -658,6 +669,7 @@ def callback_handler(call: CallbackQuery):
     """
     Синхронная обертка для асинхронного обработчика callback'ов
     """
+    # 👇 ИСПРАВЛЕНО: отправляем непустой ответ
     try:
         call.answer("✅", show_alert=False)
         logger.debug(f"✅ Ответ на callback {call.data} отправлен")
@@ -665,10 +677,13 @@ def callback_handler(call: CallbackQuery):
         logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
     
     try:
+        # Пытаемся получить текущий цикл событий
         loop = asyncio.get_running_loop()
     except RuntimeError:
+        # Нет запущенного цикла - создаем новый и запускаем
         asyncio.run(async_callback_handler(call))
     else:
+        # Есть запущенный цикл - создаем задачу
         asyncio.create_task(async_callback_handler(call))
 
 
