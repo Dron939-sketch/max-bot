@@ -173,6 +173,27 @@ def _create_tables():
         )
     """)
     
+    # Ответы на тест
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fredi_test_answers (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            test_result_id INTEGER,
+            stage INTEGER NOT NULL,
+            question_index INTEGER NOT NULL,
+            question_text TEXT,
+            answer_text TEXT,
+            answer_value TEXT,
+            scores JSONB,
+            measures TEXT,
+            strategy TEXT,
+            dilts TEXT,
+            pattern TEXT,
+            target TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    
     # События
     cur.execute("""
         CREATE TABLE IF NOT EXISTS fredi_events (
@@ -225,6 +246,8 @@ def _create_tables():
     
     # Индексы
     cur.execute("CREATE INDEX IF NOT EXISTS idx_test_user ON fredi_test_results(user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_test_answers_user ON fredi_test_answers(user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_test_answers_result ON fredi_test_answers(test_result_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_events_user ON fredi_events(user_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_user ON fredi_reminders(user_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_date ON fredi_reminders(remind_at)")
@@ -303,7 +326,7 @@ def save_user_data(user_id: int, data: Dict) -> bool:
     if not ensure_connection():
         return False
     try:
-        # ✅ Сериализуем данные перед сохранением
+        # Сериализуем данные перед сохранением
         serialized_data = serialize_object(data)
         
         cur = _conn.cursor()
@@ -328,7 +351,7 @@ def save_context(user_id: int, name: str = None, age: int = None, gender: str = 
     if not ensure_connection():
         return False
     try:
-        # ✅ Сериализуем данные перед сохранением
+        # Сериализуем данные перед сохранением
         serialized_data = serialize_object(data) if data else None
         
         cur = _conn.cursor()
@@ -360,7 +383,7 @@ def save_test_result(user_id: int, test_type: str, results: Dict,
     if not ensure_connection():
         return None
     try:
-        # ✅ Сериализуем результаты перед сохранением
+        # Сериализуем результаты перед сохранением
         serialized_results = serialize_object(results)
         serialized_vectors = serialize_object(vectors) if vectors else None
         serialized_deep_patterns = serialize_object(deep_patterns) if deep_patterns else None
@@ -385,12 +408,54 @@ def save_test_result(user_id: int, test_type: str, results: Dict,
         return None
 
 
+def save_test_answer(
+    user_id: int,
+    test_result_id: Optional[int],
+    stage: int,
+    question_index: int,
+    question_text: str,
+    answer_text: str,
+    answer_value: str,
+    scores: Optional[Dict] = None,
+    measures: Optional[str] = None,
+    strategy: Optional[str] = None,
+    dilts: Optional[str] = None,
+    pattern: Optional[str] = None,
+    target: Optional[str] = None
+) -> bool:
+    """Сохранить ответ на тест"""
+    if not ensure_connection():
+        return False
+    try:
+        # Сериализуем scores если есть
+        serialized_scores = serialize_object(scores) if scores else None
+        
+        cur = _conn.cursor()
+        cur.execute("""
+            INSERT INTO fredi_test_answers 
+            (user_id, test_result_id, stage, question_index, question_text, 
+             answer_text, answer_value, scores, measures, strategy, dilts, pattern, target, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        """, (
+            user_id, test_result_id, stage, question_index, question_text,
+            answer_text, answer_value, 
+            Json(serialized_scores) if serialized_scores else None,
+            measures, strategy, dilts, pattern, target
+        ))
+        _conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        logger.error(f"❌ save_test_answer {user_id}: {e}")
+        return False
+
+
 def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
     """Логировать событие с сериализацией"""
     if not ensure_connection():
         return False
     try:
-        # ✅ Сериализуем данные перед сохранением
+        # Сериализуем данные перед сохранением
         serialized_data = serialize_object(event_data) if event_data else None
         
         cur = _conn.cursor()
@@ -415,7 +480,7 @@ def add_reminder(user_id: int, reminder_type: str, remind_at, data: Dict = None)
     if not ensure_connection():
         return False
     try:
-        # ✅ Сериализуем данные перед сохранением
+        # Сериализуем данные перед сохранением
         serialized_data = serialize_object(data) if data else None
         
         cur = _conn.cursor()
@@ -572,7 +637,7 @@ def cache_question_analysis(user_id: int, question: str, analysis: Dict) -> bool
         return False
     question_hash = hash(question) % 1000000
     try:
-        # ✅ Сериализуем анализ перед сохранением
+        # Сериализуем анализ перед сохранением
         serialized_analysis = serialize_object(analysis)
         
         cur = _conn.cursor()
@@ -678,6 +743,8 @@ def get_stats() -> Dict:
         users = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM fredi_test_results")
         tests = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM fredi_test_answers")
+        answers = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM fredi_events")
         events = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM fredi_reminders")
@@ -690,6 +757,7 @@ def get_stats() -> Dict:
         return {
             'users': users,
             'tests': tests,
+            'answers': answers,
             'events': events,
             'reminders': reminders,
             'weekend_cache': weekend_cache,
@@ -726,6 +794,7 @@ __all__ = [
     'save_user_data',
     'save_context',
     'save_test_result',
+    'save_test_answer',
     'log_event',
     'add_reminder',
     'get_user_reminders',
