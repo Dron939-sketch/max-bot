@@ -1,6 +1,6 @@
 // ============================================
 // ЛИЧНЫЙ КАБИНЕТ - КОНСОРЦИУМ ФРЕДИ
-// Версия 3.2 - УНИВЕРСАЛЬНАЯ (веб + мобильный MAX)
+// Версия 3.4 - БОЕВАЯ (без демо-режима)
 // ============================================
 
 class FrediDashboard {
@@ -35,7 +35,7 @@ class FrediDashboard {
                          /WebView/.test(navigator.userAgent) ||
                          (window.MAX && window.MAX.WebApp);
         
-        // Базовые модули консорциума (всегда доступны)
+        // Базовые модули консорциума
         this.allModules = [
             { id: 'strategy', name: '🎯 Стратегия', icon: '🎯', color: '#4CAF50', description: 'Построение планов и достижение целей' },
             { id: 'reputation', name: '🏆 Репутация', icon: '🏆', color: '#FF9800', description: 'Управление впечатлением и авторитетом' },
@@ -49,21 +49,19 @@ class FrediDashboard {
             { id: 'creativity', name: '🎨 Творчество', icon: '🎨', color: '#FF6B6B', description: 'Вдохновение и идеи' }
         ];
         
-        // Откладываем инициализацию до загрузки API
         this.initPromise = this.init();
     }
     
     // ============================================
-    // ИНИЦИАЛИЗАЦИЯ С ОЖИДАНИЕМ API
+    // ИНИЦИАЛИЗАЦИЯ
     // ============================================
     
     async init() {
         console.log('🎯 Инициализация личного кабинета...');
         console.log('📱 Режим WebView:', this.isWebView);
         
-        // ✅ ЖДЁМ ЗАГРУЗКИ API (до 5 секунд, проверяем каждые 100мс)
         let attempts = 0;
-        const maxAttempts = 50; // 5 секунд
+        const maxAttempts = 50;
         
         while (!window.api && attempts < maxAttempts) {
             await new Promise(r => setTimeout(r, 100));
@@ -75,19 +73,26 @@ class FrediDashboard {
         
         if (!window.api) {
             console.error('❌ window.api не загружен!');
-            this.showError('Не удалось загрузить API. Проверьте соединение и перезагрузите страницу.');
+            this.showError('Не удалось загрузить API. Проверьте соединение.');
             return;
         }
         
         console.log('✅ window.api доступен');
         
         if (!this.userId) {
-            this.showError('Не удалось идентифицировать пользователя. Пожалуйста, откройте приложение через MAX.');
+            this.showError('Не удалось идентифицировать пользователя.');
             return;
         }
         
         try {
             await this.loadUserData();
+            
+            if (!this.isTestCompleted) {
+                console.log('📝 Профиль не найден, показываем экран теста');
+                this.renderTestRequiredScreen();
+                return;
+            }
+            
             await this.loadProfileData();
             await this.loadPsychologistThought();
             this.renderDashboard();
@@ -98,235 +103,73 @@ class FrediDashboard {
             }
         } catch (error) {
             console.error('❌ Ошибка инициализации:', error);
-            this.showError('Ошибка загрузки данных. Попробуйте обновить страницу.');
+            this.showError('Ошибка загрузки данных. Попробуйте позже.');
         }
     }
     
     // ============================================
-    // ПРОВЕРКА ПОДДЕРЖКИ МИКРОФОНА
-    // ============================================
-    
-    checkMicrophoneSupport() {
-        if (window.MAX && window.MAX.WebApp) {
-            console.log('✅ MAX WebApp доступен');
-            if (window.MAX.WebApp.isMediaSupported && window.MAX.WebApp.isMediaSupported('audio')) {
-                console.log('✅ MAX поддерживает аудио');
-                return true;
-            }
-            if (window.MAX.WebApp.getUserMedia) {
-                console.log('✅ MAX имеет getUserMedia');
-                return true;
-            }
-        }
-        
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            console.warn('⚠️ getUserMedia не поддерживается в этом браузере');
-            const voiceBtn = document.getElementById('dashboardVoiceBtn');
-            if (voiceBtn) {
-                voiceBtn.disabled = true;
-                voiceBtn.style.opacity = '0.5';
-                voiceBtn.title = 'Голосовой ввод не поддерживается в этом браузере';
-            }
-            return false;
-        }
-        
-        console.log('✅ Микрофон поддерживается через Web API');
-        return true;
-    }
-    
-    // ============================================
-    // ЗАПРОС РАЗРЕШЕНИЯ НА МИКРОФОН
-    // ============================================
-    
-    async requestMicrophonePermission() {
-        try {
-            console.log('🎤 Проверка доступа к микрофону...');
-            
-            let stream = null;
-            
-            if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUserMedia) {
-                try {
-                    stream = await window.MAX.WebApp.getUserMedia({ audio: true });
-                    console.log('✅ Микрофон доступен через MAX');
-                } catch (e) {
-                    console.warn('MAX getUserMedia не сработал:', e);
-                }
-            }
-            
-            if (!stream) {
-                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                console.log('✅ Микрофон доступен через Web API');
-            }
-            
-            stream.getTracks().forEach(track => track.stop());
-            return true;
-            
-        } catch (error) {
-            console.error('❌ Ошибка доступа к микрофону:', error);
-            
-            if (error.name === 'NotAllowedError') {
-                this.showMicrophoneInstructions();
-            } else if (error.name === 'NotFoundError') {
-                this.showFloatingMessage('❌ Микрофон не найден. Подключите гарнитуру.', 'error');
-            } else {
-                this.showFloatingMessage('❌ Не удалось получить доступ к микрофону', 'error');
-            }
-            return false;
-        }
-    }
-    
-    showMicrophoneInstructions() {
-        const isAndroid = /Android/i.test(navigator.userAgent);
-        const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-        
-        let instructions = '';
-        
-        if (isAndroid) {
-            instructions = `
-🔊 <b>ВКЛЮЧИТЕ МИКРОФОН В MAX</b>
-<br><br>
-1️⃣ Закройте чат с ботом
-<br>
-2️⃣ Откройте <b>Настройки</b> телефона
-<br>
-3️⃣ Перейдите в <b>Приложения</b> → <b>MAX</b>
-<br>
-4️⃣ Нажмите <b>Разрешения</b>
-<br>
-5️⃣ Включите <b>Микрофон</b> → <b>Разрешить</b>
-<br><br>
-6️⃣ Вернитесь в чат и нажмите 🎤 ещё раз
-            `;
-        } else if (isIOS) {
-            instructions = `
-🎤 <b>ВКЛЮЧИТЕ МИКРОФОН В MAX</b>
-<br><br>
-1️⃣ Закройте чат с ботом
-<br>
-2️⃣ Откройте <b>Настройки</b> iPhone
-<br>
-3️⃣ Прокрутите вниз → найдите <b>MAX</b>
-<br>
-4️⃣ Включите переключатель <b>Микрофон</b>
-<br><br>
-5️⃣ Вернитесь в чат и нажмите 🎤 ещё раз
-            `;
-        } else {
-            instructions = `
-🎤 <b>НУЖЕН ДОСТУП К МИКРОФОНУ</b>
-<br><br>
-В настройках приложения MAX разрешите доступ к микрофону.
-<br><br>
-Затем вернитесь и нажмите 🎤 ещё раз.
-            `;
-        }
-        
-        const modal = document.createElement('div');
-        modal.className = 'microphone-modal';
-        modal.innerHTML = `
-            <div class="microphone-modal-content">
-                <div style="font-size:48px;margin-bottom:16px;">🎤</div>
-                <h3 style="margin:0 0 12px 0;">Нужен доступ к микрофону</h3>
-                <div style="color:var(--max-text-secondary,#8e9aa6);line-height:1.6;text-align:left;font-size:14px;">
-                    ${instructions}
-                </div>
-                <div style="display:flex;gap:12px;margin-top:28px;">
-                    <button id="microphoneRetryBtn" class="modal-btn primary">🔄 ПРОВЕРИТЬ</button>
-                    <button id="microphoneCloseBtn" class="modal-btn secondary">📱 ЗАКРЫТЬ</button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(modal);
-        
-        document.getElementById('microphoneRetryBtn')?.addEventListener('click', () => {
-            modal.remove();
-            this.requestMicrophonePermission();
-        });
-        document.getElementById('microphoneCloseBtn')?.addEventListener('click', () => modal.remove());
-    }
-    
-    // ============================================
-    // ЗАГРУЗКА ДАННЫХ
+    // ЗАГРУЗКА ДАННЫХ ИЗ БД
     // ============================================
     
     async loadUserData() {
-    try {
-        console.log('🔍 Загрузка данных для user_id:', this.userId);
-        
-        // Запрос статуса
-        const status = await window.api.request(`/api/user-status?user_id=${this.userId}`);
-        console.log('📊 Статус пользователя:', status);
-        
-        // ✅ КЛЮЧЕВОЕ: устанавливаем isTestCompleted на основе данных из API
-        this.isTestCompleted = status.test_completed === true || 
-                               status.has_profile === true || 
-                               status.has_interpretation === true ||
-                               (status.profile_code && status.profile_code !== '');
-        
-        this.profileCode = status.profile_code;
-        
-        console.log('📌 isTestCompleted:', this.isTestCompleted);
-        console.log('📌 profileCode:', this.profileCode);
-        
-        // Если профиля нет в памяти — загружаем из БД
-        if (!status.has_profile && !status.test_completed && !status.has_interpretation) {
-            console.log('🔄 Профиль не найден в памяти, загружаем из БД...');
-            
-            const loadResult = await window.api.request('/api/force-load-user', {
-                method: 'POST',
-                body: JSON.stringify({ user_id: this.userId })
-            });
-            
-            console.log('📦 Результат force-load:', loadResult);
-            
-            if (loadResult.success && loadResult.has_profile) {
-                console.log('✅ Профиль загружен из БД!');
-                this.isTestCompleted = true;
-                this.profileCode = loadResult.profile_code;
-            }
-        }
-        
-        // Если всё ещё нет профиля — показываем фолбэк
-        if (!this.isTestCompleted) {
-            console.log('⚠️ Профиль не найден, показываем демо-режим');
-            this.showDemoMode();
-            return;
-        }
-        
-        // Загружаем имя пользователя
         try {
-            const userData = await window.api.request(`/api/user-data?user_id=${this.userId}`);
-            if (userData && userData.user_name) {
-                this.userName = userData.user_name;
-                console.log('👤 Имя пользователя:', this.userName);
+            console.log('🔍 Загрузка данных для user_id:', this.userId);
+            
+            const status = await window.api.request(`/api/user-status?user_id=${this.userId}`);
+            console.log('📊 Статус пользователя:', status);
+            
+            // Устанавливаем флаг на основе данных из БД
+            this.isTestCompleted = status.test_completed === true || 
+                                   status.has_profile === true || 
+                                   status.has_interpretation === true;
+            this.profileCode = status.profile_code;
+            
+            console.log('📌 isTestCompleted:', this.isTestCompleted);
+            console.log('📌 profileCode:', this.profileCode);
+            
+            // Если профиля нет в памяти, загружаем из БД
+            if (!status.has_profile && !status.test_completed) {
+                console.log('🔄 Профиль не найден в памяти, загружаем из БД...');
+                
+                const loadResult = await window.api.request('/api/force-load-user', {
+                    method: 'POST',
+                    body: JSON.stringify({ user_id: this.userId })
+                });
+                
+                console.log('📦 Результат force-load:', loadResult);
+                
+                if (loadResult.success && loadResult.has_profile) {
+                    console.log('✅ Профиль загружен из БД!');
+                    this.isTestCompleted = true;
+                    this.profileCode = loadResult.profile_code;
+                }
             }
-        } catch (nameError) {
-            console.warn('Не удалось загрузить имя из БД:', nameError);
+            
+            // Загружаем имя пользователя
+            try {
+                const userData = await window.api.request(`/api/user-data?user_id=${this.userId}`);
+                if (userData && userData.user_name) {
+                    this.userName = userData.user_name;
+                    console.log('👤 Имя пользователя:', this.userName);
+                }
+            } catch (nameError) {
+                console.warn('Не удалось загрузить имя из БД:', nameError);
+            }
+            
+            // Если тест пройден, загружаем полный профиль
+            if (this.isTestCompleted) {
+                const profile = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
+                this.userData = profile;
+                console.log('📊 Профиль загружен');
+            }
+            
+            console.log('✅ loadUserData завершён, isTestCompleted:', this.isTestCompleted);
+            
+        } catch (error) {
+            console.error('❌ Ошибка загрузки данных:', error);
+            this.isTestCompleted = false;
         }
-        
-        // Если тест пройден, загружаем полный профиль
-        if (this.isTestCompleted) {
-            const profile = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
-            this.userData = profile;
-            console.log('📊 Профиль загружен:', this.userData);
-        }
-        
-        console.log('✅ loadUserData завершён, isTestCompleted:', this.isTestCompleted);
-        
-    } catch (error) {
-        console.error('Ошибка загрузки данных:', error);
-        this.isTestCompleted = false;
-        this.showDemoMode();
     }
-}
-
-showDemoMode() {
-    console.log('🎮 Включаем демо-режим');
-    this.isTestCompleted = true;  // Временно включаем для демо
-    this.profileCode = "ДЕМО-ПРОФИЛЬ";
-    this.userName = this.userName || "Гость";
-    this.renderDashboard();
-}
     
     // ============================================
     // ЗАГРУЗКА ПРОФИЛЯ
@@ -347,7 +190,7 @@ showDemoMode() {
             console.log('✅ Профиль загружен');
         } catch (error) {
             console.error('Ошибка загрузки профиля:', error);
-            this.profileText = 'Ошибка загрузки профиля. Попробуйте позже.';
+            this.profileText = 'Ошибка загрузки профиля.';
         }
     }
     
@@ -358,16 +201,16 @@ showDemoMode() {
     async loadPsychologistThought() {
         try {
             const response = await window.api.request(`/api/thought?user_id=${this.userId}`);
-            this.psychologistThought = response.thought || 'Мысли психолога еще не сгенерированы. Пройдите тест для получения персонального анализа.';
+            this.psychologistThought = response.thought || 'Мысли психолога еще не сгенерированы.';
             console.log('✅ Мысли психолога загружены');
         } catch (error) {
             console.error('Ошибка загрузки мыслей психолога:', error);
-            this.psychologistThought = 'Мысли психолога пока недоступны. Попробуйте позже.';
+            this.psychologistThought = 'Мысли психолога пока недоступны.';
         }
     }
     
     // ============================================
-    // ФОРМАТИРОВАНИЕ ТЕКСТА ПРОФИЛЯ
+    // ФОРМАТИРОВАНИЕ
     // ============================================
     
     formatProfileText(data) {
@@ -408,147 +251,23 @@ showDemoMode() {
         const weakest = Object.entries(scores).sort((a, b) => a[1] - b[1])[0]?.[0] || 'sb';
         
         const growthPoints = {
-            sb: 'Работа с реакцией на давление и страхи. Учитесь говорить "нет" и защищать свои границы.',
-            tf: 'Проработка денежных блоков и развитие финансового мышления.',
-            ub: 'Развитие системного мышления и поиск глубинных смыслов.',
-            chv: 'Исцеление привязанности и развитие навыков здорового общения.'
+            sb: 'Работа с реакцией на давление и страхи.',
+            tf: 'Проработка денежных блоков.',
+            ub: 'Развитие системного мышления.',
+            chv: 'Исцеление привязанности.'
         };
         
-        return growthPoints[weakest] || 'Исследование себя и своих паттернов.';
+        return growthPoints[weakest] || 'Исследование себя.';
     }
     
     // ============================================
-    // ИНИЦИАЛИЗАЦИЯ АНИМИРОВАННОГО АВАТАРА
+    // ОТРИСОВКА ЭКРАНА ТЕСТА
     // ============================================
     
-    async initAnimatedAvatar() {
-        if (!window.AnimatedAvatar) {
-            console.warn('AnimatedAvatar не загружен, использую обычный аватар');
-            this._showFallbackAvatar();
-            return;
-        }
-        
-        try {
-            const profileData = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
-            
-            this.animatedAvatar = new AnimatedAvatar(this.userId, this.userName, profileData);
-            const avatarCanvas = await this.animatedAvatar.init();
-            
-            this.animatedAvatar.setSize(80, 80);
-            
-            const avatarContainer = document.getElementById('avatarContainer');
-            if (avatarContainer) {
-                avatarContainer.innerHTML = '';
-                avatarContainer.appendChild(avatarCanvas);
-            }
-            
-            this.animatedAvatar.onAvatarClick = () => {
-                const moods = ['happy', 'thoughtful', 'energetic'];
-                const randomMood = moods[Math.floor(Math.random() * moods.length)];
-                this.animatedAvatar.setMood(randomMood);
-                setTimeout(() => this.animatedAvatar.setMood('neutral'), 2000);
-                this.showFloatingMessage('Привет! Как настроение?', 'info');
-            };
-            
-            console.log('✅ Анимированный аватар инициализирован');
-            
-        } catch (error) {
-            console.error('Ошибка инициализации аватара:', error);
-            this._showFallbackAvatar();
-        }
-    }
-    
-    _showFallbackAvatar() {
-        const avatarContainer = document.getElementById('avatarContainer');
-        if (avatarContainer) {
-            avatarContainer.innerHTML = this.getUserAvatar();
-        }
-    }
-    
-    // ============================================
-    // ИНИЦИАЛИЗАЦИЯ МОДУЛЕЙ УЛУЧШЕНИЙ
-    // ============================================
-    
-    async initChallenges() {
-        if (!window.ChallengeManager) {
-            console.warn('ChallengeManager не загружен');
-            return;
-        }
-        
-        try {
-            this.challengeManager = new ChallengeManager(this.userId, this.userData);
-            await this.challengeManager.init();
-            
-            this.challengeManager.addListener((event, data) => {
-                if (event === 'level_up') {
-                    this.showFloatingMessage(`🎉 Уровень ${data.level} достигнут!`, 'success');
-                } else if (event === 'challenge_completed') {
-                    this.showFloatingMessage(`🏆 Выполнен челлендж: ${data.name}`, 'success');
-                }
-            });
-            
-            this.renderChallengesWidget();
-        } catch (error) {
-            console.error('Ошибка инициализации челленджей:', error);
-        }
-    }
-    
-    async initPsychometricDoubles() {
-        if (!window.PsychometricDoubles) {
-            console.warn('PsychometricDoubles не загружен');
-            return;
-        }
-        
-        try {
-            const profileData = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
-            
-            const userProfile = {
-                sb: profileData.profile_data?.sb_level || 4,
-                tf: profileData.profile_data?.tf_level || 4,
-                ub: profileData.profile_data?.ub_level || 4,
-                chv: profileData.profile_data?.chv_level || 4
-            };
-            
-            this.psychometric = new PsychometricDoubles(this.userId, userProfile);
-            await this.psychometric.init();
-            
-            this.renderDoublesSection();
-        } catch (error) {
-            console.error('Ошибка инициализации двойников:', error);
-        }
-    }
-    
-    async initNotifications() {
-        if (!window.NotificationManager) {
-            console.warn('NotificationManager не загружен');
-            return;
-        }
-        
-        try {
-            this.notificationManager = new NotificationManager(this.userId, this.userName);
-            await this.notificationManager.init();
-        } catch (error) {
-            console.error('Ошибка инициализации уведомлений:', error);
-        }
-    }
-    
-    // ============================================
-    // ОТРИСОВКА ДАШБОРДА
-    // ============================================
-    
-    renderDashboard() {
+    renderTestRequiredScreen() {
         const container = document.getElementById('screenContainer');
         if (!container) return;
         
-        if (!this.isTestCompleted) {
-            this.renderTestRequiredScreen(container);
-            return;
-        }
-        
-        this.renderMainDashboard(container);
-    }
-    
-    renderTestRequiredScreen(container) {
         container.innerHTML = `
             <div class="dashboard-test-required">
                 <div class="test-required-icon">🧠</div>
@@ -564,15 +283,27 @@ showDemoMode() {
                     Готовы познакомиться?
                 </div>
                 <button class="test-required-btn" id="startTestBtn">🚀 ПРОЙТИ ТЕСТ</button>
-                <button class="test-required-btn secondary" id="skipTestBtn">⏭ ПОЗЖЕ</button>
             </div>
         `;
         
         const startBtn = document.getElementById('startTestBtn');
         if (startBtn) startBtn.onclick = () => this.startTest();
+    }
+    
+    // ============================================
+    // ОТРИСОВКА ДАШБОРДА
+    // ============================================
+    
+    renderDashboard() {
+        const container = document.getElementById('screenContainer');
+        if (!container) return;
         
-        const skipBtn = document.getElementById('skipTestBtn');
-        if (skipBtn) skipBtn.onclick = () => this.showSkipMessage();
+        if (!this.isTestCompleted) {
+            this.renderTestRequiredScreen();
+            return;
+        }
+        
+        this.renderMainDashboard(container);
     }
     
     renderMainDashboard(container) {
@@ -805,75 +536,7 @@ showDemoMode() {
     }
     
     // ============================================
-    // ВИДЖЕТЫ
-    // ============================================
-    
-    renderChallengesWidget() {
-        if (!this.challengeManager) return;
-        
-        const widgetHtml = this.challengeManager.renderWidget();
-        const container = document.querySelector('.dashboard-container');
-        if (!container) return;
-        
-        const existingWidget = document.querySelector('.challenges-widget');
-        if (existingWidget) existingWidget.remove();
-        
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = widgetHtml;
-        const widget = tempDiv.firstElementChild;
-        
-        const modulesGrid = document.querySelector('.modules-grid');
-        if (modulesGrid) {
-            modulesGrid.parentNode.insertBefore(widget, modulesGrid.nextSibling);
-        } else {
-            container.appendChild(widget);
-        }
-        
-        this.attachChallengeEvents();
-    }
-    
-    renderDoublesSection() {
-        if (!this.psychometric || this.psychometric.doubles.length === 0) return;
-        
-        const doublesSection = document.createElement('div');
-        doublesSection.className = 'doubles-section';
-        doublesSection.innerHTML = `
-            <div class="doubles-header">
-                <div class="doubles-title">
-                    <span class="doubles-title-emoji">👥</span>
-                    Психометрические двойники
-                </div>
-                <button class="doubles-refresh" id="refreshDoublesBtn">🔄</button>
-            </div>
-            <div class="doubles-list" id="doublesList">
-                ${this.psychometric.doubles.map(d => {
-                    const compatibility = this.psychometric.calculateCompatibility(
-                        this.psychometric.userProfile, 
-                        d.profile
-                    );
-                    return this.psychometric.renderDoubleCard(d, compatibility);
-                }).join('')}
-            </div>
-        `;
-        
-        const container = document.querySelector('.dashboard-container');
-        if (container) {
-            const existing = document.querySelector('.doubles-section');
-            if (existing) existing.remove();
-            
-            const challengesWidget = document.querySelector('.challenges-widget');
-            if (challengesWidget) {
-                challengesWidget.parentNode.insertBefore(doublesSection, challengesWidget.nextSibling);
-            } else {
-                container.appendChild(doublesSection);
-            }
-        }
-        
-        this.attachDoublesEvents();
-    }
-    
-    // ============================================
-    // ПЕРСОНАЛИЗАЦИЯ МОДУЛЕЙ
+    // ПЕРСОНАЛИЗАЦИЯ
     // ============================================
     
     getPersonalizedModules() {
@@ -980,68 +643,19 @@ showDemoMode() {
         }
     }
     
-    attachChallengeEvents() {
-        document.querySelectorAll('.challenge-item').forEach(item => {
-            item.addEventListener('click', (e) => {
-                const challengeId = item.dataset.challengeId;
-                const challenge = this.challengeManager?.dailyChallenges.find(c => c.id === challengeId) ||
-                                 this.challengeManager?.weeklyChallenges.find(c => c.id === challengeId) ||
-                                 this.challengeManager?.specialChallenges.find(c => c.id === challengeId);
-                if (challenge && !challenge.completed) {
-                    this.showFloatingMessage(challenge.description, 'info');
-                }
-            });
-        });
-    }
-    
-    attachDoublesEvents() {
-        const refreshBtn = document.getElementById('refreshDoublesBtn');
-        if (refreshBtn) {
-            refreshBtn.onclick = async () => {
-                const listContainer = document.getElementById('doublesList');
-                if (listContainer) listContainer.innerHTML = '<div class="doubles-empty">🔍 Обновление списка...</div>';
-                await this.psychometric.findDoubles();
-                this.renderDoublesSection();
-            };
-        }
-        
-        document.querySelectorAll('.double-message-btn').forEach(btn => {
-            btn.onclick = (e) => {
-                const doubleId = btn.dataset.doubleId;
-                const double = this.psychometric.doubles.find(d => d.id == doubleId);
-                if (double) this.showChatModal(double);
-            };
-        });
-        
-        document.querySelectorAll('.double-details-btn').forEach(btn => {
-            btn.onclick = (e) => {
-                const doubleId = btn.dataset.doubleId;
-                const double = this.psychometric.doubles.find(d => d.id == doubleId);
-                if (double) this.showDoubleProfile(double);
-            };
-        });
-    }
-    
     // ============================================
-    // 🎤 ГОЛОСОВОЙ ВВОД
+    // 🎤 ГОЛОСОВОЙ ВВОД (рабочая версия)
     // ============================================
     
     setupVoiceButton(button) {
-        let isRecording = false;
         let mediaRecorder = null;
         let audioChunks = [];
+        let isRecording = false;
         let recordingStartTime = null;
         let timerInterval = null;
         
         const voiceStatus = document.getElementById('voiceStatusDashboard');
         const timerEl = document.getElementById('dashboardRecordingTimer');
-        
-        const isSamsung = /Samsung|SM-|GT-|SHV-|SCH-|SPH-/.test(navigator.userAgent);
-        
-        if (isSamsung || this.isWebView) {
-            console.log('📱 Обнаружен Samsung/WebView, применяем специальные настройки');
-            this.showFloatingMessage('🔊 Нажмите разрешить, когда приложение запросит доступ к микрофону', 'info');
-        }
         
         const startRecording = async () => {
             try {
@@ -1052,57 +666,19 @@ showDemoMode() {
                 
                 if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUserMedia) {
                     try {
-                        console.log('🎤 Пробуем через MAX WebApp...');
-                        stream = await window.MAX.WebApp.getUserMedia({ 
-                            audio: {
-                                echoCancellation: true,
-                                noiseSuppression: true,
-                                autoGainControl: true,
-                                sampleRate: 16000
-                            } 
-                        });
+                        stream = await window.MAX.WebApp.getUserMedia({ audio: true });
                         console.log('✅ Доступ к микрофону через MAX');
                     } catch (e) {
                         console.warn('MAX getUserMedia не сработал:', e);
-                        if (isSamsung) {
-                            this.showFloatingMessage('🔊 На Samsung: проверьте разрешения в настройках MAX', 'info');
-                        }
                     }
                 }
                 
                 if (!stream) {
-                    try {
-                        console.log('🎤 Пробуем через Web API...');
-                        const constraints = {
-                            audio: {
-                                echoCancellation: true,
-                                noiseSuppression: true,
-                                autoGainControl: true,
-                                sampleRate: 16000,
-                                channelCount: 1
-                            }
-                        };
-                        
-                        stream = await navigator.mediaDevices.getUserMedia(constraints).catch(async () => {
-                            console.log('🎤 Пробуем без параметров...');
-                            return await navigator.mediaDevices.getUserMedia({ audio: true });
-                        });
-                        
-                        console.log('✅ Доступ к микрофону через Web API');
-                    } catch (webError) {
-                        console.error('Web API ошибка:', webError);
-                        throw webError;
-                    }
+                    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    console.log('✅ Доступ к микрофону через Web API');
                 }
                 
-                const mimeTypes = [
-                    'audio/webm',
-                    'audio/mp4',
-                    'audio/ogg',
-                    'audio/3gpp',
-                    'audio/mpeg'
-                ];
-                
+                const mimeTypes = ['audio/webm', 'audio/mp4', 'audio/ogg'];
                 for (const type of mimeTypes) {
                     if (MediaRecorder.isTypeSupported(type)) {
                         mimeType = type;
@@ -1110,10 +686,7 @@ showDemoMode() {
                     }
                 }
                 
-                console.log('📱 Используем MIME тип:', mimeType || 'default');
-                
-                const options = mimeType ? { mimeType } : {};
-                mediaRecorder = new MediaRecorder(stream, options);
+                mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
                 audioChunks = [];
                 
                 mediaRecorder.ondataavailable = (event) => {
@@ -1123,27 +696,15 @@ showDemoMode() {
                 mediaRecorder.onstop = async () => {
                     stream.getTracks().forEach(track => track.stop());
                     
-                    let audioBlob;
-                    const finalMimeType = mimeType || 'audio/webm';
-                    
                     if (audioChunks.length > 0) {
-                        audioBlob = new Blob(audioChunks, { type: finalMimeType });
-                    } else {
-                        console.warn('⚠️ Нет аудиоданных');
-                        this.showFloatingMessage('❌ Не удалось записать голос. Попробуйте еще раз.', 'error');
-                        this._resetVoiceUI(button, voiceStatus, timerInterval);
-                        return;
+                        const audioBlob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
+                        if (audioBlob.size > 5000) {
+                            await this.sendVoiceToServer(audioBlob);
+                        } else {
+                            this.showFloatingMessage('Запись слишком короткая', 'error');
+                        }
                     }
-                    
-                    if (audioBlob.size < 5000) {
-                        console.warn('⚠️ Аудиофайл слишком маленький:', audioBlob.size);
-                        this.showFloatingMessage('❌ Запись слишком короткая. Поговорите дольше.', 'error');
-                        this._resetVoiceUI(button, voiceStatus, timerInterval);
-                        return;
-                    }
-                    
-                    await this.sendVoiceToServer(audioBlob);
-                    this._resetVoiceUI(button, voiceStatus, timerInterval);
+                    isRecording = false;
                 };
                 
                 mediaRecorder.start(1000);
@@ -1167,24 +728,7 @@ showDemoMode() {
                 
             } catch (error) {
                 console.error('Microphone error:', error);
-                
-                let errorMessage = '❌ Не удалось получить доступ к микрофону.';
-                
-                if (isSamsung) {
-                    errorMessage = '🔊 На Samsung:\n\n1. Настройки телефона → Приложения → MAX\n2. Разрешения → Микрофон → Разрешить\n3. Вернитесь и нажмите 🎤';
-                } else if (error.name === 'NotAllowedError' || error.message?.includes('permission')) {
-                    if (this.isWebView) {
-                        errorMessage = '🔊 РАЗРЕШИТЕ ДОСТУП К МИКРОФОНУ В MAX:\n\n1. Закройте чат\n2. Настройки телефона → Приложения → MAX\n3. Разрешения → Микрофон → Разрешить\n4. Вернитесь и нажмите 🎤';
-                    } else {
-                        errorMessage = '❌ Разрешение на использование микрофона отклонено.\n\nПроверьте настройки разрешений.';
-                    }
-                } else if (error.name === 'NotFoundError') {
-                    errorMessage = '❌ Микрофон не найден. Подключите гарнитуру.';
-                } else if (error.name === 'NotReadableError') {
-                    errorMessage = '❌ Микрофон занят другим приложением.';
-                }
-                
-                this.showFloatingMessage(errorMessage, 'error');
+                this.showFloatingMessage('❌ Не удалось получить доступ к микрофону', 'error');
                 this._resetVoiceUI(button, voiceStatus, timerInterval);
             }
         };
@@ -1197,25 +741,12 @@ showDemoMode() {
             }
         };
         
-        button.removeEventListener('mousedown', startRecording);
-        button.removeEventListener('mouseup', stopRecording);
-        button.removeEventListener('mouseleave', stopRecording);
-        button.removeEventListener('touchstart', startRecording);
-        button.removeEventListener('touchend', stopRecording);
+        button.onmousedown = startRecording;
+        button.onmouseup = stopRecording;
+        button.onmouseleave = stopRecording;
         
-        button.addEventListener('mousedown', startRecording);
-        button.addEventListener('mouseup', stopRecording);
-        button.addEventListener('mouseleave', stopRecording);
-        
-        button.addEventListener('touchstart', (e) => { 
-            e.preventDefault(); 
-            startRecording(); 
-        }, { passive: false });
-        
-        button.addEventListener('touchend', (e) => { 
-            e.preventDefault(); 
-            stopRecording(); 
-        }, { passive: false });
+        button.ontouchstart = (e) => { e.preventDefault(); startRecording(); };
+        button.ontouchend = (e) => { e.preventDefault(); stopRecording(); };
     }
     
     _resetVoiceUI(button, voiceStatus, timerInterval) {
@@ -1263,7 +794,7 @@ showDemoMode() {
             }
         } catch (error) {
             console.error('Send voice error:', error);
-            this.showFloatingMessage('❌ Ошибка отправки голоса. Попробуйте позже.', 'error');
+            this.showFloatingMessage('❌ Ошибка отправки голоса', 'error');
         }
     }
     
@@ -1277,7 +808,7 @@ showDemoMode() {
     }
     
     // ============================================
-    // ОБРАБОТЧИКИ МОДУЛЕЙ
+    // ОБРАБОТЧИКИ ДЕЙСТВИЙ
     // ============================================
     
     handleQuickAction(actionType) {
@@ -1309,25 +840,21 @@ showDemoMode() {
         }
         
         const messages = {
-            strategy: '🎯 Стратегия: Давайте разберем ваши цели и построим план действий. Что для вас сейчас самое важное?',
-            reputation: '🏆 Репутация: Ваша репутация формируется из того, как вы взаимодействуете с миром. Расскажите, что вас беспокоит?',
-            goals: '📊 Цели: Ваши цели — это компас. Какая цель для вас сейчас главная?',
-            entertainment: '🎮 Развлечения: Отдых так же важен, как и работа. Что вас расслабляет и вдохновляет?',
-            psychology: '🧠 Психология: Давайте исследуем глубинные паттерны. Что происходит в вашем внутреннем мире?',
-            habits: '🔄 Привычки: Маленькие действия каждый день создают большие изменения. Какую привычку хотите сформировать?',
-            communication: '💬 Общение: Как строятся ваши отношения с людьми? Что хочется улучшить?',
-            finance: '💰 Финансы: Деньги — это энергия. Как у вас с этим сейчас?',
-            health: '❤️ Здоровье: Тело и психика связаны. Как вы заботитесь о себе?',
-            creativity: '🎨 Творчество: Творчество — это способ самовыражения. Что мешает творить?'
+            strategy: '🎯 Стратегия: Давайте разберем ваши цели и построим план действий.',
+            reputation: '🏆 Репутация: Расскажите, что вас беспокоит?',
+            goals: '📊 Цели: Какая цель для вас сейчас главная?',
+            entertainment: '🎮 Развлечения: Что вас расслабляет?',
+            psychology: '🧠 Психология: Что происходит в вашем внутреннем мире?',
+            habits: '🔄 Привычки: Какую привычку хотите сформировать?',
+            communication: '💬 Общение: Что хочется улучшить?',
+            finance: '💰 Финансы: Как у вас с деньгами?',
+            health: '❤️ Здоровье: Как вы заботитесь о себе?',
+            creativity: '🎨 Творчество: Что мешает творить?'
         };
         
-        const message = messages[moduleId] || `Расскажите подробнее о теме "${moduleId}"`;
+        const message = messages[moduleId] || `Расскажите о теме "${moduleId}"`;
         this.showFloatingMessage(message, 'info');
         this.sendQuestionToBot(message);
-        
-        if (this.challengeManager) {
-            this.challengeManager.onQuestionAsked();
-        }
     }
     
     async sendQuestionToBot(question) {
@@ -1349,7 +876,7 @@ showDemoMode() {
             }
         } catch (error) {
             console.error('Send question error:', error);
-            this.showFloatingMessage('❌ Ошибка отправки вопроса. Попробуйте позже.', 'error');
+            this.showFloatingMessage('❌ Ошибка отправки вопроса', 'error');
         }
     }
     
@@ -1389,87 +916,11 @@ showDemoMode() {
     }
     
     // ============================================
-    // ЧАТ С ДВОЙНИКОМ
-    // ============================================
-    
-    showChatModal(double) {
-        if (!this.psychometric) return;
-        
-        const modalHtml = this.psychometric.renderChatModal(double);
-        const modalContainer = document.createElement('div');
-        modalContainer.innerHTML = modalHtml;
-        document.body.appendChild(modalContainer);
-        
-        const closeBtn = document.getElementById('closeChatModal');
-        if (closeBtn) closeBtn.onclick = () => modalContainer.remove();
-        
-        const sendBtn = document.getElementById('sendChatMessage');
-        const input = document.getElementById('chatMessageInput');
-        
-        const sendMessage = async () => {
-            const message = input.value.trim();
-            if (!message) return;
-            
-            const messagesList = document.getElementById('messagesList');
-            if (messagesList) {
-                const messageDiv = document.createElement('div');
-                messageDiv.className = 'message user-message';
-                messageDiv.innerHTML = `<div class="message-bubble">${message}</div><div class="message-time">только что</div>`;
-                messagesList.appendChild(messageDiv);
-                messagesList.scrollTop = messagesList.scrollHeight;
-            }
-            
-            input.value = '';
-            const success = await this.psychometric.sendMessage(double.id, message);
-            
-            if (success) {
-                setTimeout(() => this.addBotReply(double, messagesList), 1000);
-            }
-        };
-        
-        if (sendBtn) sendBtn.onclick = sendMessage;
-        if (input) input.onkeypress = (e) => { if (e.key === 'Enter') sendMessage(); };
-        
-        modalContainer.querySelector('.modal-overlay').onclick = (e) => {
-            if (e.target === modalContainer.querySelector('.modal-overlay')) modalContainer.remove();
-        };
-    }
-    
-    addBotReply(double, messagesList) {
-        const compatibility = this.psychometric?.calculateCompatibility(
-            this.psychometric.userProfile, 
-            double.profile
-        ) || { score: 85 };
-        
-        const replies = [
-            `Привет! Рад познакомиться! У нас ${compatibility.score}% совместимости!`,
-            `Ого, у нас очень похожий профиль! Как у тебя дела?`,
-            `Здорово, что нас свела система! Расскажи, как у тебя дела?`,
-            `Привет-привет! Смотрю на твой профиль — мы очень похожи. Как проходит твой день?`
-        ];
-        
-        const randomReply = replies[Math.floor(Math.random() * replies.length)];
-        const replyDiv = document.createElement('div');
-        replyDiv.className = 'message bot-message';
-        replyDiv.innerHTML = `<div class="message-bubble">${randomReply}</div><div class="message-time">только что</div>`;
-        messagesList.appendChild(replyDiv);
-        messagesList.scrollTop = messagesList.scrollHeight;
-    }
-    
-    showDoubleProfile(double) {
-        this.showFloatingMessage(`👤 ${double.first_name} ${double.last_name || ''}\n📊 Профиль: ${double.profile_code}`, 'info');
-    }
-    
-    // ============================================
-    // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+    // ВСПОМОГАТЕЛЬНЫЕ
     // ============================================
     
     startTest() {
         window.location.hash = '#test';
-    }
-    
-    showSkipMessage() {
-        this.showFloatingMessage('Тест поможет лучше понять вас и подобрать персональные рекомендации.', 'info');
     }
     
     showError(message) {
@@ -1480,6 +931,7 @@ showDemoMode() {
                     <div class="error-icon">⚠️</div>
                     <div class="error-title">Ошибка</div>
                     <div class="error-text">${message}</div>
+                    <button class="test-required-btn" onclick="location.reload()">🔄 ПОВТОРИТЬ</button>
                 </div>
             `;
         }
@@ -1498,10 +950,98 @@ showDemoMode() {
             this.showFloatingMessage(`Цель принята: "${goal}"`, 'success');
         }
     }
+    
+    async initAnimatedAvatar() {
+        if (!window.AnimatedAvatar) {
+            console.warn('AnimatedAvatar не загружен');
+            this._showFallbackAvatar();
+            return;
+        }
+        
+        try {
+            const profileData = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
+            
+            this.animatedAvatar = new AnimatedAvatar(this.userId, this.userName, profileData);
+            const avatarCanvas = await this.animatedAvatar.init();
+            
+            this.animatedAvatar.setSize(80, 80);
+            
+            const avatarContainer = document.getElementById('avatarContainer');
+            if (avatarContainer) {
+                avatarContainer.innerHTML = '';
+                avatarContainer.appendChild(avatarCanvas);
+            }
+            
+            this.animatedAvatar.onAvatarClick = () => {
+                const moods = ['happy', 'thoughtful', 'energetic'];
+                const randomMood = moods[Math.floor(Math.random() * moods.length)];
+                this.animatedAvatar.setMood(randomMood);
+                setTimeout(() => this.animatedAvatar.setMood('neutral'), 2000);
+                this.showFloatingMessage('Привет! Как настроение?', 'info');
+            };
+            
+            console.log('✅ Анимированный аватар инициализирован');
+            
+        } catch (error) {
+            console.error('Ошибка инициализации аватара:', error);
+            this._showFallbackAvatar();
+        }
+    }
+    
+    _showFallbackAvatar() {
+        const avatarContainer = document.getElementById('avatarContainer');
+        if (avatarContainer) {
+            avatarContainer.innerHTML = this.getUserAvatar();
+        }
+    }
+    
+    async initChallenges() {
+        if (!window.ChallengeManager) return;
+        try {
+            this.challengeManager = new ChallengeManager(this.userId, this.userData);
+            await this.challengeManager.init();
+            this.renderChallengesWidget();
+        } catch (error) {
+            console.error('Ошибка инициализации челленджей:', error);
+        }
+    }
+    
+    renderChallengesWidget() {
+        if (!this.challengeManager) return;
+        const widgetHtml = this.challengeManager.renderWidget();
+        const container = document.querySelector('.dashboard-container');
+        if (!container) return;
+        
+        const existingWidget = document.querySelector('.challenges-widget');
+        if (existingWidget) existingWidget.remove();
+        
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = widgetHtml;
+        const widget = tempDiv.firstElementChild;
+        
+        const modulesGrid = document.querySelector('.modules-grid');
+        if (modulesGrid) {
+            modulesGrid.parentNode.insertBefore(widget, modulesGrid.nextSibling);
+        }
+        
+        this.attachChallengeEvents();
+    }
+    
+    attachChallengeEvents() {
+        document.querySelectorAll('.challenge-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const challengeId = item.dataset.challengeId;
+                const challenge = this.challengeManager?.dailyChallenges?.find(c => c.id === challengeId) ||
+                                 this.challengeManager?.weeklyChallenges?.find(c => c.id === challengeId);
+                if (challenge && !challenge.completed) {
+                    this.showFloatingMessage(challenge.description, 'info');
+                }
+            });
+        });
+    }
 }
 
-// Инициализация при загрузке страницы
-// НЕ СОЗДАЁМ dashboard СРАЗУ — ждём DOMContentLoaded
+// Инициализация
 document.addEventListener('DOMContentLoaded', () => {
     console.log('📄 DOM загружен, создаём FrediDashboard');
     window.dashboard = new FrediDashboard();
