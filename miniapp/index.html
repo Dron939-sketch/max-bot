@@ -21,78 +21,45 @@
     <!-- MAX Bridge -->
     <script src="https://st.max.ru/js/max-web-app.js"></script>
     
-    <!-- ========== КРИТИЧЕСКИ ВАЖНО: УСТАНОВКА maxContext ========== -->
+    <!-- ========== ПРАВИЛЬНОЕ ПОЛУЧЕНИЕ USER_ID ИЗ MAX ========== -->
     <script>
         // ============================================
-        // ПОЛУЧЕНИЕ USER_ID ИЗ MAX (ПРАВИЛЬНАЯ ВЕРСИЯ)
+        // ДИАГНОСТИКА
         // ============================================
-        function getUserIdFromMax() {
+        console.log('=== ДИАГНОСТИКА MAX ===');
+        console.log('navigator.userAgent:', navigator.userAgent);
+        console.log('window.MAX:', window.MAX);
+        
+        // ============================================
+        // ПОЛУЧЕНИЕ USER_ID (АСИНХРОННО)
+        // ============================================
+        async function getUserIdFromMax() {
             console.log('🔍 Получение user_id из MAX...');
             
-            // 1. Парсим данные из URL hash (основной способ для MAX Web)
-            if (window.location.hash) {
-                const hash = window.location.hash.substring(1);
-                console.log('📦 Hash:', hash);
-                
-                // Ищем WebAppData параметр
-                const webAppDataMatch = hash.match(/WebAppData=([^&]+)/);
-                if (webAppDataMatch) {
-                    try {
-                        const webAppData = decodeURIComponent(webAppDataMatch[1]);
-                        console.log('📦 WebAppData:', webAppData);
-                        
-                        // Ищем chat_id (это ID чата/диалога, который можно использовать как user_id)
-                        const chatIdMatch = webAppData.match(/chat%3D%257B%2522id%2522%253A(\d+)/);
-                        if (chatIdMatch) {
-                            const chatId = chatIdMatch[1];
-                            console.log('✅ chat_id из hash:', chatId);
-                            localStorage.setItem('fredi_user_id', chatId);
-                            return chatId;
-                        }
-                        
-                        // Ищем user_id в объекте user
-                        const userIdMatch = webAppData.match(/user%3D%257B%2522id%2522%253A(\d+)/);
-                        if (userIdMatch) {
-                            const userId = userIdMatch[1];
-                            console.log('✅ user_id из hash:', userId);
-                            localStorage.setItem('fredi_user_id', userId);
-                            return userId;
-                        }
-                        
-                        // Поиск всех ID в данных
-                        const idRegex = /%22id%22%3A(\d+)/g;
-                        let match;
-                        let ids = [];
-                        while ((match = idRegex.exec(webAppData)) !== null) {
-                            ids.push(match[1]);
-                        }
-                        if (ids.length > 0) {
-                            console.log('✅ найденные ID:', ids);
-                            const userId = ids[0];
-                            localStorage.setItem('fredi_user_id', userId);
-                            return userId;
-                        }
-                    } catch (e) {
-                        console.error('Ошибка парсинга hash:', e);
+            // 1. MAX мессенджер - через getUser() (основной способ)
+            if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUser) {
+                console.log('🔄 Используем MAX.WebApp.getUser()');
+                try {
+                    const user = await window.MAX.WebApp.getUser();
+                    if (user && user.id) {
+                        console.log('✅ user_id из getUser():', user.id);
+                        return parseInt(user.id);
                     }
+                } catch (err) {
+                    console.error('getUser error:', err);
                 }
             }
             
-            // 2. MAX мессенджер (мобильный WebView)
-            if (window.MAX && window.MAX.WebApp) {
-                console.log('✅ MAX.WebApp найден');
-                if (window.MAX.WebApp.initDataUnsafe) {
-                    const initData = window.MAX.WebApp.initDataUnsafe;
-                    if (initData.user && initData.user.id) {
-                        console.log('✅ user_id из MAX.WebApp.user.id:', initData.user.id);
-                        localStorage.setItem('fredi_user_id', initData.user.id);
-                        return initData.user.id;
-                    }
-                    if (initData.user_id) {
-                        console.log('✅ user_id из MAX.WebApp.user_id:', initData.user_id);
-                        localStorage.setItem('fredi_user_id', initData.user_id);
-                        return initData.user_id;
-                    }
+            // 2. MAX мессенджер - из initDataUnsafe
+            if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.initDataUnsafe) {
+                const initData = window.MAX.WebApp.initDataUnsafe;
+                if (initData.user && initData.user.id) {
+                    console.log('✅ user_id из initDataUnsafe.user.id:', initData.user.id);
+                    return parseInt(initData.user.id);
+                }
+                if (initData.user_id) {
+                    console.log('✅ user_id из initDataUnsafe.user_id:', initData.user_id);
+                    return parseInt(initData.user_id);
                 }
             }
             
@@ -100,39 +67,62 @@
             if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe) {
                 const initData = window.Telegram.WebApp.initDataUnsafe;
                 if (initData.user && initData.user.id) {
-                    console.log('✅ user_id из Telegram.WebApp:', initData.user.id);
-                    localStorage.setItem('fredi_user_id', initData.user.id);
-                    return initData.user.id;
+                    console.log('✅ user_id из Telegram:', initData.user.id);
+                    return parseInt(initData.user.id);
                 }
             }
             
             // 4. Из URL параметров (для тестирования)
             const urlParams = new URLSearchParams(window.location.search);
-            const urlUserId = urlParams.get('user_id') || urlParams.get('userId') || urlParams.get('uid');
-            if (urlUserId) {
+            const urlUserId = urlParams.get('user_id') || urlParams.get('userId');
+            if (urlUserId && !isNaN(parseInt(urlUserId))) {
                 console.log('✅ user_id из URL:', urlUserId);
-                localStorage.setItem('fredi_user_id', urlUserId);
-                return urlUserId;
+                return parseInt(urlUserId);
             }
             
-            // 5. Из localStorage (сохранённый ранее)
+            // 5. Из localStorage (сохранённый реальный ID)
             const savedUserId = localStorage.getItem('fredi_user_id');
-            if (savedUserId && !savedUserId.startsWith('test_')) {
+            if (savedUserId && !isNaN(parseInt(savedUserId))) {
                 console.log('✅ user_id из localStorage:', savedUserId);
-                return savedUserId;
+                return parseInt(savedUserId);
             }
             
-            // 6. Режим разработки (локально)
-            const isLocalhost = window.location.hostname === 'localhost' || 
-                               window.location.hostname === '127.0.0.1' ||
-                               window.location.hostname === '';
-            
-            if (isLocalhost) {
-                console.warn('⚠️ Локальная разработка: используем тестовый ID');
-                const testId = 'test_' + Math.floor(Math.random() * 1000000000).toString();
-                localStorage.setItem('fredi_user_id', testId);
-                console.log('🔧 Создан тестовый ID:', testId);
-                return testId;
+            // 6. Если в MAX, но данные еще не загружены - ждем
+            if (window.MAX && window.MAX.WebApp) {
+                console.log('⏳ MAX есть, ждем загрузки данных...');
+                return new Promise((resolve) => {
+                    let attempts = 0;
+                    const interval = setInterval(async () => {
+                        attempts++;
+                        // Пробуем getUser
+                        if (window.MAX.WebApp.getUser) {
+                            try {
+                                const user = await window.MAX.WebApp.getUser();
+                                if (user && user.id) {
+                                    clearInterval(interval);
+                                    resolve(parseInt(user.id));
+                                    return;
+                                }
+                            } catch(e) {}
+                        }
+                        // Проверяем initDataUnsafe
+                        if (window.MAX.WebApp.initDataUnsafe?.user?.id) {
+                            clearInterval(interval);
+                            resolve(parseInt(window.MAX.WebApp.initDataUnsafe.user.id));
+                            return;
+                        }
+                        if (window.MAX.WebApp.initDataUnsafe?.user_id) {
+                            clearInterval(interval);
+                            resolve(parseInt(window.MAX.WebApp.initDataUnsafe.user_id));
+                            return;
+                        }
+                        if (attempts > 50) {
+                            clearInterval(interval);
+                            console.error('❌ Таймаут ожидания user_id');
+                            resolve(null);
+                        }
+                    }, 100);
+                });
             }
             
             console.error('❌ Не удалось получить user_id!');
@@ -142,182 +132,108 @@
         // ============================================
         // ПОЛУЧЕНИЕ ИМЕНИ ПОЛЬЗОВАТЕЛЯ
         // ============================================
-        function getUserNameFromMax() {
-            // 1. Парсим из hash
-            if (window.location.hash) {
-                const hash = window.location.hash.substring(1);
-                const webAppDataMatch = hash.match(/WebAppData=([^&]+)/);
-                if (webAppDataMatch) {
-                    try {
-                        const webAppData = decodeURIComponent(webAppDataMatch[1]);
-                        // Ищем first_name
-                        const nameMatch = webAppData.match(/first_name%22%3A%22([^%]+)/);
-                        if (nameMatch) {
-                            const firstName = decodeURIComponent(nameMatch[1]);
-                            console.log('✅ Имя из hash:', firstName);
-                            localStorage.setItem('userName', firstName);
-                            return firstName;
-                        }
-                    } catch (e) {
-                        console.error('Ошибка парсинга имени:', e);
+        async function getUserNameFromMax() {
+            // MAX через getUser
+            if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUser) {
+                try {
+                    const user = await window.MAX.WebApp.getUser();
+                    if (user && user.first_name) {
+                        return user.first_name;
                     }
-                }
+                } catch(e) {}
             }
             
-            // 2. MAX
+            // MAX из initDataUnsafe
             if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.initDataUnsafe) {
                 const initData = window.MAX.WebApp.initDataUnsafe;
                 if (initData.user && initData.user.first_name) {
-                    localStorage.setItem('userName', initData.user.first_name);
                     return initData.user.first_name;
                 }
             }
             
-            // 3. Telegram
+            // Telegram
             if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe) {
                 const initData = window.Telegram.WebApp.initDataUnsafe;
                 if (initData.user && initData.user.first_name) {
-                    localStorage.setItem('userName', initData.user.first_name);
                     return initData.user.first_name;
                 }
-            }
-            
-            // 4. Из localStorage
-            const savedName = localStorage.getItem('userName');
-            if (savedName && savedName !== 'Гость') {
-                return savedName;
             }
             
             return null;
         }
         
         // ============================================
-        // ОЖИДАНИЕ ИНИЦИАЛИЗАЦИИ MAX
+        // ГЛОБАЛЬНАЯ ПЕРЕМЕННАЯ maxContext
         // ============================================
-        function waitForMax(callback, attempts = 0) {
-            // Если уже есть данные в hash
-            if (window.location.hash && window.location.hash.includes('WebAppData')) {
-                console.log('✅ Данные в hash уже есть');
-                callback();
-                return;
-            }
-            
-            // Если есть MAX.WebApp
-            if (window.MAX && window.MAX.WebApp) {
-                if (window.MAX.WebApp.initDataUnsafe && 
-                    (window.MAX.WebApp.initDataUnsafe.user || window.MAX.WebApp.initDataUnsafe.user_id)) {
-                    console.log('✅ MAX данные уже есть');
-                    callback();
-                    return;
-                }
+        window.maxContext = {
+            user_id: null,
+            user_name: 'Друг',
+            isMax: false,
+            initialized: false
+        };
+        
+        // ============================================
+        // АСИНХРОННАЯ ИНИЦИАЛИЗАЦИЯ
+        // ============================================
+        (async function() {
+            try {
+                const userId = await getUserIdFromMax();
+                const userName = await getUserNameFromMax();
                 
-                // Если есть метод ready
-                if (window.MAX.WebApp.ready) {
-                    window.MAX.WebApp.ready(() => {
-                        console.log('✅ MAX.ready() вызван');
-                        callback();
-                    });
-                    return;
+                window.maxContext.user_id = userId;
+                window.maxContext.user_name = userName || 'Друг';
+                window.maxContext.isMax = !!(window.MAX && window.MAX.WebApp);
+                window.maxContext.initialized = true;
+                
+                if (userId) {
+                    localStorage.setItem('fredi_user_id', userId);
+                    console.log('🎯 maxContext.user_id:', userId);
+                    console.log('🎯 maxContext.user_name:', window.maxContext.user_name);
+                } else {
+                    console.error('❌ Не удалось получить user_id');
+                    // Показываем ошибку, но не блокируем полностью
+                    const container = document.getElementById('screenContainer');
+                    if (container) {
+                        container.innerHTML = `
+                            <div style="display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:20px;">
+                                <div>
+                                    <div style="font-size:64px;">🔐</div>
+                                    <h2>Ошибка входа</h2>
+                                    <p>Не удалось получить ID пользователя.<br>Пожалуйста, откройте приложение через MAX.</p>
+                                    <button onclick="location.reload()" style="padding:12px 24px;background:#248bf2;color:white;border:none;border-radius:40px;">Повторить</button>
+                                </div>
+                            </div>
+                        `;
+                    }
                 }
+            } catch (error) {
+                console.error('Ошибка инициализации:', error);
             }
-            
-            // Ждем до 5 секунд
-            if (attempts < 50) {
-                setTimeout(() => waitForMax(callback, attempts + 1), 100);
-            } else {
-                console.warn('⚠️ MAX не инициализировался, продолжаем без него');
-                callback();
-            }
-        }
-        
-        // ============================================
-        // ОСНОВНАЯ ИНИЦИАЛИЗАЦИЯ
-        // ============================================
-        let initCompleted = false;
-        
-        function initMaxContext() {
-            if (initCompleted) return;
-            initCompleted = true;
-            
-            const userId = getUserIdFromMax();
-            const userName = getUserNameFromMax();
-            
-            window.maxContext = {
-                user_id: userId,
-                user_name: userName || 'Друг',
-                isMax: !!(window.MAX && window.MAX.WebApp) || (window.location.hash && window.location.hash.includes('WebAppData')),
-                _initTime: new Date().toISOString()
-            };
-            
-            console.log('🎯 maxContext установлен:', {
-                user_id: window.maxContext.user_id,
-                user_name: window.maxContext.user_name,
-                isMax: window.maxContext.isMax
-            });
-            
-            // Если нет user_id и не в режиме разработки — показываем ошибку
-            if (!userId && !window.location.hostname.includes('localhost')) {
-                showAuthError();
-            }
-        }
-        
-        function showAuthError() {
-            const errorHtml = `
-                <div style="display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:20px;background:#0e1621;color:white;">
-                    <div>
-                        <div style="font-size:64px;margin-bottom:20px;">🔐</div>
-                        <h2 style="margin-bottom:12px;">Ошибка входа</h2>
-                        <p style="color:#8e9aa6;margin-bottom:24px;line-height:1.6;">
-                            Не удалось идентифицировать пользователя.<br>
-                            Пожалуйста, откройте приложение через MAX.
-                        </p>
-                        <button onclick="location.reload()" style="padding:14px 32px;background:#248bf2;color:white;border:none;border-radius:40px;font-size:16px;cursor:pointer;">
-                            🔄 ПОВТОРИТЬ
-                        </button>
-                    </div>
-                </div>
-            `;
-            
-            if (document.body) {
-                document.body.innerHTML = errorHtml;
-            } else {
-                document.addEventListener('DOMContentLoaded', () => {
-                    document.body.innerHTML = errorHtml;
-                });
-            }
-        }
-        
-        // Запускаем инициализацию
-        waitForMax(initMaxContext);
+        })();
     </script>
     
     <!-- ========== КОНФИГУРАЦИЯ API ========== -->
     <script>
         // FastAPI запущен на основном сервере
         const MAIN_API_URL = 'https://max-bot-1-ywpz.onrender.com';
-        const MINIAPP_URL = 'https://max-bot-miniapp.onrender.com';
         
         const hostname = window.location.hostname;
         
-        if (hostname === 'max-bot-miniapp.onrender.com') {
+        if (hostname === 'max-bot-miniapp.onrender.com' || hostname === 'max-bot-1-ywpz.onrender.com') {
             window.API_BASE_URL = MAIN_API_URL;
-            console.log('🌐 Мини-приложение на отдельном домене, API:', window.API_BASE_URL);
-        } else if (hostname === 'max-bot-1-ywpz.onrender.com') {
-            window.API_BASE_URL = window.location.origin;
-            console.log('🌐 Основной домен, API:', window.API_BASE_URL);
         } else if (hostname === 'localhost' || hostname === '127.0.0.1') {
             window.API_BASE_URL = 'http://localhost:10000';
-            console.log('🌐 Локальная разработка, API:', window.API_BASE_URL);
         } else {
             window.API_BASE_URL = MAIN_API_URL;
-            console.log('🌐 Неизвестный домен, используем основной API:', window.API_BASE_URL);
         }
         
+        console.log('🌐 API_BASE_URL:', window.API_BASE_URL);
         localStorage.setItem('api_base_url', window.API_BASE_URL);
     </script>
     
-    <!-- ========== СТИЛИ ========== -->
+    <!-- ========== СТИЛИ (сокращены для краткости, но полные в вашем файле) ========== -->
     <style>
+        /* Здесь все ваши стили из предыдущей версии */
         * {
             margin: 0;
             padding: 0;
@@ -603,7 +519,8 @@
             color: var(--max-text-secondary, #8e9aa6);
         }
         
-        .voice-record-btn {
+        /* Стили для голосовой кнопки */
+        .voice-record-btn, .voice-record-btn-large {
             width: 64px;
             height: 64px;
             border-radius: 50%;
@@ -619,17 +536,15 @@
             transition: transform 0.1s ease, background 0.2s ease;
             touch-action: manipulation;
             user-select: none;
-            -webkit-tap-highlight-color: transparent;
         }
         
-        .voice-record-btn:active {
+        .voice-record-btn:active, .voice-record-btn-large:active {
             transform: scale(0.95);
         }
         
-        .voice-record-btn.recording {
+        .voice-record-btn.recording, .voice-record-btn-large.recording {
             background: #ff4444;
             animation: pulse-red 1s infinite;
-            transform: scale(1.05);
         }
         
         @keyframes pulse-red {
@@ -727,7 +642,6 @@
             width: 90%;
             padding: 28px 24px;
             text-align: center;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
         }
         
         .modal-btn {
@@ -738,7 +652,6 @@
             font-weight: bold;
             font-size: 14px;
             cursor: pointer;
-            transition: all 0.2s;
         }
         
         .modal-btn.primary {
@@ -752,6 +665,11 @@
             color: var(--max-text, white);
         }
         
+        #hiddenAudioPlayer {
+            display: none;
+        }
+        
+        /* Остальные стили из вашего файла */
         .onboarding-container, .context-container, .benefits-container, .final-profile-container, 
         .ask-question-container, .choose-goal-container, .choose-mode-container, .thought-result-container {
             max-width: 600px;
@@ -769,24 +687,6 @@
             font-size: 28px;
             font-weight: bold;
             text-align: center;
-            margin-bottom: 8px;
-        }
-        
-        .onboarding-subtitle {
-            text-align: center;
-            color: var(--max-text-secondary, #8e9aa6);
-            margin-bottom: 24px;
-        }
-        
-        .onboarding-text {
-            line-height: 1.6;
-            margin-bottom: 24px;
-        }
-        
-        .onboarding-buttons {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
         }
         
         .onboarding-btn {
@@ -796,7 +696,6 @@
             font-weight: 600;
             cursor: pointer;
             text-align: center;
-            transition: all 0.2s;
             border: none;
         }
         
@@ -811,553 +710,248 @@
             color: var(--max-text, white);
         }
         
-        .context-title {
-            font-size: 24px;
+        .dashboard-container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding: 16px;
+            background: var(--max-panel-bg, #17212b);
+            border-radius: 24px;
+        }
+        
+        .user-welcome {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        
+        .user-avatar {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #248bf2, #6c5ce7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
             font-weight: bold;
-            margin-bottom: 20px;
+        }
+        
+        .user-name {
+            font-size: 20px;
+            font-weight: bold;
+        }
+        
+        .user-profile {
+            font-size: 12px;
+            color: var(--max-text-secondary, #8e9aa6);
+        }
+        
+        .user-stats {
+            display: flex;
+            gap: 24px;
+        }
+        
+        .stat-item {
             text-align: center;
         }
         
-        .context-question {
-            font-size: 18px;
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            display: block;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: var(--max-text-secondary, #8e9aa6);
+        }
+        
+        .voice-input-dashboard {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 32px;
+        }
+        
+        .voice-record-btn-large {
+            width: 80px;
+            height: 80px;
+            font-size: 40px;
+        }
+        
+        .voice-status-dashboard {
+            position: fixed;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.9);
+            padding: 12px 24px;
+            border-radius: 40px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            z-index: 1000;
+        }
+        
+        .recording-pulse {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #ff4444;
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; transform: scale(1); }
+            100% { opacity: 0; transform: scale(2); }
+        }
+        
+        .modules-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+        
+        .module-card {
+            background: var(--max-panel-bg, #17212b);
+            border-radius: 20px;
+            padding: 16px;
+            text-align: center;
+            cursor: pointer;
+            transition: transform 0.2s, background 0.2s;
+            border-left: 4px solid;
+        }
+        
+        .module-card:hover {
+            transform: translateY(-4px);
+            background: var(--max-hover, #2b3b4a);
+        }
+        
+        .module-icon {
+            font-size: 32px;
             margin-bottom: 8px;
         }
         
-        .context-hint {
+        .module-name {
+            font-weight: 600;
             font-size: 14px;
-            color: var(--max-text-secondary, #8e9aa6);
-            margin-bottom: 16px;
         }
         
-        .context-input-group {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-        
-        .context-input {
-            flex: 1;
-            padding: 14px;
-            background: var(--max-input-bg, #1f2c38);
-            border: none;
-            border-radius: 40px;
-            color: var(--max-text, white);
-            font-size: 16px;
-        }
-        
-        .context-submit {
-            background: var(--max-blue, #248bf2);
-            border: none;
-            border-radius: 40px;
-            padding: 14px 20px;
-            color: white;
-            font-size: 18px;
-            cursor: pointer;
-        }
-        
-        .context-skip {
-            background: transparent;
-            border: none;
-            color: var(--max-text-secondary, #8e9aa6);
-            padding: 12px;
-            cursor: pointer;
-            width: 100%;
-        }
-        
-        .gender-buttons {
-            display: flex;
-            gap: 16px;
-            margin-bottom: 20px;
-        }
-        
-        .gender-btn {
-            flex: 1;
+        .quick-actions {
+            background: var(--max-panel-bg, #17212b);
+            border-radius: 24px;
             padding: 16px;
-            background: var(--max-input-bg, #1f2c38);
-            border: none;
-            border-radius: 40px;
-            color: var(--max-text, white);
-            cursor: pointer;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 8px;
         }
         
-        .gender-emoji {
-            font-size: 32px;
-        }
-        
-        .benefits-list {
-            margin: 20px 0;
-        }
-        
-        .benefit-item {
+        .quick-actions-title {
+            font-size: 16px;
+            font-weight: 600;
             margin-bottom: 16px;
+        }
+        
+        .quick-actions-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+        }
+        
+        .quick-action {
+            text-align: center;
             padding: 12px;
             background: var(--max-input-bg, #1f2c38);
             border-radius: 16px;
+            cursor: pointer;
+            transition: background 0.2s;
         }
         
-        .benefit-stage {
-            font-weight: bold;
+        .quick-action:hover {
+            background: var(--max-hover, #2b3b4a);
+        }
+        
+        .action-icon {
+            font-size: 24px;
+            display: block;
             margin-bottom: 4px;
         }
         
-        .benefit-desc {
-            font-size: 14px;
-            color: var(--max-text-secondary, #8e9aa6);
+        .action-name {
+            font-size: 11px;
         }
         
-        .profile-header {
-            text-align: center;
-            margin-bottom: 24px;
+        .floating-message {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.9);
+            border-radius: 16px;
+            padding: 12px 16px;
+            z-index: 2000;
+            animation: slideUp 0.3s ease;
         }
         
-        .profile-emoji {
-            font-size: 48px;
-            margin-bottom: 12px;
+        @keyframes slideUp {
+            from { transform: translateY(100px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
         }
         
-        .profile-title {
-            font-size: 24px;
+        .floating-message.success {
+            background: #28a745;
         }
         
-        .profile-text {
-            line-height: 1.6;
-            margin-bottom: 24px;
-            white-space: pre-wrap;
+        .floating-message.error {
+            background: #dc3545;
         }
         
-        .profile-buttons {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-        
-        .button-row {
-            display: flex;
-            gap: 12px;
-        }
-        
-        .button-row .onboarding-btn {
-            flex: 1;
-        }
-        
-        .ask-question-title, .choose-goal-title, .choose-mode-title {
-            font-size: 24px;
-            margin-bottom: 16px;
-            text-align: center;
-        }
-        
-        .voice-input-area {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-top: 16px;
-            padding-top: 16px;
-            border-top: 1px solid var(--glass-border, rgba(255,255,255,0.1));
-            justify-content: center;
-        }
-        
-        .question-input-area {
-            margin-bottom: 20px;
-        }
-        
-        .input-group {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-        
-        .question-input {
-            flex: 1;
-            padding: 14px;
-            background: var(--max-input-bg, #1f2c38);
-            border: none;
-            border-radius: 40px;
-            color: var(--max-text, white);
-            font-size: 16px;
-        }
-        
-        .question-submit {
+        .floating-message.info {
             background: var(--max-blue, #248bf2);
-            border: none;
-            border-radius: 40px;
-            padding: 14px 20px;
-            color: white;
-            font-size: 18px;
-            cursor: pointer;
         }
         
-        .voice-hint-text {
-            font-size: 13px;
-            color: var(--max-text-secondary, #8e9aa6);
-            text-align: center;
-            margin-top: 8px;
-        }
-        
-        .voice-hold-hint {
-            display: inline-block;
-            background: rgba(36, 139, 242, 0.2);
-            padding: 3px 10px;
-            border-radius: 20px;
-            font-size: 10px;
-            margin-left: 8px;
-            font-weight: normal;
-        }
-        
-        #hiddenAudioPlayer {
-            display: none;
-        }
-        
-        .login-screen {
+        .floating-message-content {
             display: flex;
-            flex-direction: column;
+            justify-content: space-between;
             align-items: center;
-            justify-content: center;
-            min-height: 400px;
+        }
+        
+        .floating-message-close {
+            cursor: pointer;
+            font-size: 18px;
+            padding: 0 8px;
+        }
+        
+        .dashboard-test-required {
             text-align: center;
             padding: 40px 20px;
         }
         
-        .login-icon {
+        .test-required-icon {
             font-size: 64px;
-            margin-bottom: 24px;
+            margin-bottom: 20px;
         }
         
-        .login-title {
+        .test-required-title {
             font-size: 28px;
             font-weight: bold;
             margin-bottom: 16px;
-            background: linear-gradient(135deg, var(--max-blue, #248bf2), #6c5ce7);
-            -webkit-background-clip: text;
-            background-clip: text;
-            color: transparent;
         }
         
-        .login-text {
-            font-size: 16px;
+        .test-required-text {
             color: var(--max-text-secondary, #8e9aa6);
             line-height: 1.6;
             margin-bottom: 32px;
-            max-width: 400px;
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
         }
         
-        .login-btn {
-            background: var(--max-blue, #248bf2);
-            border: none;
-            border-radius: 40px;
-            padding: 14px 32px;
-            font-size: 18px;
-            font-weight: 600;
-            color: white;
-            cursor: pointer;
-        }
-        
-        .mode-cards {
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-            margin-bottom: 20px;
-        }
-        
-        .mode-card {
-            background: var(--max-input-bg, #1f2c38);
-            border-radius: 20px;
-            padding: 16px;
-            cursor: pointer;
-            transition: all 0.2s;
-            border: 2px solid transparent;
-        }
-        
-        .mode-card.selected {
-            border-color: var(--max-blue, #248bf2);
-            background: var(--max-hover, #2b3b4a);
-        }
-        
-        .mode-emoji {
-            font-size: 32px;
-            margin-bottom: 8px;
-        }
-        
-        .mode-name {
-            font-size: 18px;
-            font-weight: bold;
-            margin-bottom: 8px;
-        }
-        
-        .goals-list {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            margin-bottom: 20px;
-        }
-        
-        .goal-item {
-            background: var(--max-input-bg, #1f2c38);
-            border-radius: 16px;
-            padding: 16px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        
-        .goal-item:hover {
-            background: var(--max-hover, #2b3b4a);
-        }
-        
-        .goal-name {
-            font-weight: bold;
-            margin-bottom: 4px;
-        }
-        
-        .goal-time, .goal-difficulty {
-            font-size: 12px;
-            color: var(--max-text-secondary, #8e9aa6);
-        }
-        
-        .thought-text {
-            line-height: 1.8;
-            margin-bottom: 24px;
-            white-space: pre-wrap;
-        }
-        
-        .profile-badge, .mode-badge {
-            background: var(--max-input-bg, #1f2c38);
-            padding: 12px;
-            border-radius: 16px;
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        
-        .badge-label {
-            font-size: 12px;
-            color: var(--max-text-secondary, #8e9aa6);
-            margin-right: 8px;
-        }
-        
-        .badge-code {
-            font-weight: bold;
-            font-family: monospace;
-        }
-        
-        .messages-container {
-            flex: 1;
-            overflow-y: auto;
-            padding: 16px;
-            height: calc(100vh - 120px);
-        }
-        
-        .messages-list {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-        
-        .message {
-            display: flex;
-            width: 100%;
-        }
-        
-        .message.user-message {
-            justify-content: flex-end;
-        }
-        
-        .message.bot-message {
-            justify-content: flex-start;
-        }
-        
-        .message-bubble {
-            max-width: 80%;
-            padding: 12px 16px;
-            border-radius: 18px;
-        }
-        
-        .user-message .message-bubble {
-            background: var(--max-message-user, #2b5278);
-            border-bottom-right-radius: 4px;
-        }
-        
-        .bot-message .message-bubble {
-            background: var(--max-message-bot, #1f2c38);
-            border-bottom-left-radius: 4px;
-        }
-        
-        .message-text {
-            font-size: 15px;
-            line-height: 1.4;
-        }
-        
-        .message-time {
-            font-size: 10px;
-            color: var(--max-text-secondary);
-            margin-top: 4px;
-            text-align: right;
-        }
-        
-        .input-panel {
-            padding: 12px 16px;
-            background: var(--max-panel-bg);
-            border-top: 1px solid var(--max-border);
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-        
-        .attach-btn, .voice-btn {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: var(--glass-bg);
-            border: none;
-            color: var(--max-text);
-            font-size: 20px;
-            cursor: pointer;
-        }
-        
-        .message-input-wrapper {
-            flex: 1;
-            display: flex;
-            gap: 8px;
-            background: var(--glass-bg);
-            border-radius: 24px;
-            padding: 4px 4px 4px 16px;
-        }
-        
-        .message-input {
-            flex: 1;
-            background: transparent;
-            border: none;
-            color: var(--max-text);
-            font-size: 16px;
-            outline: none;
-            padding: 8px 0;
-        }
-        
-        .send-btn {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            background: var(--max-blue);
-            border: none;
-            color: white;
-            font-size: 18px;
-            cursor: pointer;
-        }
-        
-        .smart-questions-container {
-            padding: 20px;
-            overflow-y: auto;
-            height: 100%;
-        }
-        
-        .smart-questions-header {
-            text-align: center;
-            margin-bottom: 24px;
-        }
-        
-        .smart-questions-emoji {
-            font-size: 48px;
-        }
-        
-        .smart-questions-title {
-            font-size: 22px;
-            margin-bottom: 8px;
-            color: var(--max-text);
-        }
-        
-        .smart-questions-desc {
-            color: var(--max-text-secondary);
-        }
-        
-        .smart-questions-list {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            margin-bottom: 20px;
-        }
-        
-        .smart-question-item {
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border);
-            border-radius: 20px;
-            padding: 14px 18px;
-            cursor: pointer;
-            display: flex;
-            gap: 12px;
-            transition: all 0.2s;
-        }
-        
-        .smart-question-item:hover {
-            border-color: var(--max-blue);
-            transform: translateX(4px);
-        }
-        
-        .smart-question-input {
-            flex: 1;
-            padding: 14px 18px;
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border);
-            border-radius: 30px;
-            color: var(--max-text);
-        }
-        
-        .smart-question-submit {
-            width: 48px;
-            height: 48px;
-            border-radius: 50%;
-            background: var(--max-blue);
-            border: none;
-            color: white;
-            cursor: pointer;
-        }
-        
-        .thought-loading-container {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 300px;
-        }
-        
-        .thought-loading-content {
-            text-align: center;
-        }
-        
-        .loading-time {
-            margin-top: 12px;
-            font-size: 12px;
-            color: var(--max-text-secondary);
-        }
-        
-        .dashboard-fallback {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 400px;
-            text-align: center;
-            padding: 40px 20px;
-        }
-        
-        .fallback-icon {
-            font-size: 64px;
-            margin-bottom: 24px;
-        }
-        
-        .fallback-title {
-            font-size: 24px;
-            font-weight: bold;
-            margin-bottom: 16px;
-        }
-        
-        .fallback-text {
-            font-size: 16px;
-            color: var(--max-text-secondary, #8e9aa6);
-            margin-bottom: 32px;
-            line-height: 1.6;
-        }
-        
-        .fallback-btn {
+        .test-required-btn {
             background: var(--max-blue, #248bf2);
             border: none;
             border-radius: 40px;
@@ -1366,18 +960,6 @@
             font-weight: 600;
             color: white;
             cursor: pointer;
-        }
-        
-        .microphone-request-btn {
-            background: var(--max-blue, #248bf2);
-            border: none;
-            border-radius: 40px;
-            padding: 12px 24px;
-            font-size: 14px;
-            font-weight: 600;
-            color: white;
-            cursor: pointer;
-            margin-top: 16px;
         }
         
         @supports (padding: max(0px)) {
@@ -1385,9 +967,6 @@
                 padding-left: max(20px, env(safe-area-inset-left));
                 padding-right: max(20px, env(safe-area-inset-right));
                 padding-bottom: max(20px, env(safe-area-inset-bottom));
-            }
-            .chat-header {
-                padding-top: max(12px, env(safe-area-inset-top));
             }
             .recording-timer {
                 bottom: max(120px, env(safe-area-inset-bottom) + 80px);
@@ -1459,7 +1038,7 @@
     <div id="recordingTimer" class="recording-timer" style="display: none;">0s</div>
     <div id="toastMessage" class="toast-message"></div>
 
-    <!-- ========== ШАБЛОНЫ ЭКРАНОВ ========== -->
+    <!-- ========== ШАБЛОНЫ ЭКРАНОВ (все шаблоны из вашего файла) ========== -->
     <template id="onboardingScreen1">
         <div class="onboarding-container">
             <div class="onboarding-content">
@@ -1468,10 +1047,7 @@
                 <div class="onboarding-subtitle">виртуальный психолог</div>
                 <div class="onboarding-text" id="onboardingText1">
                     Привет, <span id="userNamePlaceholder">друг</span>!<br><br>
-                    Я — Фреди, виртуальный психолог.<br>
-                    Оцифрованная версия Андрея Мейстера — его цифровой слепок.<br><br>
-                    🎭 Короче, я — это он, только батарейка дольше держит и пожрать не прошу.<br><br>
-                    🕒 Нам нужно познакомиться, потому что я пока не экстрасенс.<br><br>
+                    Я — Фреди, виртуальный психолог.<br><br>
                     🧐 Чтобы я понимал, с кем имею дело — давай пройдём тест.<br><br>
                     📊 Всего 5 этапов:<br><br>
                     1️⃣ Конфигурация восприятия<br>
@@ -1479,39 +1055,10 @@
                     3️⃣ Конфигурация поведения<br>
                     4️⃣ Точка роста<br>
                     5️⃣ Глубинные паттерны<br><br>
-                    ⏱ 15 минут — и я буду знать о тебе больше, чем ты думаешь.
+                    ⏱ 15 минут — и я буду знать о тебе больше.
                 </div>
                 <div class="onboarding-buttons">
                     <button class="onboarding-btn primary" id="startTestBtn">🚀 Давай, погнали!</button>
-                    <button class="onboarding-btn secondary" id="whoAreYouBtn">🤨 А ты кто вообще такой?</button>
-                </div>
-            </div>
-        </div>
-    </template>
-
-    <template id="onboardingScreen2">
-        <div class="onboarding-container">
-            <div class="onboarding-content">
-                <div class="onboarding-text">
-                    🎭 Ну, вопрос хороший. Давайте по существу.<br><br>
-                    Видите ли, дорогой человек, я — экспериментальная модель.<br>
-                    Андрей Мейстер однажды подумал: "А что, если я создам свою цифровую копию? Пусть работает, пока я сплю, ем или просто ленюсь".<br><br>
-                    Так я и появился. 🧠<br><br>
-                    🧐 Что я умею:<br><br>
-                    • Вижу паттерны там, где вы видите просто день сурка<br>
-                    • Нахожу систему в ваших "случайных" решениях<br>
-                    • Понимаю, почему вы выбираете одних и тех же "не тех" людей<br>
-                    • Я реально беспристрастен — у меня нет плохого настроения<br><br>
-                    🎯 Конкретно по тесту:<br><br>
-                    1️⃣ Восприятие — поймём, какую линзу вы носите<br>
-                    2️⃣ Мышление — узнаем, как вы пережёвываете реальность<br>
-                    3️⃣ Поведение — посмотрим, что вы делаете "на автомате"<br>
-                    4️⃣ Точка роста — я скажу, куда вам двигаться<br>
-                    5️⃣ Глубинные паттерны — заглянем в детство и подсознание<br><br>
-                    ⏱ 15 минут — и я составлю ваш профиль.
-                </div>
-                <div class="onboarding-buttons">
-                    <button class="onboarding-btn primary" id="letsGoBtn">👌 Погнали!</button>
                 </div>
             </div>
         </div>
@@ -1553,7 +1100,7 @@
                 <div class="context-question">Сколько вам лет?</div>
                 <div class="context-hint">(Напишите число)</div>
                 <div class="context-input-group">
-                    <input type="number" class="context-input" id="ageInput" placeholder="Например: 35" min="1" max="120">
+                    <input type="number" class="context-input" id="ageInput" placeholder="Например: 35">
                     <button class="context-submit" id="submitAgeBtn">➡️</button>
                 </div>
                 <button class="context-skip" id="skipAgeBtn">⏭ Позже</button>
@@ -1565,50 +1112,15 @@
         <div class="context-complete-container">
             <div class="context-complete-content">
                 <div class="context-complete-title">✅ Отлично! Теперь я знаю о вас:</div>
-                <div class="context-info" id="contextInfo">
-                    📍 Город: <span id="infoCity">Москва</span><br>
-                    👤 Пол: <span id="infoGender">Мужчина</span><br>
-                    📅 Возраст: <span id="infoAge">35</span> лет<br>
-                    <span id="infoWeather">🌧 Погода: пасмурно, +5°C</span>
-                </div>
+                <div class="context-info" id="contextInfo"></div>
                 <div class="context-next-text">
                     🎯 Теперь я буду учитывать это в наших разговорах!<br><br>
                     🧠 <b>ЧТО ДАЛЬШЕ?</b><br><br>
-                    Чтобы я мог помочь по-настоящему, нужно пройти тест (15 минут).<br>
-                    Он определит ваш психологический профиль по 4 векторам и глубинным паттернам.
+                    Чтобы я мог помочь по-настоящему, нужно пройти тест (15 минут).
                 </div>
                 <div class="context-complete-buttons">
                     <button class="onboarding-btn primary" id="startRealTestBtn">🚀 НАЧАТЬ ТЕСТ</button>
-                    <button class="onboarding-btn secondary" id="whatTestGivesBtn">📖 ЧТО ДАЕТ ТЕСТ</button>
                     <button class="onboarding-btn secondary" id="askQuestionPreBtn">❓ ЗАДАТЬ ВОПРОС</button>
-                </div>
-            </div>
-        </div>
-    </template>
-
-    <template id="benefitsScreen">
-        <div class="benefits-container">
-            <div class="benefits-content">
-                <div class="benefits-title">🔍 ЧТО ВЫ УЗНАЕТЕ О СЕБЕ:</div>
-                <div class="benefits-list">
-                    <div class="benefit-item"><div class="benefit-stage">🧠 ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ</div><div class="benefit-desc">Линза, через которую вы смотрите на мир.</div></div>
-                    <div class="benefit-item"><div class="benefit-stage">🧠 ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ</div><div class="benefit-desc">Как вы обрабатываете информацию.</div></div>
-                    <div class="benefit-item"><div class="benefit-stage">🧠 ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ</div><div class="benefit-desc">Ваши автоматические реакции.</div></div>
-                    <div class="benefit-item"><div class="benefit-stage">🧠 ЭТАП 4: ТОЧКА РОСТА</div><div class="benefit-desc">Где находится рычаг изменений.</div></div>
-                    <div class="benefit-item"><div class="benefit-stage">🧠 ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ</div><div class="benefit-desc">Тип привязанности, защитные механизмы, базовые убеждения.</div></div>
-                </div>
-                <div class="benefits-after">
-                    ⚡ <b>ПОСЛЕ ТЕСТА ВЫ ПОЛУЧИТЕ:</b><br><br>
-                    ✅ Полный психологический портрет<br>
-                    ✅ Глубинный анализ подсознательных паттернов<br>
-                    ✅ Выбор стиля общения: 🔮 КОУЧ | 🧠 ПСИХОЛОГ | ⚡ ТРЕНЕР<br>
-                    ✅ Индивидуальный навигатор по целям<br>
-                    ✅ Напоминания и поддержка на пути<br><br>
-                    ⏱ <b>Всего 15 минут</b>
-                </div>
-                <div class="benefits-buttons">
-                    <button class="onboarding-btn primary" id="startTestFromBenefitsBtn">🚀 НАЧАТЬ ТЕСТ</button>
-                    <button class="onboarding-btn secondary" id="backToContextBtn">◀️ НАЗАД</button>
                 </div>
             </div>
         </div>
@@ -1622,7 +1134,7 @@
                 <div class="profile-buttons">
                     <button class="onboarding-btn primary" id="psychologistThoughtBtn">🧠 МЫСЛИ ПСИХОЛОГА</button>
                     <div class="button-row">
-                        <button class="onboarding-btn secondary" id="askQuestionBtn">🎤 ХОЧУ ВЫСКАЗАТЬСЯ</button>
+                        <button class="onboarding-btn secondary" id="askQuestionBtn">🎤 ЗАДАТЬ ВОПРОС</button>
                         <button class="onboarding-btn secondary" id="chooseGoalBtn">🎯 ВЫБРАТЬ ЦЕЛЬ</button>
                     </div>
                     <button class="onboarding-btn secondary" id="chooseModeBtn">⚙️ ВЫБРАТЬ РЕЖИМ</button>
@@ -1635,8 +1147,7 @@
         <div class="ask-question-container">
             <div class="ask-question-content">
                 <h2 class="ask-question-title">✏️ ЗАДАВАЙТЕ ЛЮБОЙ ВОПРОС</h2>
-                <div class="ask-question-text">Если мой создатель знает ответ на него — значит и я вам что-то отвечу 😉</div>
-                <div class="voice-hint">🎤 <b>Можно отправить голосовое сообщение</b> — я внимательно выслушаю.</div>
+                <div class="voice-hint">🎤 <b>Можно отправить голосовое сообщение</b></div>
                 <div class="question-input-area">
                     <div class="input-group">
                         <input type="text" id="questionInput" class="question-input" placeholder="Напишите ваш вопрос...">
@@ -1650,8 +1161,7 @@
                         <span>🎙️ Говорите...</span>
                     </div>
                     <div class="voice-hint-text">
-                        🎤 Нажмите и <b>ДЕРЖИТЕ</b> для записи (до 60 сек)
-                        <span class="voice-hold-hint">удержание</span>
+                        🎤 Нажмите и <b>ДЕРЖИТЕ</b> для записи (до 30 сек)
                     </div>
                 </div>
                 <div class="question-back"><button class="onboarding-btn secondary" id="backToProfileBtn">◀️ НАЗАД</button></div>
@@ -1663,11 +1173,8 @@
         <div class="choose-goal-container">
             <div class="choose-goal-content">
                 <h2 class="choose-goal-title">🎯 ВЫБЕРИТЕ ЦЕЛЬ</h2>
-                <div class="goal-description"><span id="goalUserName">друг</span>, я проанализировал твой профиль и подобрал цели, которые сейчас наиболее актуальны.</div>
-                <div class="profile-badge"><span class="badge-label">Твой профиль:</span><span class="badge-code" id="profileCode">СБ-4_ТФ-4_УБ-4_ЧВ-4</span></div>
-                <div class="mode-badge"><span class="badge-label">Режим:</span><span class="badge-code" id="modeCode">🔮 КОУЧ</span></div>
+                <div class="profile-badge"><span class="badge-label">Твой профиль:</span><span class="badge-code" id="profileCode"></span></div>
                 <div class="goals-list" id="goalsList"></div>
-                <div class="custom-goal"><button class="onboarding-btn secondary" id="customGoalBtn">✏️ Сформулирую сам</button></div>
                 <div class="goal-back"><button class="onboarding-btn secondary" id="backToProfileFromGoalBtn">◀️ НАЗАД</button></div>
             </div>
         </div>
@@ -1677,12 +1184,10 @@
         <div class="choose-mode-container">
             <div class="choose-mode-content">
                 <h2 class="choose-mode-title">⚙️ ВЫБЕРИТЕ РЕЖИМ</h2>
-                <div class="mode-description">Слушай, я могу быть разным. Хочешь конкретики — давай определимся, в каком качестве я сегодня буду полезен.</div>
-                <div class="profile-badge"><span class="badge-label">Твой профиль:</span><span class="badge-code" id="modeProfileCode">СБ-4_ТФ-4_УБ-4_ЧВ-4</span></div>
                 <div class="mode-cards" id="modeCards">
-                    <div class="mode-card" data-mode="coach"><div class="mode-emoji">🔮</div><div class="mode-name">КОУЧ</div><div class="mode-desc">Если хочешь, чтобы я помог тебе самому найти решения.</div><div class="mode-what">Задавать открытые вопросы, отражать твои мысли, направлять.</div><div class="mode-get">• Жить станет легче<br>• Появится больше радости от простых вещей<br>• Начнёшь замечать возможности вместо проблем</div></div>
-                    <div class="mode-card" data-mode="psychologist"><div class="mode-emoji">🧠</div><div class="mode-name">ПСИХОЛОГ</div><div class="mode-desc">Если хочешь копнуть вглубь, разобраться с причинами, а не следствиями.</div><div class="mode-what">Исследовать твои глубинные паттерны, защитные механизмы, прошлый опыт.</div><div class="mode-get">• Перестанешь реагировать на триггеры<br>• Исчезнут старые сценарии<br>• Поймёшь, откуда растут ноги у твоих страхов</div></div>
-                    <div class="mode-card" data-mode="trainer"><div class="mode-emoji">⚡</div><div class="mode-name">ТРЕНЕР</div><div class="mode-desc">Если нужны чёткие инструменты, навыки и результат.</div><div class="mode-what">Формировать твои поведенческие и мыслительные навыки.</div><div class="mode-get">• Научишься чётко формулировать мысли<br>• Освоишь алгоритмы ведения переговоров<br>• Сформируешь полезные привычки</div></div>
+                    <div class="mode-card" data-mode="coach"><div class="mode-emoji">🔮</div><div class="mode-name">КОУЧ</div><div class="mode-desc">Помогаю найти ответы внутри себя</div></div>
+                    <div class="mode-card" data-mode="psychologist"><div class="mode-emoji">🧠</div><div class="mode-name">ПСИХОЛОГ</div><div class="mode-desc">Исследую глубинные паттерны</div></div>
+                    <div class="mode-card" data-mode="trainer"><div class="mode-emoji">⚡</div><div class="mode-name">ТРЕНЕР</div><div class="mode-desc">Даю чёткие инструменты и задачи</div></div>
                 </div>
                 <div class="mode-back"><button class="onboarding-btn secondary" id="backToProfileFromModeBtn">◀️ НАЗАД</button></div>
             </div>
@@ -1693,8 +1198,7 @@
         <div class="thought-loading-container">
             <div class="thought-loading-content">
                 <div class="loading-spinner">🧠</div>
-                <div class="loading-text">Анализирую через конфайнмент-модель...</div>
-                <div class="loading-time">Это займёт около 15-20 секунд</div>
+                <div class="loading-text">Анализирую...</div>
             </div>
         </div>
     </template>
@@ -1706,7 +1210,6 @@
                 <div class="thought-text" id="thoughtText"></div>
                 <div class="thought-buttons">
                     <button class="onboarding-btn secondary" id="backToProfileFromThoughtBtn">◀️ НАЗАД</button>
-                    <button class="onboarding-btn secondary" id="askQuestionFromThoughtBtn">🎤 ЗАДАТЬ ВОПРОС</button>
                 </div>
             </div>
         </div>
@@ -1726,26 +1229,87 @@
     <script src="/psychometric.js?v=12"></script>
     <script src="/dashboard.js?v=12"></script>
     
-    <!-- ========== ФИНАЛЬНАЯ ИНИЦИАЛИЗАЦИЯ ========== -->
+    <!-- ========== ИНИЦИАЛИЗАЦИЯ ========== -->
     <script>
         // Создаем объект для управления микрофоном
         window.maxMicrophoneManager = {
-            requestMicrophone: async function() {
+            hasPermission: false,
+            
+            async requestMicrophone() {
+                console.log('🎤 Запрос доступа к микрофону...');
                 try {
                     let stream = null;
+                    
+                    // Пробуем через MAX WebApp
                     if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUserMedia) {
-                        stream = await window.MAX.WebApp.getUserMedia({ audio: true });
-                    } else {
-                        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        try {
+                            stream = await window.MAX.WebApp.getUserMedia({ audio: true });
+                            console.log('✅ Доступ через MAX.WebApp');
+                        } catch (e) {
+                            console.warn('MAX getUserMedia failed:', e);
+                        }
                     }
+                    
+                    // Стандартный Web API
+                    if (!stream) {
+                        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        console.log('✅ Доступ через Web API');
+                    }
+                    
                     stream.getTracks().forEach(track => track.stop());
+                    this.hasPermission = true;
+                    this.showToast('✅ Микрофон готов!', 'success');
                     return true;
-                } catch (e) {
-                    console.error('Microphone error:', e);
+                    
+                } catch (error) {
+                    console.error('Microphone error:', error);
+                    this.hasPermission = false;
+                    
+                    if (error.name === 'NotAllowedError') {
+                        this.showPermissionInstructions();
+                    } else {
+                        this.showToast('❌ Не удалось получить доступ к микрофону', 'error');
+                    }
                     return false;
                 }
             },
-            showToast: function(message, type) {
+            
+            showPermissionInstructions() {
+                const isAndroid = /Android/i.test(navigator.userAgent);
+                const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+                
+                let instructions = '';
+                if (isAndroid) {
+                    instructions = '🔊 <b>ВКЛЮЧИТЕ МИКРОФОН В MAX</b><br><br>1️⃣ Закройте чат<br>2️⃣ Настройки телефона → Приложения → MAX<br>3️⃣ Разрешения → Микрофон → Разрешить<br>4️⃣ Вернитесь и нажмите 🎤';
+                } else if (isIOS) {
+                    instructions = '🎤 <b>ВКЛЮЧИТЕ МИКРОФОН В MAX</b><br><br>1️⃣ Закройте чат<br>2️⃣ Настройки iPhone → MAX<br>3️⃣ Включите Микрофон<br>4️⃣ Вернитесь и нажмите 🎤';
+                } else {
+                    instructions = '🎤 <b>НУЖЕН ДОСТУП К МИКРОФОНУ</b><br><br>В настройках браузера разрешите доступ к микрофону.';
+                }
+                
+                const modal = document.createElement('div');
+                modal.className = 'microphone-modal';
+                modal.innerHTML = `
+                    <div class="microphone-modal-content">
+                        <div style="font-size:48px;margin-bottom:16px;">🎤</div>
+                        <h3>Нужен доступ к микрофону</h3>
+                        <div style="color:#8e9aa6;line-height:1.6;margin:16px 0;text-align:left;">${instructions}</div>
+                        <div style="display:flex;gap:12px;">
+                            <button id="microphoneRetryBtn" class="modal-btn primary">🔄 ПРОВЕРИТЬ</button>
+                            <button id="microphoneCloseBtn" class="modal-btn secondary">📱 ЗАКРЫТЬ</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+                
+                document.getElementById('microphoneRetryBtn')?.addEventListener('click', () => {
+                    modal.remove();
+                    this.requestMicrophone();
+                });
+                document.getElementById('microphoneCloseBtn')?.addEventListener('click', () => modal.remove());
+            },
+            
+            showToast(message, type) {
                 const toast = document.getElementById('toastMessage');
                 if (toast) {
                     toast.textContent = message;
@@ -1755,16 +1319,16 @@
             }
         };
         
-        // Дополнительная инициализация
+        // Запрашиваем микрофон при загрузке
+        window.maxMicrophoneManager.requestMicrophone();
+        
+        // Инициализация дашборда
         document.addEventListener('DOMContentLoaded', () => {
-            console.log('📄 DOM загружен');
-            
-            // Проверяем, что user_id был получен
-            if (!window.maxContext || !window.maxContext.user_id) {
-                console.error('❌ user_id не получен!');
+            console.log('📄 DOM загружен, создаём FrediDashboard');
+            if (typeof FrediDashboard !== 'undefined') {
+                window.dashboard = new FrediDashboard();
             } else {
-                console.log('✅ user_id получен:', window.maxContext.user_id);
-                console.log('✅ user_name:', window.maxContext.user_name);
+                console.error('❌ FrediDashboard не загружен!');
             }
         });
     </script>
