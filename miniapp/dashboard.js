@@ -1,6 +1,6 @@
 // ============================================
 // ЛИЧНЫЙ КАБИНЕТ - КОНСОРЦИУМ ФРЕДИ
-// Версия 3.3 - ИСПРАВЛЕНАЯ (правильные эндпоинты)
+// Версия 3.4 - ПОЛНАЯ (с рабочим голосом и всеми функциями)
 // ============================================
 
 class FrediDashboard {
@@ -107,14 +107,13 @@ class FrediDashboard {
     }
     
     // ============================================
-    // ЗАГРУЗКА ДАННЫХ (ИСПРАВЛЕННЫЕ ЭНДПОИНТЫ)
+    // ЗАГРУЗКА ДАННЫХ
     // ============================================
     
     async loadUserData() {
         try {
             console.log('🔍 Загрузка данных для user_id:', this.userId);
             
-            // ✅ ПРАВИЛЬНЫЙ ЭНДПОИНТ: /api/user-status (не /api/статус пользователя)
             const status = await window.api.request(`/api/user-status?user_id=${this.userId}`);
             console.log('📊 Статус пользователя:', status);
             
@@ -132,7 +131,6 @@ class FrediDashboard {
             if (!status.has_profile && !status.test_completed && !status.has_interpretation) {
                 console.log('🔄 Профиль не найден в памяти, загружаем из БД...');
                 
-                // ✅ ПРАВИЛЬНЫЙ ЭНДПОИНТ: /api/force-load-user (не /api/принудительная загрузка-пользователь)
                 const loadResult = await window.api.request('/api/force-load-user', {
                     method: 'POST',
                     body: JSON.stringify({ user_id: this.userId })
@@ -149,7 +147,6 @@ class FrediDashboard {
             
             // Загружаем имя пользователя
             try {
-                // ✅ ПРАВИЛЬНЫЙ ЭНДПОИНТ: /api/user-data (не /api/пользовательские данные)
                 const userData = await window.api.request(`/api/user-data?user_id=${this.userId}`);
                 if (userData && userData.user_name && userData.user_name !== 'друг') {
                     this.userName = userData.user_name;
@@ -161,10 +158,9 @@ class FrediDashboard {
             
             // Если тест пройден, загружаем полный профиль
             if (this.isTestCompleted) {
-                // ✅ ПРАВИЛЬНЫЙ ЭНДПОИНТ: /api/get-profile (не /api/получить профиль)
                 const profile = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
                 this.userData = profile;
-                console.log('📊 Профиль загружен:', this.userData);
+                console.log('📊 Профиль загружен');
             }
             
             console.log('✅ loadUserData завершён, isTestCompleted:', this.isTestCompleted);
@@ -182,7 +178,6 @@ class FrediDashboard {
     
     async loadProfileData() {
         try {
-            // ✅ ПРАВИЛЬНЫЙ ЭНДПОИНТ: /api/get-profile
             const response = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
             
             if (response.ai_generated_profile) {
@@ -206,7 +201,6 @@ class FrediDashboard {
     
     async loadPsychologistThought() {
         try {
-            // ✅ ПРАВИЛЬНЫЙ ЭНДПОИНТ: /api/thought (не /api/думал)
             const response = await window.api.request(`/api/thought?user_id=${this.userId}`);
             this.psychologistThought = response.thought || 'Мысли психолога еще не сгенерированы. Пройдите тест для получения персонального анализа.';
             console.log('✅ Мысли психолога загружены');
@@ -214,6 +208,57 @@ class FrediDashboard {
             console.error('Ошибка загрузки мыслей психолога:', error);
             this.psychologistThought = 'Мысли психолога пока недоступны. Попробуйте позже.';
         }
+    }
+    
+    // ============================================
+    // ФОРМАТИРОВАНИЕ ТЕКСТА
+    // ============================================
+    
+    formatProfileText(data) {
+        const profile = data.profile_data || {};
+        const profileCode = profile.display_name || 'СБ-4_ТФ-4_УБ-4_ЧВ-4';
+        const perceptionType = data.perception_type || 'не определен';
+        const thinkingLevel = data.thinking_level || 5;
+        
+        return `
+            <div class="profile-section">
+                <h3>🧠 ВАШ ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ</h3>
+                <p><strong>Профиль:</strong> ${profileCode}</p>
+                <p><strong>Тип восприятия:</strong> ${perceptionType}</p>
+                <p><strong>Уровень мышления:</strong> ${thinkingLevel}/9</p>
+            </div>
+            <div class="profile-section">
+                <h4>📊 ВАШИ ВЕКТОРЫ:</h4>
+                <p>• Реакция на давление (СБ): ${profile.sb_level || 4}/6</p>
+                <p>• Отношение к деньгам (ТФ): ${profile.tf_level || 4}/6</p>
+                <p>• Понимание мира (УБ): ${profile.ub_level || 4}/6</p>
+                <p>• Отношения с людьми (ЧВ): ${profile.chv_level || 4}/6</p>
+            </div>
+            <div class="profile-section">
+                <h4>🎯 ТОЧКА РОСТА:</h4>
+                <p>${this.getGrowthPoint(profile)}</p>
+            </div>
+        `;
+    }
+    
+    getGrowthPoint(profile) {
+        const scores = {
+            sb: profile.sb_level || 4,
+            tf: profile.tf_level || 4,
+            ub: profile.ub_level || 4,
+            chv: profile.chv_level || 4
+        };
+        
+        const weakest = Object.entries(scores).sort((a, b) => a[1] - b[1])[0]?.[0] || 'sb';
+        
+        const growthPoints = {
+            sb: 'Работа с реакцией на давление и страхи. Учитесь говорить "нет" и защищать свои границы.',
+            tf: 'Проработка денежных блоков и развитие финансового мышления.',
+            ub: 'Развитие системного мышления и поиск глубинных смыслов.',
+            chv: 'Исцеление привязанности и развитие навыков здорового общения.'
+        };
+        
+        return growthPoints[weakest] || 'Исследование себя и своих паттернов.';
     }
     
     // ============================================
@@ -560,51 +605,213 @@ class FrediDashboard {
         return text.replace(/\n/g, '<br>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
     }
     
-    formatProfileText(data) {
-        const profile = data.profile_data || {};
-        const profileCode = profile.display_name || 'СБ-4_ТФ-4_УБ-4_ЧВ-4';
-        const perceptionType = data.perception_type || 'не определен';
-        const thinkingLevel = data.thinking_level || 5;
+    // ============================================
+    // 🎤 ГОЛОСОВОЙ ВВОД (ПОЛНАЯ РАБОЧАЯ ВЕРСИЯ)
+    // ============================================
+    
+    setupVoiceButton(button) {
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+        let recordingStartTime = null;
+        let timerInterval = null;
+        let stream = null;
         
-        return `
-            <div class="profile-section">
-                <h3>🧠 ВАШ ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ</h3>
-                <p><strong>Профиль:</strong> ${profileCode}</p>
-                <p><strong>Тип восприятия:</strong> ${perceptionType}</p>
-                <p><strong>Уровень мышления:</strong> ${thinkingLevel}/9</p>
-            </div>
-            <div class="profile-section">
-                <h4>📊 ВАШИ ВЕКТОРЫ:</h4>
-                <p>• Реакция на давление (СБ): ${profile.sb_level || 4}/6</p>
-                <p>• Отношение к деньгам (ТФ): ${profile.tf_level || 4}/6</p>
-                <p>• Понимание мира (УБ): ${profile.ub_level || 4}/6</p>
-                <p>• Отношения с людьми (ЧВ): ${profile.chv_level || 4}/6</p>
-            </div>
-            <div class="profile-section">
-                <h4>🎯 ТОЧКА РОСТА:</h4>
-                <p>${this.getGrowthPoint(profile)}</p>
-            </div>
-        `;
+        const voiceStatus = document.getElementById('voiceStatusDashboard');
+        const timerEl = document.getElementById('dashboardRecordingTimer');
+        
+        const startRecording = async () => {
+            try {
+                console.log('🎤 Запрос доступа к микрофону...');
+                
+                stream = null;
+                
+                // Пробуем через MAX WebApp
+                if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUserMedia) {
+                    try {
+                        stream = await window.MAX.WebApp.getUserMedia({ audio: true });
+                        console.log('✅ Доступ через MAX.WebApp');
+                    } catch (e) {
+                        console.warn('MAX getUserMedia failed:', e);
+                    }
+                }
+                
+                // Стандартный Web API
+                if (!stream) {
+                    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    console.log('✅ Доступ через Web API');
+                }
+                
+                let mimeType = '';
+                const mimeTypes = ['audio/webm', 'audio/mp4', 'audio/ogg'];
+                for (const type of mimeTypes) {
+                    if (MediaRecorder.isTypeSupported(type)) {
+                        mimeType = type;
+                        break;
+                    }
+                }
+                
+                mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+                audioChunks = [];
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) audioChunks.push(event.data);
+                };
+                
+                mediaRecorder.onstop = async () => {
+                    if (stream) {
+                        stream.getTracks().forEach(track => track.stop());
+                        stream = null;
+                    }
+                    
+                    if (audioChunks.length === 0) {
+                        this.showFloatingMessage('❌ Не удалось записать голос', 'error');
+                        isRecording = false;
+                        return;
+                    }
+                    
+                    const audioBlob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
+                    
+                    if (audioBlob.size < 5000) {
+                        this.showFloatingMessage('❌ Запись слишком короткая', 'error');
+                        isRecording = false;
+                        return;
+                    }
+                    
+                    await this.sendVoiceToServer(audioBlob);
+                    isRecording = false;
+                };
+                
+                mediaRecorder.start(1000);
+                isRecording = true;
+                recordingStartTime = Date.now();
+                
+                button.classList.add('recording');
+                button.innerHTML = '<span class="voice-icon">⏹️</span><span class="voice-text">Отпустите</span>';
+                if (voiceStatus) voiceStatus.style.display = 'flex';
+                if (timerEl) timerEl.textContent = '0s';
+                
+                timerInterval = setInterval(() => {
+                    if (isRecording && recordingStartTime) {
+                        const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+                        if (timerEl) timerEl.textContent = `${elapsed}s`;
+                        if (elapsed >= 30) stopRecording();
+                    }
+                }, 1000);
+                
+                setTimeout(() => {
+                    if (isRecording) stopRecording();
+                }, 30000);
+                
+            } catch (error) {
+                console.error('Microphone error:', error);
+                this.showFloatingMessage('❌ Не удалось получить доступ к микрофону', 'error');
+                this._resetVoiceUI(button, voiceStatus, timerInterval);
+            }
+        };
+        
+        const stopRecording = () => {
+            if (mediaRecorder && isRecording && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+                isRecording = false;
+                if (timerInterval) clearInterval(timerInterval);
+            }
+        };
+        
+        const cancelRecording = () => {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.onstop = null;
+                mediaRecorder.stop();
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                    stream = null;
+                }
+                isRecording = false;
+                if (timerInterval) clearInterval(timerInterval);
+                this.showFloatingMessage('Запись отменена', 'info');
+            }
+            this._resetVoiceUI(button, voiceStatus, timerInterval);
+        };
+        
+        // Очищаем старые обработчики
+        button.removeEventListener('mousedown', startRecording);
+        button.removeEventListener('mouseup', stopRecording);
+        button.removeEventListener('mouseleave', stopRecording);
+        button.removeEventListener('touchstart', startRecording);
+        button.removeEventListener('touchend', stopRecording);
+        
+        // Добавляем новые
+        button.addEventListener('mousedown', startRecording);
+        button.addEventListener('mouseup', stopRecording);
+        button.addEventListener('mouseleave', stopRecording);
+        
+        button.addEventListener('touchstart', (e) => { 
+            e.preventDefault(); 
+            startRecording(); 
+        }, { passive: false });
+        
+        button.addEventListener('touchend', (e) => { 
+            e.preventDefault(); 
+            stopRecording(); 
+        }, { passive: false });
     }
     
-    getGrowthPoint(profile) {
-        const scores = {
-            sb: profile.sb_level || 4,
-            tf: profile.tf_level || 4,
-            ub: profile.ub_level || 4,
-            chv: profile.chv_level || 4
-        };
+    _resetVoiceUI(button, voiceStatus, timerInterval) {
+        if (button) {
+            button.classList.remove('recording');
+            button.innerHTML = '<span class="voice-icon">🎤</span><span class="voice-text">Нажмите и говорите</span>';
+        }
+        if (voiceStatus) voiceStatus.style.display = 'none';
+        if (timerInterval) clearInterval(timerInterval);
+    }
+    
+    async sendVoiceToServer(audioBlob) {
+        this.showFloatingMessage('🎤 Распознаю речь...', 'info');
         
-        const weakest = Object.entries(scores).sort((a, b) => a[1] - b[1])[0]?.[0] || 'sb';
+        const formData = new FormData();
+        formData.append('user_id', this.userId);
+        formData.append('voice', audioBlob, 'voice.webm');
         
-        const growthPoints = {
-            sb: 'Работа с реакцией на давление и страхи. Учитесь говорить "нет" и защищать свои границы.',
-            tf: 'Проработка денежных блоков и развитие финансового мышления.',
-            ub: 'Развитие системного мышления и поиск глубинных смыслов.',
-            chv: 'Исцеление привязанности и развитие навыков здорового общения.'
-        };
-        
-        return growthPoints[weakest] || 'Исследование себя и своих паттернов.';
+        try {
+            const response = await fetch(`${window.api.baseUrl}/api/voice/process`, {
+                method: 'POST',
+                body: formData
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                if (result.recognized_text) {
+                    this.showFloatingMessage(`📝 Вы сказали: ${result.recognized_text}`, 'success');
+                    const questionInput = document.getElementById('questionInput');
+                    if (questionInput) {
+                        questionInput.value = result.recognized_text;
+                        const sendBtn = document.getElementById('sendQuestionBtn');
+                        if (sendBtn && result.recognized_text.length > 3) {
+                            setTimeout(() => sendBtn.click(), 500);
+                        }
+                    }
+                }
+                if (result.answer) {
+                    this.showFloatingMessage(result.answer, 'info');
+                    this.playAudioResponse(result.audio_url);
+                }
+            } else {
+                this.showFloatingMessage(result.error || 'Не удалось распознать речь', 'error');
+            }
+        } catch (error) {
+            console.error('Send voice error:', error);
+            this.showFloatingMessage('❌ Ошибка отправки голоса', 'error');
+        }
+    }
+    
+    playAudioResponse(audioUrl) {
+        if (!audioUrl) return;
+        const audio = document.getElementById('hiddenAudioPlayer');
+        if (audio) {
+            audio.src = audioUrl;
+            audio.play().catch(e => console.warn('Audio play error:', e));
+        }
     }
     
     // ============================================
@@ -753,32 +960,284 @@ class FrediDashboard {
         };
     }
     
-    playAudioResponse(audioUrl) {
-        if (!audioUrl) return;
-        const audio = document.getElementById('hiddenAudioPlayer');
-        if (audio) {
-            audio.src = audioUrl;
-            audio.play().catch(e => console.warn('Audio play error:', e));
+    // ============================================
+    // АНИМИРОВАННЫЙ АВАТАР
+    // ============================================
+    
+    async initAnimatedAvatar() {
+        if (!window.AnimatedAvatar) {
+            console.warn('AnimatedAvatar не загружен, использую обычный аватар');
+            this._showFallbackAvatar();
+            return;
+        }
+        
+        try {
+            const profileData = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
+            
+            this.animatedAvatar = new AnimatedAvatar(this.userId, this.userName, profileData);
+            const avatarCanvas = await this.animatedAvatar.init();
+            
+            this.animatedAvatar.setSize(80, 80);
+            
+            const avatarContainer = document.getElementById('avatarContainer');
+            if (avatarContainer) {
+                avatarContainer.innerHTML = '';
+                avatarContainer.appendChild(avatarCanvas);
+            }
+            
+            this.animatedAvatar.onAvatarClick = () => {
+                const moods = ['happy', 'thoughtful', 'energetic'];
+                const randomMood = moods[Math.floor(Math.random() * moods.length)];
+                this.animatedAvatar.setMood(randomMood);
+                setTimeout(() => this.animatedAvatar.setMood('neutral'), 2000);
+                this.showFloatingMessage('Привет! Как настроение?', 'info');
+            };
+            
+            console.log('✅ Анимированный аватар инициализирован');
+            
+        } catch (error) {
+            console.error('Ошибка инициализации аватара:', error);
+            this._showFallbackAvatar();
         }
     }
     
-    async initAnimatedAvatar() {
-        // Заглушка для аватара
-        console.log('Аватар пока не используется');
+    _showFallbackAvatar() {
+        const avatarContainer = document.getElementById('avatarContainer');
+        if (avatarContainer) {
+            avatarContainer.innerHTML = this.getUserAvatar();
+        }
     }
     
-    setupVoiceButton(button) {
-        // Заглушка для голосовой кнопки
-        console.log('Голосовая кнопка инициализирована');
+    // ============================================
+    // ЧЕЛЛЕНДЖИ
+    // ============================================
+    
+    async initChallenges() {
+        if (!window.ChallengeManager) {
+            console.warn('ChallengeManager не загружен');
+            return;
+        }
+        
+        try {
+            this.challengeManager = new ChallengeManager(this.userId, this.userData);
+            await this.challengeManager.init();
+            
+            this.challengeManager.addListener((event, data) => {
+                if (event === 'level_up') {
+                    this.showFloatingMessage(`🎉 Уровень ${data.level} достигнут!`, 'success');
+                } else if (event === 'challenge_completed') {
+                    this.showFloatingMessage(`🏆 Выполнен челлендж: ${data.name}`, 'success');
+                }
+            });
+            
+            this.renderChallengesWidget();
+        } catch (error) {
+            console.error('Ошибка инициализации челленджей:', error);
+        }
     }
     
-    attachChallengeEvents() {}
-    attachDoublesEvents() {}
-    renderChallengesWidget() {}
-    renderDoublesSection() {}
-    showChatModal(double) {}
-    addBotReply(double, messagesList) {}
-    showDoubleProfile(double) {}
+    renderChallengesWidget() {
+        if (!this.challengeManager) return;
+        
+        const widgetHtml = this.challengeManager.renderWidget();
+        const container = document.querySelector('.dashboard-container');
+        if (!container) return;
+        
+        const existingWidget = document.querySelector('.challenges-widget');
+        if (existingWidget) existingWidget.remove();
+        
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = widgetHtml;
+        const widget = tempDiv.firstElementChild;
+        
+        const modulesGrid = document.querySelector('.modules-grid');
+        if (modulesGrid) {
+            modulesGrid.parentNode.insertBefore(widget, modulesGrid.nextSibling);
+        } else {
+            container.appendChild(widget);
+        }
+        
+        this.attachChallengeEvents();
+    }
+    
+    attachChallengeEvents() {
+        document.querySelectorAll('.challenge-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                const challengeId = item.dataset.challengeId;
+                const challenge = this.challengeManager?.dailyChallenges.find(c => c.id === challengeId) ||
+                                 this.challengeManager?.weeklyChallenges.find(c => c.id === challengeId) ||
+                                 this.challengeManager?.specialChallenges.find(c => c.id === challengeId);
+                if (challenge && !challenge.completed) {
+                    this.showFloatingMessage(challenge.description, 'info');
+                }
+            });
+        });
+    }
+    
+    // ============================================
+    // ПСИХОМЕТРИЧЕСКИЕ ДВОЙНИКИ
+    // ============================================
+    
+    async initPsychometricDoubles() {
+        if (!window.PsychometricDoubles) {
+            console.warn('PsychometricDoubles не загружен');
+            return;
+        }
+        
+        try {
+            const profileData = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
+            
+            const userProfile = {
+                sb: profileData.profile_data?.sb_level || 4,
+                tf: profileData.profile_data?.tf_level || 4,
+                ub: profileData.profile_data?.ub_level || 4,
+                chv: profileData.profile_data?.chv_level || 4
+            };
+            
+            this.psychometric = new PsychometricDoubles(this.userId, userProfile);
+            await this.psychometric.init();
+            
+            this.renderDoublesSection();
+        } catch (error) {
+            console.error('Ошибка инициализации двойников:', error);
+        }
+    }
+    
+    renderDoublesSection() {
+        if (!this.psychometric || this.psychometric.doubles.length === 0) return;
+        
+        const doublesSection = document.createElement('div');
+        doublesSection.className = 'doubles-section';
+        doublesSection.innerHTML = `
+            <div class="doubles-header">
+                <div class="doubles-title">
+                    <span class="doubles-title-emoji">👥</span>
+                    Психометрические двойники
+                </div>
+                <button class="doubles-refresh" id="refreshDoublesBtn">🔄</button>
+            </div>
+            <div class="doubles-list" id="doublesList">
+                ${this.psychometric.doubles.map(d => {
+                    const compatibility = this.psychometric.calculateCompatibility(
+                        this.psychometric.userProfile, 
+                        d.profile
+                    );
+                    return this.psychometric.renderDoubleCard(d, compatibility);
+                }).join('')}
+            </div>
+        `;
+        
+        const container = document.querySelector('.dashboard-container');
+        if (container) {
+            const existing = document.querySelector('.doubles-section');
+            if (existing) existing.remove();
+            
+            const challengesWidget = document.querySelector('.challenges-widget');
+            if (challengesWidget) {
+                challengesWidget.parentNode.insertBefore(doublesSection, challengesWidget.nextSibling);
+            } else {
+                container.appendChild(doublesSection);
+            }
+        }
+        
+        this.attachDoublesEvents();
+    }
+    
+    attachDoublesEvents() {
+        const refreshBtn = document.getElementById('refreshDoublesBtn');
+        if (refreshBtn) {
+            refreshBtn.onclick = async () => {
+                const listContainer = document.getElementById('doublesList');
+                if (listContainer) listContainer.innerHTML = '<div class="doubles-empty">🔍 Обновление списка...</div>';
+                await this.psychometric.findDoubles();
+                this.renderDoublesSection();
+            };
+        }
+        
+        document.querySelectorAll('.double-message-btn').forEach(btn => {
+            btn.onclick = (e) => {
+                const doubleId = btn.dataset.doubleId;
+                const double = this.psychometric.doubles.find(d => d.id == doubleId);
+                if (double) this.showChatModal(double);
+            };
+        });
+        
+        document.querySelectorAll('.double-details-btn').forEach(btn => {
+            btn.onclick = (e) => {
+                const doubleId = btn.dataset.doubleId;
+                const double = this.psychometric.doubles.find(d => d.id == doubleId);
+                if (double) this.showDoubleProfile(double);
+            };
+        });
+    }
+    
+    showChatModal(double) {
+        if (!this.psychometric) return;
+        
+        const modalHtml = this.psychometric.renderChatModal(double);
+        const modalContainer = document.createElement('div');
+        modalContainer.innerHTML = modalHtml;
+        document.body.appendChild(modalContainer);
+        
+        const closeBtn = document.getElementById('closeChatModal');
+        if (closeBtn) closeBtn.onclick = () => modalContainer.remove();
+        
+        const sendBtn = document.getElementById('sendChatMessage');
+        const input = document.getElementById('chatMessageInput');
+        
+        const sendMessage = async () => {
+            const message = input.value.trim();
+            if (!message) return;
+            
+            const messagesList = document.getElementById('messagesList');
+            if (messagesList) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'message user-message';
+                messageDiv.innerHTML = `<div class="message-bubble">${message}</div><div class="message-time">только что</div>`;
+                messagesList.appendChild(messageDiv);
+                messagesList.scrollTop = messagesList.scrollHeight;
+            }
+            
+            input.value = '';
+            const success = await this.psychometric.sendMessage(double.id, message);
+            
+            if (success) {
+                setTimeout(() => this.addBotReply(double, messagesList), 1000);
+            }
+        };
+        
+        if (sendBtn) sendBtn.onclick = sendMessage;
+        if (input) input.onkeypress = (e) => { if (e.key === 'Enter') sendMessage(); };
+        
+        modalContainer.querySelector('.modal-overlay').onclick = (e) => {
+            if (e.target === modalContainer.querySelector('.modal-overlay')) modalContainer.remove();
+        };
+    }
+    
+    addBotReply(double, messagesList) {
+        const compatibility = this.psychometric?.calculateCompatibility(
+            this.psychometric.userProfile, 
+            double.profile
+        ) || { score: 85 };
+        
+        const replies = [
+            `Привет! Рад познакомиться! У нас ${compatibility.score}% совместимости!`,
+            `Ого, у нас очень похожий профиль! Как у тебя дела?`,
+            `Здорово, что нас свела система! Расскажи, как у тебя дела?`,
+            `Привет-привет! Смотрю на твой профиль — мы очень похожи. Как проходит твой день?`
+        ];
+        
+        const randomReply = replies[Math.floor(Math.random() * replies.length)];
+        const replyDiv = document.createElement('div');
+        replyDiv.className = 'message bot-message';
+        replyDiv.innerHTML = `<div class="message-bubble">${randomReply}</div><div class="message-time">только что</div>`;
+        messagesList.appendChild(replyDiv);
+        messagesList.scrollTop = messagesList.scrollHeight;
+    }
+    
+    showDoubleProfile(double) {
+        this.showFloatingMessage(`👤 ${double.first_name} ${double.last_name || ''}\n📊 Профиль: ${double.profile_code}`, 'info');
+    }
 }
 
 // Инициализация
