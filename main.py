@@ -581,12 +581,14 @@ async def get_profile_miniapp(user_id: int):
             "behavioral_levels": data.get("behavioral_levels"),
             "deep_patterns": data.get("deep_patterns")
         }
-        return JSONResponse(profile)
+        return JSONResponse({
+            "success": True,
+            "profile": profile
+        })
     except Exception as e:
-        logger.error(f"❌ Error in get_profile_miniapp: {e}")
         return JSONResponse(
             status_code=500,
-            content={"error": str(e)}
+            content={"success": False, "error": str(e)}
         )
 
 @api_app.get("/api/get-test-progress")
@@ -733,17 +735,18 @@ async def get_user_data_api(user_id: int):
     try:
         user_id = int(user_id)
         context = user_contexts.get(user_id)
-        return {
+        return JSONResponse({
+            "success": True,
             "user_id": user_id,
             "user_name": context.name if context else user_names.get(user_id, "друг"),
             "has_profile": bool(user_data.get(user_id, {}).get("ai_generated_profile")) or 
                           bool(user_data.get(user_id, {}).get("profile_data"))
-        }
+        })
     except Exception as e:
         logger.error(f"API error in get_user_data: {e}")
         return JSONResponse(
             status_code=500,
-            content={"error": str(e)}
+            content={"success": False, "error": str(e)}
         )
 
 @api_app.get("/api/user-full-status")
@@ -801,12 +804,15 @@ async def get_profile(user_id: int):
                 thinking_level=thinking_level,
                 dominant_dilts=dominant_dilts
             )
-        return {"profile": profile}
+        return JSONResponse({
+            "success": True,
+            "profile": profile
+        })
     except Exception as e:
         logger.error(f"API error in get_profile: {e}")
         return JSONResponse(
             status_code=500,
-            content={"error": str(e)}
+            content={"success": False, "error": str(e)}
         )
 
 @api_app.get("/api/thought")
@@ -825,12 +831,15 @@ async def get_thought(user_id: int):
                 save_user_data(user_id, user_data[user_id])
             else:
                 thought = "Мысли психолога еще не сгенерированы."
-        return {"thought": thought}
+        return JSONResponse({
+            "success": True,
+            "thought": thought
+        })
     except Exception as e:
         logger.error(f"API error in get_thought: {e}")
         return JSONResponse(
             status_code=500,
-            content={"error": str(e)}
+            content={"success": False, "error": str(e)}
         )
 
 @api_app.get("/api/ideas")
@@ -865,12 +874,15 @@ async def get_ideas(user_id: int):
                     "description": p
                 })
         
-        return {"ideas": ideas[:5]}
+        return JSONResponse({
+            "success": True,
+            "ideas": ideas[:5]
+        })
     except Exception as e:
         logger.error(f"API error in get_ideas: {e}")
         return JSONResponse(
             status_code=500,
-            content={"error": str(e)}
+            content={"success": False, "error": str(e)}
         )
 
 @api_app.get("/health")
