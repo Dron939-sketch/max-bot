@@ -14,6 +14,7 @@ from datetime import datetime
 # Импортируем новые синхронные функции
 from db_instance import (
     save_user,
+    save_telegram_user,
     save_user_data,
     save_context,
     save_test_result,
@@ -42,6 +43,14 @@ class SyncDBWrapper:
     # ============================================
     # МЕТОДЫ ДЛЯ СОВМЕСТИМОСТИ СО СТАРЫМ КОДОМ
     # ============================================
+    
+    def save_telegram_user(self, user_id: int, first_name: str = None, username: str = None, **kwargs) -> bool:
+        """Сохранить пользователя Telegram"""
+        try:
+            return save_telegram_user(user_id, first_name, username)
+        except Exception as e:
+            logger.error(f"❌ Ошибка save_telegram_user {user_id}: {e}")
+            return False
     
     def save_user_to_db(self, user_id: int, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None) -> bool:
         """
@@ -81,19 +90,35 @@ class SyncDBWrapper:
     
     def log_event(self, user_id: int, event_type: str, event_data: Dict = None) -> bool:
         """Логирование события (совместимость)"""
-        return log_event(user_id, event_type, event_data)
+        try:
+            return log_event(user_id, event_type, event_data)
+        except Exception as e:
+            logger.error(f"❌ Ошибка log_event {user_id}: {e}")
+            return False
     
     def add_reminder(self, user_id: int, reminder_type: str, remind_at, data: Dict = None) -> bool:
         """Добавить напоминание (совместимость)"""
-        return add_reminder(user_id, reminder_type, remind_at, data)
+        try:
+            return add_reminder(user_id, reminder_type, remind_at, data)
+        except Exception as e:
+            logger.error(f"❌ Ошибка add_reminder {user_id}: {e}")
+            return False
     
     def get_user_reminders(self, user_id: int, include_sent: bool = False) -> List[Dict]:
         """Получить напоминания (совместимость)"""
-        return get_user_reminders(user_id, include_sent)
+        try:
+            return get_user_reminders(user_id, include_sent)
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_user_reminders {user_id}: {e}")
+            return []
     
     def complete_reminder(self, reminder_id: int) -> bool:
         """Отметить напоминание как выполненное (совместимость)"""
-        return complete_reminder(reminder_id)
+        try:
+            return complete_reminder(reminder_id)
+        except Exception as e:
+            logger.error(f"❌ Ошибка complete_reminder {reminder_id}: {e}")
+            return False
     
     def save_test_result(self, user_id: int, test_type: str, results: Dict,
                          profile_code: str = None, perception_type: str = None,
@@ -101,11 +126,15 @@ class SyncDBWrapper:
                          behavioral_levels: Dict = None, deep_patterns: Dict = None,
                          confinement_model: Dict = None) -> Optional[int]:
         """Сохранить результат теста (совместимость)"""
-        return save_test_result(
-            user_id, test_type, results, profile_code,
-            perception_type, thinking_level, vectors,
-            behavioral_levels, deep_patterns, confinement_model
-        )
+        try:
+            return save_test_result(
+                user_id, test_type, results, profile_code,
+                perception_type, thinking_level, vectors,
+                behavioral_levels, deep_patterns, confinement_model
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка save_test_result {user_id}: {e}")
+            return None
     
     def save_test_answer(self, user_id: int, test_result_id: Optional[int],
                          stage: int, question_index: int, question_text: str,
@@ -114,43 +143,62 @@ class SyncDBWrapper:
                          strategy: Optional[str] = None, dilts: Optional[str] = None,
                          pattern: Optional[str] = None, target: Optional[str] = None) -> bool:
         """Сохранить ответ на тест (совместимость)"""
-        # В новой БД ответы сохраняются вместе с тестом, но для совместимости
-        # можно сохранить отдельно, если нужно
         logger.debug(f"save_test_answer called for user {user_id}")
         return True
     
     def get_user_data(self, user_id: int) -> Dict:
         """Получить данные пользователя (совместимость)"""
-        return load_user_data(user_id)
+        try:
+            return load_user_data(user_id)
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_user_data {user_id}: {e}")
+            return {}
     
     def get_user_context(self, user_id: int) -> Optional[Dict]:
         """Получить контекст пользователя (совместимость)"""
-        return load_user_context(user_id)
+        try:
+            return load_user_context(user_id)
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_user_context {user_id}: {e}")
+            return None
     
     def get_user_test_results(self, user_id: int, limit: int = 10, test_type: str = None) -> List[Dict]:
         """Получить результаты тестов (совместимость)"""
-        # В новой БД нужно реализовать, пока возвращаем пустой список
         return []
     
     def get_cached_weekend_ideas(self, user_id: int) -> Optional[str]:
         """Получить кэшированные идеи (совместимость)"""
-        return None
+        try:
+            from db_instance import get_cached_weekend_ideas
+            return get_cached_weekend_ideas(user_id)
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_cached_weekend_ideas {user_id}: {e}")
+            return None
     
     def cache_weekend_ideas(self, user_id: int, ideas_text: str, main_vector: str, main_level: int) -> bool:
         """Сохранить идеи в кэш (совместимость)"""
-        return True
-    
-    def get_user_reminders(self, user_id: int, include_sent: bool = False) -> List[Dict]:
-        """Получить напоминания (совместимость)"""
-        return get_user_reminders(user_id, include_sent)
+        try:
+            from db_instance import cache_weekend_ideas
+            return cache_weekend_ideas(user_id, ideas_text, main_vector, main_level)
+        except Exception as e:
+            logger.error(f"❌ Ошибка cache_weekend_ideas {user_id}: {e}")
+            return False
     
     def ensure_connection(self) -> bool:
         """Проверить соединение (совместимость)"""
-        return ensure_connection()
+        try:
+            return ensure_connection()
+        except Exception as e:
+            logger.error(f"❌ Ошибка ensure_connection: {e}")
+            return False
     
     def get_stats(self) -> Dict:
         """Получить статистику (совместимость)"""
-        return get_stats()
+        try:
+            return get_stats()
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_stats: {e}")
+            return {}
     
     # ============================================
     # МЕТОДЫ ДЛЯ ОБРАТНОЙ СОВМЕСТИМОСТИ (async)
@@ -159,6 +207,10 @@ class SyncDBWrapper:
     async def save_user_to_db_async(self, user_id: int, *args, **kwargs):
         """Асинхронная версия (для обратной совместимости)"""
         return self.save_user_to_db(user_id, *args, **kwargs)
+    
+    async def save_telegram_user_async(self, user_id: int, *args, **kwargs):
+        """Асинхронная версия save_telegram_user"""
+        return self.save_telegram_user(user_id, *args, **kwargs)
     
     async def log_event_async(self, user_id: int, event_type: str, event_data: Dict = None):
         """Асинхронная версия (для обратной совместимости)"""
@@ -171,6 +223,18 @@ class SyncDBWrapper:
     async def get_user_context_async(self, user_id: int):
         """Асинхронная версия (для обратной совместимости)"""
         return self.get_user_context(user_id)
+    
+    async def add_reminder_async(self, user_id: int, reminder_type: str, remind_at, data: Dict = None):
+        """Асинхронная версия add_reminder"""
+        return self.add_reminder(user_id, reminder_type, remind_at, data)
+    
+    async def get_user_reminders_async(self, user_id: int, include_sent: bool = False):
+        """Асинхронная версия get_user_reminders"""
+        return self.get_user_reminders(user_id, include_sent)
+    
+    async def complete_reminder_async(self, reminder_id: int):
+        """Асинхронная версия complete_reminder"""
+        return self.complete_reminder(reminder_id)
 
 
 # Создаем глобальный экземпляр
