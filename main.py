@@ -615,63 +615,6 @@ async def get_test_progress(user_id: int):
 # ДОБАВЛЕННЫЕ ЭНДПОИНТЫ ДЛЯ ТЕСТА
 # ============================================
 
-@api_app.post("/api/save-test-results")
-async def save_test_results(request: Request):
-    try:
-        data = await request.json()
-        user_id = data.get('user_id')
-        results = data.get('results', {})
-        
-        if not user_id:
-            raise HTTPException(status_code=400, detail="user_id required")
-        
-        user_id = int(user_id)
-        
-        if user_id not in user_data:
-            user_data[user_id] = {}
-        
-        user_data[user_id]['perception_type'] = results.get('perception_type')
-        user_data[user_id]['thinking_level'] = results.get('thinking_level')
-        user_data[user_id]['behavioral_levels'] = results.get('behavioral_levels')
-        user_data[user_id]['dilts_counts'] = results.get('dilts_counts')
-        user_data[user_id]['deep_patterns'] = results.get('deep_patterns')
-        user_data[user_id]['profile_data'] = results.get('profile_data')
-        user_data[user_id]['all_answers'] = results.get('all_answers')
-        user_data[user_id]['test_completed'] = True
-        user_data[user_id]['test_completed_at'] = datetime.now().isoformat()
-        
-        # Сохраняем в БД
-        save_user(user_id, user_names.get(user_id), None)
-        save_user_data(user_id, user_data[user_id])
-        save_test_result(user_id, 'full_profile', user_data[user_id])
-        
-        def run_generation():
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(generate_profile_interpretation_async(user_id))
-                finally:
-                    loop.close()
-            except Exception as e:
-                logger.error(f"❌ Ошибка в потоке генерации: {e}")
-        
-        threading.Thread(target=run_generation, daemon=True).start()
-        
-        logger.info(f"✅ Результаты теста для пользователя {user_id} сохранены")
-        
-        return JSONResponse({
-            "success": True,
-            "message": "Результаты сохранены, интерпретация формируется"
-        })
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения результатов: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
-
 @api_app.get("/api/get-test-interpretation")
 async def get_test_interpretation(user_id: int):
     try:
