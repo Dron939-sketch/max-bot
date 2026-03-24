@@ -3401,5 +3401,73 @@ async def debug_all_users():
             status_code=500,
             content={"success": False, "error": str(e)}
         )
+
+@api_app.get("/api/admin/all-users")
+async def admin_all_users():
+    """Админский эндпоинт для просмотра всех пользователей в БД"""
+    try:
+        # Данные в памяти
+        memory_users = {}
+        for user_id, data in user_data.items():
+            memory_users[user_id] = {
+                "test_completed": data.get('test_completed', False),
+                "has_profile": bool(data.get('profile_data')),
+                "profile_code": data.get('profile_data', {}).get('display_name'),
+                "answers_count": len(data.get('all_answers', []))
+            }
+        
+        # Данные из БД (если есть функция load_all_users_data)
+        from db_instance import load_all_users_data
+        db_users = load_all_users_data() if hasattr(db_instance, 'load_all_users_data') else {}
+        
+        return JSONResponse({
+            "success": True,
+            "memory": memory_users,
+            "db": db_users,
+            "memory_count": len(memory_users),
+            "db_count": len(db_users)
+        })
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)})
+
+@api_app.post("/api/save-test-results")
+async def save_test_results(request: Request):
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        results = data.get('results', {})
+        
+        print(f"🔍 ===== СОХРАНЕНИЕ ТЕСТА =====")
+        print(f"   user_id: {user_id}")
+        print(f"   results keys: {list(results.keys())}")
+        print(f"   profile_data: {bool(results.get('profile_data'))}")
+        print(f"   test_completed: {results.get('test_completed')}")
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id required")
+        
+        user_id = int(user_id)
+        
+        # Сохраняем
+        save_user(user_id, user_names.get(user_id), None)
+        save_user_data(user_id, results)
+        save_test_result(user_id, 'full_profile', results)
+        
+        print(f"✅ Данные сохранены для {user_id}")
+        print(f"   test_completed в БД: {results.get('test_completed')}")
+        
+        return JSONResponse({
+            "success": True,
+            "message": "Результаты сохранены"
+        })
+        
+    except Exception as e:
+        print(f"❌ Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
 if __name__ == "__main__":
     main()
