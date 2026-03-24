@@ -2,12 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 Модуль для умных вопросов на основе профиля пользователя
-Версия 2.0 - ИСПРАВЛЕНО: замена sync_db на синхронные функции
+Версия 1.0 - вынесено из handlers/questions.py
 """
 
 import logging
 import asyncio
-import threading
 from typing import Dict, Any, List
 
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -20,32 +19,9 @@ from confinement_model import level
 from profiles import VECTORS
 from services import text_to_speech
 from handlers.voice import send_voice_to_max
-
-# ✅ ИСПРАВЛЕНО: импорт синхронных функций из db_instance
-from db_instance import (
-    save_user,
-    save_user_data,
-    save_context,
-    log_event,
-    load_user_data,
-    load_user_context
-)
+from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
-
-
-# ============================================
-# ✅ ФУНКЦИЯ ДЛЯ ЗАПУСКА СИНХРОННЫХ ВЫЗОВОВ В ФОНЕ
-# ============================================
-
-def run_sync_in_background(func, *args, **kwargs):
-    """Запускает синхронную функцию в отдельном потоке"""
-    def _wrapper():
-        try:
-            func(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в фоновой задаче: {e}")
-    threading.Thread(target=_wrapper, daemon=True).start()
 
 
 def generate_smart_questions(scores: Dict[str, float]) -> List[str]:
@@ -193,12 +169,6 @@ async def show_smart_questions(
     keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="show_results"))
     
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
-    
-    # ✅ ИСПРАВЛЕНО: логируем показ вопросов
-    run_sync_in_background(log_event, user_id, 'smart_questions_shown', {
-        'questions_count': len(questions),
-        'mode': mode
-    })
 
 
 async def handle_smart_question(
@@ -221,12 +191,6 @@ async def handle_smart_question(
     
     question = questions[question_num - 1]
     
-    # ✅ ИСПРАВЛЕНО: логируем выбор вопроса
-    run_sync_in_background(log_event, user_id, 'smart_question_selected', {
-        'question': question[:100],
-        'question_num': question_num
-    })
-    
     status_msg = safe_send_message(
         call.message,
         "🤔 Думаю над ответом...\n\nЭто займёт около 10-15 секунд",
@@ -244,9 +208,7 @@ async def handle_smart_question(
         user_data_dict["history"] = []
     user_data_dict["history"] = mode.history
     
-    # ✅ ИСПРАВЛЕНО: синхронное сохранение в фоне
-    run_sync_in_background(save_user, user_id, user_data_dict.get('first_name'), user_data_dict.get('username'))
-    run_sync_in_background(save_user_data, user_id, user_data_dict)
+    sync_db.save_user_to_db(user_id)
     
     clean_response = clean_text_for_safe_display(response)
     
@@ -275,12 +237,6 @@ async def handle_smart_question(
         delete_previous=True
     )
     
-    # ✅ ИСПРАВЛЕНО: логируем ответ
-    run_sync_in_background(log_event, user_id, 'smart_question_answered', {
-        'question': question[:100],
-        'response_length': len(response)
-    })
-    
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -294,14 +250,3 @@ async def handle_smart_question(
             loop.close()
     except Exception as e:
         logger.error(f"❌ Ошибка при отправке голоса: {e}")
-
-
-# ============================================
-# ЭКСПОРТ
-# ============================================
-
-__all__ = [
-    'generate_smart_questions',
-    'show_smart_questions',
-    'handle_smart_question'
-]
