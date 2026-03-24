@@ -700,6 +700,18 @@ async def get_user_full_status(user_id: int):
         user_info = user_data.get(user_id, {})
         context = user_contexts.get(user_id)
         
+        # ✅ ИСПРАВЛЕНО: проверяем, что all_answers существует и является списком
+        all_answers = user_info.get('all_answers')
+        if all_answers is None:
+            all_answers = []
+        elif not isinstance(all_answers, list):
+            all_answers = []
+        
+        # ✅ ИСПРАВЛЕНО: безопасное получение scores
+        profile_data = user_info.get('profile_data', {})
+        if profile_data is None:
+            profile_data = {}
+        
         return JSONResponse({
             "success": True,
             "user_id": user_id,
@@ -708,15 +720,15 @@ async def get_user_full_status(user_id: int):
             "has_interpretation": bool(user_info.get('ai_generated_profile')),
             "test_completed": user_info.get('test_completed', False),
             "interpretation_ready": bool(user_info.get('ai_generated_profile')),
-            "profile_code": user_info.get('profile_data', {}).get('display_name'),
+            "profile_code": profile_data.get('display_name'),
             "profile_scores": {
-                "sb": user_info.get('profile_data', {}).get('sb_level', 4),
-                "tf": user_info.get('profile_data', {}).get('tf_level', 4),
-                "ub": user_info.get('profile_data', {}).get('ub_level', 4),
-                "chv": user_info.get('profile_data', {}).get('chv_level', 4)
+                "sb": profile_data.get('sb_level', 4),
+                "tf": profile_data.get('tf_level', 4),
+                "ub": profile_data.get('ub_level', 4),
+                "chv": profile_data.get('chv_level', 4)
             },
             "days_active": 3,
-            "sessions_count": len(user_info.get('all_answers', [])) // 3
+            "sessions_count": len(all_answers) // 3 if all_answers else 0
         })
         
     except Exception as e:
