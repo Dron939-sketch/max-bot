@@ -41,7 +41,7 @@ def connect() -> bool:
         _conn = psycopg2.connect(DATABASE_URL)
         _connected = True
         _create_tables()
-        _migrate_tables()  # ✅ Добавляем миграцию
+        _migrate_tables()
         logger.info("✅ PostgreSQL подключена")
         return True
     except Exception as e:
@@ -111,7 +111,6 @@ def _create_tables():
             city TEXT,
             communication_mode TEXT DEFAULT 'coach',
             weather_cache JSONB,
-            data JSONB,
             updated_at TIMESTAMP DEFAULT NOW()
         )
     """)
@@ -252,6 +251,11 @@ def save_user(user_id: int, first_name: str = None, username: str = None) -> boo
         return False
 
 
+def save_telegram_user(user_id: int, first_name: str = None, username: str = None, **kwargs) -> bool:
+    """Сохранить пользователя Telegram (алиас для save_user)"""
+    return save_user(user_id, first_name, username)
+
+
 def save_user_data(user_id: int, data: Dict) -> bool:
     """Сохранить данные пользователя"""
     if not ensure_connection():
@@ -281,7 +285,7 @@ def save_context(user_id: int, name: str = None, age: int = None, gender: str = 
     try:
         cur = _conn.cursor()
         cur.execute("""
-            INSERT INTO fredi_user_contexts (user_id, name, age, gender, city, communication_mode, data, updated_at)
+            INSERT INTO fredi_user_contexts (user_id, name, age, gender, city, communication_mode, weather_cache, updated_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
             ON CONFLICT (user_id) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -289,7 +293,7 @@ def save_context(user_id: int, name: str = None, age: int = None, gender: str = 
                 gender = EXCLUDED.gender,
                 city = EXCLUDED.city,
                 communication_mode = EXCLUDED.communication_mode,
-                data = EXCLUDED.data,
+                weather_cache = EXCLUDED.weather_cache,
                 updated_at = NOW()
         """, (user_id, name, age, gender, city, mode, Json(data) if data else None))
         _conn.commit()
@@ -543,7 +547,7 @@ def load_user_context(user_id: int) -> Optional[Dict]:
     try:
         cur = _conn.cursor()
         cur.execute("""
-            SELECT name, age, gender, city, communication_mode, data 
+            SELECT name, age, gender, city, communication_mode
             FROM fredi_user_contexts WHERE user_id = %s
         """, (user_id,))
         row = cur.fetchone()
@@ -554,8 +558,7 @@ def load_user_context(user_id: int) -> Optional[Dict]:
                 'age': row[1],
                 'gender': row[2],
                 'city': row[3],
-                'communication_mode': row[4],
-                'data': row[5]
+                'communication_mode': row[4]
             }
         return None
     except Exception as e:
@@ -632,6 +635,7 @@ __all__ = [
     'disconnect',
     'ensure_connection',
     'save_user',
+    'save_telegram_user',
     'save_user_data',
     'save_context',
     'save_test_result',
