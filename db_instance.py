@@ -1,784 +1,600 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ПРОСТАЯ СИНХРОННАЯ РАБОТА С БД
-- Без asyncio
-- Без event loops
-- Без конфликтов
-- Работает из любого потока
-- С поддержкой напоминаний и событий
+Централизованный доступ к экземпляру базы данных
+ВЕРСИЯ ДЛЯ PYTHON 3.11 - ИСПРАВЛЕНО: единый цикл событий + save_telegram_user + close_db + retry + log_event
 """
 
 import os
 import json
+import pickle
 import logging
-import psycopg2
-from psycopg2.extras import Json, RealDictCursor
-from typing import Optional, Dict, Any, List
-from datetime import datetime
+import asyncio
+import threading
+import inspect
+import traceback
+from typing import Dict, Any, Optional, Callable, Awaitable
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from functools import wraps
+import signal
+import sys
+
+from database import BotDatabase
 
 logger = logging.getLogger(__name__)
 
 # ============================================
-# СЕРИАЛИЗАЦИЯ ОБЪЕКТОВ
+# URL базы данных
 # ============================================
-
-def serialize_object(obj):
-    """
-    Рекурсивно сериализует объект в JSON-совместимый формат
-    Работает с любыми вложенными объектами, включая ConfinementElement
-    """
-    if obj is None:
-        return None
-    if isinstance(obj, (str, int, float, bool)):
-        return obj
-    if isinstance(obj, (list, tuple)):
-        return [serialize_object(item) for item in obj]
-    if isinstance(obj, dict):
-        return {str(k): serialize_object(v) for k, v in obj.items()}
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    
-    # Для объектов пользовательских классов (ConfinementElement, UserContext и др.)
-    if hasattr(obj, '__dict__'):
-        result = {}
-        for key, value in obj.__dict__.items():
-            if not key.startswith('_'):  # пропускаем приватные атрибуты
-                result[key] = serialize_object(value)
-        return result
-    
-    # Если у объекта есть метод to_dict
-    if hasattr(obj, 'to_dict'):
-        try:
-            return serialize_object(obj.to_dict())
-        except:
-            pass
-    
-    # Пробуем преобразовать в строку
-    try:
-        return str(obj)
-    except:
-        return f"<{type(obj).__name__}>"
-
-
-# ============================================
-# ПОДКЛЮЧЕНИЕ
-# ============================================
-
 DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://variatica:Ben9BvM0OnppX1EVSabWQQSwTCrqkahh@dpg-d639vucr85hc73b2ge00-a.oregon-postgres.render.com/variatica"
+    "EXTERNAL_DATABASE_URL",
+    os.environ.get(
+        "DATABASE_URL",
+        "postgresql://variatica:Ben9BvM0OnppX1EVSabWQQSwTCrqkahh@dpg-d639vucr85hc73b2ge00-a.oregon-postgres.render.com/variatica"
+    )
 )
 
-_conn = None
-_connected = False
+# Маскируем пароль в логах
+url_parts = DATABASE_URL.split('@')
+safe_url = f"postgresql://{url_parts[1]}" if len(url_parts) > 1 else DATABASE_URL[:50] + "..."
+logger.info(f"🔗 Используем URL базы данных: {safe_url}")
 
+# ============================================
+# ГЛОБАЛЬНЫЙ МЕНЕДЖЕР ЦИКЛА БД
+# ============================================
 
-def connect() -> bool:
-    """Подключиться к БД"""
-    global _conn, _connected
+class DBLoopManager:
+    """
+    Единый менеджер для работы с циклом событий БД.
+    Все асинхронные операции с БД должны выполняться через этот менеджер.
+    """
+    
+    def __init__(self):
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+        self._tasks = set()
+        self._running = False
+        self._db_instance: Optional[BotDatabase] = None
+    
+    def init(self, db_instance: BotDatabase):
+        """Инициализирует цикл событий в отдельном потоке"""
+        with self._lock:
+            if self.loop is not None:
+                logger.warning("⚠️ Цикл БД уже инициализирован")
+                return
+            
+            self._db_instance = db_instance
+            
+            # Создаем новый цикл
+            self.loop = asyncio.new_event_loop()
+            
+            # Запускаем поток с циклом
+            self.thread = threading.Thread(
+                target=self._run_loop,
+                daemon=True,
+                name="DB-Loop"
+            )
+            self.thread.start()
+            
+            # Ждем, пока цикл запустится
+            future = asyncio.run_coroutine_threadsafe(
+                self._init_db_in_loop(),
+                self.loop
+            )
+            try:
+                future.result(timeout=30)
+                logger.info("✅ Глобальный цикл БД инициализирован")
+            except TimeoutError:
+                logger.error("❌ Таймаут инициализации цикла БД")
+                raise
+            except Exception as e:
+                logger.error(f"❌ Ошибка инициализации цикла БД: {e}")
+                raise
+    
+    def _run_loop(self):
+        """Запускает цикл событий в потоке"""
+        asyncio.set_event_loop(self.loop)
+        self._running = True
+        try:
+            self.loop.run_forever()
+        finally:
+            self._running = False
+            # Закрываем все незавершенные задачи
+            pending = asyncio.all_tasks(self.loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            self.loop.close()
+            logger.info("🔒 Цикл БД остановлен")
+    
+    async def _init_db_in_loop(self):
+        """Инициализирует БД внутри правильного цикла"""
+        if self._db_instance:
+            try:
+                await self._db_instance.connect()
+                logger.info("✅ Подключение к БД установлено в цикле")
+            except Exception as e:
+                logger.error(f"❌ Ошибка подключения к БД: {e}")
+                raise
+    
+    def run_coro(self, coro_func: Callable[..., Awaitable], *args, timeout: int = 30, **kwargs):
+        """
+        Запускает корутину в цикле БД и возвращает результат.
+        Это основной метод для вызова из любого потока.
+        """
+        if self.loop is None:
+            raise RuntimeError("Цикл БД не инициализирован. Вызовите init()")
+        
+        # Проверяем тип переданного объекта
+        is_coro_func = inspect.iscoroutinefunction(coro_func)
+        is_coro = inspect.iscoroutine(coro_func)
+        
+        if not is_coro_func and not is_coro:
+            raise TypeError(f"{coro_func} is not a coroutine or coroutine function")
+        
+        # ✅ ВСЕГДА выполняем в потоке БД, чтобы избежать конфликта циклов
+        if is_coro:
+            future = asyncio.run_coroutine_threadsafe(coro_func, self.loop)
+        else:
+            future = asyncio.run_coroutine_threadsafe(
+                coro_func(*args, **kwargs),
+                self.loop
+            )
+        
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            future.cancel()
+            logger.error(f"❌ Таймаут {timeout}с при выполнении")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Ошибка при выполнении: {e}")
+            raise
+    
+    def run_task(self, coro_func: Callable[..., Awaitable], *args, **kwargs):
+        """
+        Запускает корутину как фоновую задачу (fire-and-forget)
+        """
+        if self.loop is None:
+            raise RuntimeError("Цикл БД не инициализирован")
+        
+        is_coro_func = inspect.iscoroutinefunction(coro_func)
+        is_coro = inspect.iscoroutine(coro_func)
+        
+        if not is_coro_func and not is_coro:
+            raise TypeError(f"{coro_func} is not a coroutine or coroutine function")
+        
+        async def _wrapped():
+            try:
+                if is_coro:
+                    return await coro_func
+                else:
+                    return await coro_func(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"❌ Ошибка в фоновой задаче: {e}")
+                return None
+        
+        task = asyncio.run_coroutine_threadsafe(_wrapped(), self.loop)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+    
+    def shutdown(self):
+        """Корректное завершение работы"""
+        if self.loop and self.loop.is_running():
+            logger.info("🛑 Останавливаем цикл БД...")
+            
+            # Отменяем все задачи
+            for task in list(self._tasks):
+                task.cancel()
+            
+            # Останавливаем цикл
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            
+            # Ждем завершения потока
+            if self.thread and self.thread.is_alive():
+                self.thread.join(timeout=10)
+            
+            logger.info("✅ Цикл БД остановлен")
+
+# ============================================
+# ГЛОБАЛЬНЫЕ ЭКЗЕМПЛЯРЫ
+# ============================================
+
+# Создаем экземпляр БД
+db = BotDatabase(DATABASE_URL)
+
+# Создаем менеджер цикла
+db_loop_manager = DBLoopManager()
+
+# ============================================
+# ИНИЦИАЛИЗАЦИЯ
+# ============================================
+
+async def init_db():
+    """Инициализация подключения к БД"""
     try:
-        if _conn and not _conn.closed:
+        db_loop_manager.init(db)
+        logger.info("✅ Подключение к PostgreSQL установлено")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка подключения к PostgreSQL: {e}")
+        return False
+
+
+async def close_db():
+    """Закрытие подключения к БД"""
+    try:
+        if db and db.pool:
+            # Используем run_coro для закрытия
+            db_loop_manager.run_coro(db.disconnect, timeout=10)
+            logger.info("🔒 Подключение к PostgreSQL закрыто")
+        
+        # Останавливаем менеджер
+        db_loop_manager.shutdown()
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при закрытии подключения: {e}")
+
+# ============================================
+# ПРОВЕРКА СОЕДИНЕНИЯ С ПОВТОРНЫМИ ПОПЫТКАМИ
+# ============================================
+
+async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
+    """
+    Проверяет соединение с БД через менеджер с повторными попытками
+    """
+    for attempt in range(max_retries):
+        try:
+            # Если пула нет - подключаемся
+            if db.pool is None:
+                logger.info(f"🔄 Пул соединений не инициализирован, подключаемся... (попытка {attempt + 1}/{max_retries})")
+                await db.connect()
+                logger.info("✅ Подключение к БД установлено")
+                return True
+            
+            # Проверяем соединение
+            async with db.get_connection() as conn:
+                await conn.execute("SELECT 1")
+            
+            logger.debug("✅ Соединение с БД работает")
             return True
-        _conn = psycopg2.connect(DATABASE_URL)
-        _connected = True
-        _create_tables()
-        _migrate_tables()
-        logger.info("✅ PostgreSQL подключена")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Ошибка подключения: {e}")
-        _connected = False
-        return False
-
-
-def disconnect():
-    """Закрыть соединение"""
-    global _conn, _connected
-    try:
-        if _conn and not _conn.closed:
-            _conn.close()
-        _connected = False
-        logger.info("🔒 PostgreSQL закрыта")
-    except:
-        pass
-
-
-def ensure_connection() -> bool:
-    """Проверить и восстановить соединение"""
-    if not _connected or not _conn or _conn.closed:
-        return connect()
-    try:
-        _conn.cursor().execute("SELECT 1")
-        return True
-    except:
-        return connect()
-
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка при проверке соединения (попытка {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
+            
+            if attempt < max_retries - 1:
+                # Пробуем переподключиться
+                try:
+                    if db.pool:
+                        await db.disconnect()
+                        logger.info("🔌 Старый пул закрыт")
+                except Exception as disconnect_error:
+                    logger.warning(f"⚠️ Ошибка при закрытии пула: {disconnect_error}")
+                
+                # Ждем перед следующей попыткой (с экспоненциальной задержкой)
+                wait_time = delay * (2 ** attempt)
+                logger.info(f"⏳ Ждем {wait_time:.1f}с перед следующей попыткой...")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"❌ Все попытки ({max_retries}) исчерпаны")
+                return False
+    
+    return False
 
 # ============================================
-# СОЗДАНИЕ ТАБЛИЦ
+# ВЫПОЛНЕНИЕ С ПОВТОРАМИ
 # ============================================
 
-def _create_tables():
-    """Создать таблицы если не существуют"""
-    cur = _conn.cursor()
+async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
+    """
+    Выполняет функцию с повторными попытками через менеджер цикла
+    """
+    last_error = None
     
-    # Пользователи
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_users (
-            user_id BIGINT PRIMARY KEY,
-            first_name TEXT,
-            username TEXT,
-            created_at TIMESTAMP DEFAULT NOW(),
-            updated_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    
-    # Данные пользователей
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_user_data (
-            user_id BIGINT PRIMARY KEY,
-            data JSONB NOT NULL,
-            updated_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    
-    # Контекст
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_user_contexts (
-            user_id BIGINT PRIMARY KEY,
-            name TEXT,
-            age INTEGER,
-            gender TEXT,
-            city TEXT,
-            communication_mode TEXT DEFAULT 'coach',
-            weather_cache JSONB,
-            updated_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    
-    # Результаты тестов
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_test_results (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            test_type TEXT,
-            results JSONB,
-            profile_code TEXT,
-            perception_type TEXT,
-            thinking_level INTEGER,
-            vectors JSONB,
-            deep_patterns JSONB,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    
-    # Ответы на тест
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_test_answers (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            test_result_id INTEGER,
-            stage INTEGER NOT NULL,
-            question_index INTEGER NOT NULL,
-            question_text TEXT,
-            answer_text TEXT,
-            answer_value TEXT,
-            scores JSONB,
-            measures TEXT,
-            strategy TEXT,
-            dilts TEXT,
-            pattern TEXT,
-            target TEXT,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    
-    # События
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_events (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            event_type TEXT,
-            event_data JSONB,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    
-    # Напоминания (для утренних сообщений)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_reminders (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            reminder_type TEXT NOT NULL,
-            remind_at TIMESTAMP NOT NULL,
-            data JSONB,
-            completed_at TIMESTAMP,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    
-    # Кэш идей на выходные
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_weekend_ideas_cache (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            ideas_text TEXT NOT NULL,
-            main_vector TEXT,
-            main_level INTEGER,
-            created_at TIMESTAMP DEFAULT NOW(),
-            expires_at TIMESTAMP DEFAULT NOW() + INTERVAL '1 hour'
-        )
-    """)
-    
-    # Кэш анализа вопросов
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS fredi_question_analysis_cache (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            question_hash INTEGER NOT NULL,
-            question_text TEXT,
-            analysis JSONB NOT NULL,
-            created_at TIMESTAMP DEFAULT NOW(),
-            expires_at TIMESTAMP DEFAULT NOW() + INTERVAL '5 minutes'
-        )
-    """)
-    
-    # Индексы
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_test_user ON fredi_test_results(user_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_test_answers_user ON fredi_test_answers(user_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_test_answers_result ON fredi_test_answers(test_result_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_events_user ON fredi_events(user_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_user ON fredi_reminders(user_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_date ON fredi_reminders(remind_at)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_weekend_cache_user ON fredi_weekend_ideas_cache(user_id)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_weekend_cache_expires ON fredi_weekend_ideas_cache(expires_at)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_question_cache_hash ON fredi_question_analysis_cache(user_id, question_hash)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_question_cache_expires ON fredi_question_analysis_cache(expires_at)")
-    
-    _conn.commit()
-    cur.close()
-    logger.info("✅ Таблицы созданы")
-
-
-def _migrate_tables():
-    """Миграция: добавляем отсутствующие столбцы"""
-    cur = _conn.cursor()
-    
-    # Добавляем completed_at в fredi_reminders если нет
-    try:
-        cur.execute("""
-            ALTER TABLE fredi_reminders 
-            ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP
-        """)
-        _conn.commit()
-        logger.info("✅ Столбец completed_at добавлен в fredi_reminders")
-    except Exception as e:
-        logger.warning(f"⚠️ Столбец completed_at уже существует или ошибка: {e}")
-    
-    # Добавляем индекс для незавершенных напоминаний
-    try:
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_reminders_uncompleted 
-            ON fredi_reminders(remind_at) WHERE completed_at IS NULL
-        """)
-        _conn.commit()
-        logger.info("✅ Индекс для незавершенных напоминаний создан")
-    except Exception as e:
-        logger.warning(f"⚠️ Индекс уже существует или ошибка: {e}")
-    
-    cur.close()
-
-
-# ============================================
-# СОХРАНЕНИЕ
-# ============================================
-
-def save_user(user_id: int, first_name: str = None, username: str = None) -> bool:
-    """Сохранить пользователя"""
-    if not ensure_connection():
-        return False
-    try:
-        cur = _conn.cursor()
-        cur.execute("""
-            INSERT INTO fredi_users (user_id, first_name, username, created_at, updated_at)
-            VALUES (%s, %s, %s, NOW(), NOW())
-            ON CONFLICT (user_id) DO UPDATE SET
-                first_name = EXCLUDED.first_name,
-                username = EXCLUDED.username,
-                updated_at = NOW()
-        """, (user_id, first_name, username))
-        _conn.commit()
-        cur.close()
-        return True
-    except Exception as e:
-        logger.error(f"❌ save_user {user_id}: {e}")
-        return False
-
-
-def save_telegram_user(user_id: int, first_name: str = None, username: str = None, **kwargs) -> bool:
-    """Сохранить пользователя Telegram (алиас для save_user)"""
-    return save_user(user_id, first_name, username)
-
-
-def save_user_data(user_id: int, data: Dict) -> bool:
-    """Сохранить данные пользователя с сериализацией"""
-    if not ensure_connection():
-        return False
-    try:
-        # Сериализуем данные перед сохранением
-        serialized_data = serialize_object(data)
+    for attempt in range(max_retries):
+        try:
+            # Используем менеджер для выполнения
+            result = db_loop_manager.run_coro(
+                coro_func, *args, timeout=30, **kwargs
+            )
+            return result
+            
+        except TimeoutError as e:
+            last_error = e
+            logger.warning(f"⚠️ Таймаут (попытка {attempt+1}/{max_retries})")
+            
+        except Exception as e:
+            last_error = e
+            logger.warning(f"⚠️ Ошибка (попытка {attempt+1}/{max_retries}): {e}")
         
-        cur = _conn.cursor()
-        cur.execute("""
-            INSERT INTO fredi_user_data (user_id, data, updated_at)
-            VALUES (%s, %s, NOW())
-            ON CONFLICT (user_id) DO UPDATE SET
-                data = EXCLUDED.data,
-                updated_at = NOW()
-        """, (user_id, Json(serialized_data)))
-        _conn.commit()
-        cur.close()
-        return True
-    except Exception as e:
-        logger.error(f"❌ save_user_data {user_id}: {e}")
-        return False
+        if attempt < max_retries - 1:
+            wait_time = 1 * (attempt + 1)
+            await asyncio.sleep(wait_time)
+    
+    logger.error(f"❌ Все попытки исчерпаны: {last_error}")
+    return None
 
+# ============================================
+# ОБЕРТКА ДЛЯ СИНХРОННЫХ ВЫЗОВОВ
+# ============================================
 
-def save_context(user_id: int, name: str = None, age: int = None, gender: str = None,
-                 city: str = None, mode: str = None, data: Dict = None) -> bool:
-    """Сохранить контекст пользователя с сериализацией"""
-    if not ensure_connection():
-        return False
-    try:
-        # Сериализуем данные перед сохранением
-        serialized_data = serialize_object(data) if data else None
-        
-        cur = _conn.cursor()
-        cur.execute("""
-            INSERT INTO fredi_user_contexts (user_id, name, age, gender, city, communication_mode, weather_cache, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-            ON CONFLICT (user_id) DO UPDATE SET
-                name = EXCLUDED.name,
-                age = EXCLUDED.age,
-                gender = EXCLUDED.gender,
-                city = EXCLUDED.city,
-                communication_mode = EXCLUDED.communication_mode,
-                weather_cache = EXCLUDED.weather_cache,
-                updated_at = NOW()
-        """, (user_id, name, age, gender, city, mode, Json(serialized_data) if serialized_data else None))
-        _conn.commit()
-        cur.close()
-        return True
-    except Exception as e:
-        logger.error(f"❌ save_context {user_id}: {e}")
-        return False
+def sync_db_call(coro_func):
+    """
+    Декоратор для синхронных функций, которые нужно выполнить в цикле БД
+    """
+    @wraps(coro_func)
+    def wrapper(*args, **kwargs):
+        return db_loop_manager.run_coro(coro_func, *args, **kwargs)
+    return wrapper
 
+# ============================================
+# СОХРАНЕНИЕ ДАННЫХ
+# ============================================
 
-def save_test_result(user_id: int, test_type: str, results: Dict,
-                     profile_code: str = None, perception_type: str = None,
-                     thinking_level: int = None, vectors: Dict = None,
-                     deep_patterns: Dict = None) -> Optional[int]:
-    """Сохранить результат теста с сериализацией"""
-    if not ensure_connection():
-        return None
-    try:
-        # Сериализуем результаты перед сохранением
-        serialized_results = serialize_object(results)
-        serialized_vectors = serialize_object(vectors) if vectors else None
-        serialized_deep_patterns = serialize_object(deep_patterns) if deep_patterns else None
-        
-        cur = _conn.cursor()
-        cur.execute("""
-            INSERT INTO fredi_test_results 
-            (user_id, test_type, results, profile_code, perception_type, 
-             thinking_level, vectors, deep_patterns, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-            RETURNING id
-        """, (user_id, test_type, Json(serialized_results), profile_code, perception_type,
-              thinking_level, Json(serialized_vectors) if serialized_vectors else None,
-              Json(serialized_deep_patterns) if serialized_deep_patterns else None))
-        test_id = cur.fetchone()[0]
-        _conn.commit()
-        cur.close()
-        logger.info(f"📝 Тест {user_id} сохранен (ID: {test_id})")
-        return test_id
-    except Exception as e:
-        logger.error(f"❌ save_test_result {user_id}: {e}")
-        return None
-
-
-def save_test_answer(
+async def save_telegram_user_async(
     user_id: int,
-    test_result_id: Optional[int],
-    stage: int,
-    question_index: int,
-    question_text: str,
-    answer_text: str,
-    answer_value: str,
-    scores: Optional[Dict] = None,
-    measures: Optional[str] = None,
-    strategy: Optional[str] = None,
-    dilts: Optional[str] = None,
-    pattern: Optional[str] = None,
-    target: Optional[str] = None
+    username: str = None,
+    first_name: str = None,
+    last_name: str = None,
+    language_code: str = None
 ) -> bool:
-    """Сохранить ответ на тест"""
-    if not ensure_connection():
-        return False
+    """
+    Асинхронная версия сохранения пользователя Telegram
+    """
     try:
-        # Сериализуем scores если есть
-        serialized_scores = serialize_object(scores) if scores else None
+        # Проверяем соединение с повторными попытками
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения пользователя {user_id}")
+            return False
         
-        cur = _conn.cursor()
-        cur.execute("""
-            INSERT INTO fredi_test_answers 
-            (user_id, test_result_id, stage, question_index, question_text, 
-             answer_text, answer_value, scores, measures, strategy, dilts, pattern, target, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-        """, (
-            user_id, test_result_id, stage, question_index, question_text,
-            answer_text, answer_value, 
-            Json(serialized_scores) if serialized_scores else None,
-            measures, strategy, dilts, pattern, target
-        ))
-        _conn.commit()
-        cur.close()
-        return True
+        # Сохраняем пользователя
+        result = await db.save_telegram_user(
+            user_id=user_id,
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
+            language_code=language_code
+        )
+        logger.debug(f"💾 Пользователь {user_id} сохранен в БД")
+        return result
     except Exception as e:
-        logger.error(f"❌ save_test_answer {user_id}: {e}")
+        logger.error(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
+        logger.error(traceback.format_exc())
+        return False
+
+
+def save_telegram_user(
+    user_id: int,
+    username: str = None,
+    first_name: str = None,
+    last_name: str = None,
+    language_code: str = None
+) -> bool:
+    """
+    СИНХРОННАЯ обертка для сохранения пользователя Telegram
+    """
+    try:
+        result = db_loop_manager.run_coro(
+            save_telegram_user_async,
+            user_id,
+            username,
+            first_name,
+            last_name,
+            language_code,
+            timeout=30
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_telegram_user: {e}")
+        return False
+
+
+# ✅ ДОБАВЛЕНА ФУНКЦИЯ log_event_async И log_event
+async def log_event_async(user_id: int, event_type: str, event_data: Dict = None) -> bool:
+    """Асинхронная версия логирования"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для логирования {user_id}")
+            return False
+        
+        return await db.log_event(user_id, event_type, event_data or {})
+    except Exception as e:
+        logger.error(f"❌ Ошибка логирования: {e}")
         return False
 
 
 def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
-    """Логировать событие с сериализацией"""
-    if not ensure_connection():
-        return False
+    """Синхронная обертка для логирования"""
     try:
-        # Сериализуем данные перед сохранением
-        serialized_data = serialize_object(event_data) if event_data else None
-        
-        cur = _conn.cursor()
-        cur.execute("""
-            INSERT INTO fredi_events (user_id, event_type, event_data, created_at)
-            VALUES (%s, %s, %s, NOW())
-        """, (user_id, event_type, Json(serialized_data) if serialized_data else None))
-        _conn.commit()
-        cur.close()
-        return True
+        result = db_loop_manager.run_coro(
+            log_event_async,
+            user_id,
+            event_type,
+            event_data,
+            timeout=10
+        )
+        return result if result is not None else False
     except Exception as e:
-        logger.error(f"❌ log_event: {e}")
+        logger.error(f"❌ Ошибка log_event: {e}")
         return False
 
 
-# ============================================
-# НАПОМИНАНИЯ
-# ============================================
-
-def add_reminder(user_id: int, reminder_type: str, remind_at, data: Dict = None) -> bool:
-    """Добавить напоминание с сериализацией"""
-    if not ensure_connection():
-        return False
+async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None):
+    """
+    Асинхронная версия сохранения (для вызова через менеджер)
+    """
     try:
-        # Сериализуем данные перед сохранением
-        serialized_data = serialize_object(data) if data else None
+        # Проверяем соединение с повторными попытками
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения {user_id}")
+            return False
         
-        cur = _conn.cursor()
-        cur.execute("""
-            INSERT INTO fredi_reminders (user_id, reminder_type, remind_at, data, created_at)
-            VALUES (%s, %s, %s, %s, NOW())
-        """, (user_id, reminder_type, remind_at, Json(serialized_data) if serialized_data else None))
-        _conn.commit()
-        cur.close()
-        logger.debug(f"📅 Напоминание {reminder_type} для {user_id} на {remind_at}")
-        return True
-    except Exception as e:
-        logger.error(f"❌ add_reminder: {e}")
-        return False
-
-
-def get_user_reminders(user_id: int, include_sent: bool = False) -> List[Dict]:
-    """Получить напоминания пользователя"""
-    if not ensure_connection():
-        return []
-    try:
-        cur = _conn.cursor(cursor_factory=RealDictCursor)
-        query = """
-            SELECT id, reminder_type, remind_at, data, completed_at, created_at
-            FROM fredi_reminders
-            WHERE user_id = %s
-        """
-        if not include_sent:
-            query += " AND (completed_at IS NULL OR completed_at = '1970-01-01')"
-        query += " ORDER BY remind_at DESC LIMIT 100"
+        # Импортируем глобальные словари, если параметры не переданы
+        if user_data_dict is None:
+            from state import user_data as global_user_data
+            user_data_dict = global_user_data
         
-        cur.execute(query, (user_id,))
-        rows = cur.fetchall()
-        cur.close()
+        if user_contexts_dict is None:
+            from state import user_contexts as global_user_contexts
+            user_contexts_dict = global_user_contexts
         
-        result = []
-        for row in rows:
-            # Данные могут быть уже десериализованы
-            data = row['data']
-            if isinstance(data, str):
-                try:
-                    data = json.loads(data)
-                except:
-                    pass
+        if user_routes_dict is None:
+            from state import user_routes as global_user_routes
+            user_routes_dict = global_user_routes
+        
+        # Сохраняем пользователя
+        if user_id in user_data_dict:
+            user_info = user_data_dict[user_id]
+            first_name = user_info.get('first_name') or user_info.get('name')
+            username = user_info.get('username')
             
-            result.append({
-                'id': row['id'],
-                'reminder_type': row['reminder_type'],
-                'remind_at': row['remind_at'],
-                'data': data,
-                'completed_at': row['completed_at'],
-                'created_at': row['created_at']
-            })
-        return result
-    except Exception as e:
-        logger.error(f"❌ get_user_reminders: {e}")
-        return []
-
-
-def complete_reminder(reminder_id: int) -> bool:
-    """Отметить напоминание как выполненное"""
-    if not ensure_connection():
-        return False
-    try:
-        cur = _conn.cursor()
-        cur.execute("""
-            UPDATE fredi_reminders 
-            SET completed_at = NOW() 
-            WHERE id = %s
-        """, (reminder_id,))
-        _conn.commit()
-        cur.close()
-        return True
-    except Exception as e:
-        logger.error(f"❌ complete_reminder: {e}")
-        return False
-
-
-# ============================================
-# КЭШ ИДЕЙ НА ВЫХОДНЫЕ
-# ============================================
-
-def get_cached_weekend_ideas(user_id: int) -> Optional[str]:
-    """Получить кэшированные идеи на выходные"""
-    if not ensure_connection():
-        return None
-    try:
-        cur = _conn.cursor()
-        cur.execute("""
-            SELECT ideas_text FROM fredi_weekend_ideas_cache
-            WHERE user_id = %s AND expires_at > NOW()
-            ORDER BY created_at DESC
-            LIMIT 1
-        """, (user_id,))
-        row = cur.fetchone()
-        cur.close()
-        return row[0] if row else None
-    except Exception as e:
-        logger.error(f"❌ get_cached_weekend_ideas: {e}")
-        return None
-
-
-def cache_weekend_ideas(user_id: int, ideas_text: str, main_vector: str, main_level: int) -> bool:
-    """Сохранить идеи на выходные в кэш"""
-    if not ensure_connection():
-        return False
-    try:
-        cur = _conn.cursor()
-        # Удаляем старые
-        cur.execute("DELETE FROM fredi_weekend_ideas_cache WHERE user_id = %s", (user_id,))
-        # Вставляем новые
-        cur.execute("""
-            INSERT INTO fredi_weekend_ideas_cache (user_id, ideas_text, main_vector, main_level, expires_at)
-            VALUES (%s, %s, %s, %s, NOW() + INTERVAL '1 hour')
-        """, (user_id, ideas_text, main_vector, main_level))
-        _conn.commit()
-        cur.close()
-        return True
-    except Exception as e:
-        logger.error(f"❌ cache_weekend_ideas: {e}")
-        return False
-
-
-# ============================================
-# КЭШ АНАЛИЗА ВОПРОСОВ
-# ============================================
-
-def get_cached_question_analysis(user_id: int, question: str) -> Optional[Dict]:
-    """Получить кэшированный анализ вопроса"""
-    if not ensure_connection():
-        return None
-    question_hash = hash(question) % 1000000
-    try:
-        cur = _conn.cursor()
-        cur.execute("""
-            SELECT analysis FROM fredi_question_analysis_cache
-            WHERE user_id = %s AND question_hash = %s AND expires_at > NOW()
-            ORDER BY created_at DESC
-            LIMIT 1
-        """, (user_id, question_hash))
-        row = cur.fetchone()
-        cur.close()
-        if row and row[0]:
-            return json.loads(row[0])
-        return None
-    except Exception as e:
-        logger.error(f"❌ get_cached_question_analysis: {e}")
-        return None
-
-
-def cache_question_analysis(user_id: int, question: str, analysis: Dict) -> bool:
-    """Сохранить анализ вопроса в кэш с сериализацией"""
-    if not ensure_connection():
-        return False
-    question_hash = hash(question) % 1000000
-    try:
-        # Сериализуем анализ перед сохранением
-        serialized_analysis = serialize_object(analysis)
+            await db.save_telegram_user(
+                user_id=user_id,
+                username=username,
+                first_name=first_name
+            )
         
-        cur = _conn.cursor()
-        cur.execute("""
-            INSERT INTO fredi_question_analysis_cache (user_id, question_hash, question_text, analysis, expires_at)
-            VALUES (%s, %s, %s, %s, NOW() + INTERVAL '5 minutes')
-            ON CONFLICT (user_id, question_hash) DO UPDATE SET
-                analysis = EXCLUDED.analysis,
-                expires_at = NOW() + INTERVAL '5 minutes'
-        """, (user_id, question_hash, question[:500], Json(serialized_analysis)))
-        _conn.commit()
-        cur.close()
+        # Сохраняем user_data
+        if user_id in user_data_dict:
+            await db.save_user_data(user_id, user_data_dict[user_id])
+        
+        # Сохраняем контекст
+        if user_id in user_contexts_dict:
+            context = user_contexts_dict[user_id]
+            await db.save_user_context(user_id, context)
+            await db.save_pickled_context(user_id, context)
+        
+        # Сохраняем маршрут
+        if user_id in user_routes_dict:
+            route = user_routes_dict[user_id]
+            await db.save_user_route(
+                user_id=user_id,
+                route_data=route.get('route_data', {}),
+                current_step=route.get('current_step', 1),
+                progress=route.get('progress', [])
+            )
+        
+        logger.info(f"💾 Пользователь {user_id} успешно сохранен в БД")
         return True
+        
     except Exception as e:
-        logger.error(f"❌ cache_question_analysis: {e}")
+        logger.error(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
-# ============================================
-# ЗАГРУЗКА
-# ============================================
-
-def load_user_data(user_id: int) -> Dict:
-    """Загрузить данные пользователя"""
-    if not ensure_connection():
-        return {}
+def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None):
+    """
+    Синхронная обертка для сохранения (вызывается из любого потока)
+    """
     try:
-        cur = _conn.cursor()
-        cur.execute("SELECT data FROM fredi_user_data WHERE user_id = %s", (user_id,))
-        row = cur.fetchone()
-        cur.close()
-        data = row[0] if row else {}
+        result = db_loop_manager.run_coro(
+            save_user_to_db_async,
+            user_id,
+            user_data_dict,
+            user_contexts_dict,
+            user_routes_dict,
+            timeout=30
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_user_to_db: {e}")
+        return False
+
+
+async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
+    """
+    Асинхронная версия сохранения результатов теста
+    """
+    try:
+        # Проверяем соединение с повторными попытками
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения результатов {user_id}")
+            return None
         
-        # Если данные в виде строки, парсим JSON
-        if isinstance(data, str):
-            try:
-                data = json.loads(data)
-            except:
-                pass
+        if user_data_dict is None:
+            from state import user_data as global_user_data
+            user_data_dict = global_user_data
         
-        return data
+        data = user_data_dict.get(user_id, {})
+        
+        if not data:
+            logger.warning(f"⚠️ Нет данных для пользователя {user_id}")
+            return None
+        
+        # Получаем profile_code
+        profile_code = None
+        if data.get("profile_data"):
+            profile_code = data["profile_data"].get("display_name")
+        elif data.get("ai_generated_profile"):
+            import re
+            match = re.search(r'СБ-\d+_ТФ-\d+_УБ-\d+_ЧВ-\d+', data.get("ai_generated_profile", ""))
+            if match:
+                profile_code = match.group(0)
+        
+        # Сохраняем результат теста
+        test_id = await db.save_test_result(
+            user_id=user_id,
+            test_type=test_type,
+            results=data,
+            profile_code=profile_code,
+            perception_type=data.get("perception_type"),
+            thinking_level=data.get("thinking_level"),
+            vectors=data.get("behavioral_levels"),
+            deep_patterns=data.get("deep_patterns"),
+            confinement_model=data.get("confinement_model")
+        )
+        
+        # Сохраняем все ответы
+        all_answers = data.get("all_answers", [])
+        if all_answers and test_id:
+            for answer in all_answers:
+                await db.save_test_answer(
+                    user_id=user_id,
+                    test_result_id=test_id,
+                    stage=answer.get('stage', 0),
+                    question_index=answer.get('question_index', 0),
+                    question_text=answer.get('question', ''),
+                    answer_text=answer.get('answer', ''),
+                    answer_value=answer.get('option', ''),
+                    scores=answer.get('scores'),
+                    measures=answer.get('measures'),
+                    strategy=answer.get('strategy'),
+                    dilts=answer.get('dilts'),
+                    pattern=answer.get('pattern'),
+                    target=answer.get('target')
+                )
+        
+        logger.info(f"📝 Результаты теста для пользователя {user_id} сохранены (ID: {test_id})")
+        return test_id
+        
     except Exception as e:
-        logger.error(f"❌ load_user_data {user_id}: {e}")
-        return {}
-
-
-def load_user_context(user_id: int) -> Optional[Dict]:
-    """Загрузить контекст пользователя"""
-    if not ensure_connection():
+        logger.error(f"❌ Ошибка сохранения результатов теста для {user_id}: {e}")
+        import traceback
+        traceback.print_exc()
         return None
+
+
+def save_test_result_to_db(user_id, test_type, user_data_dict=None):
+    """
+    Синхронная обертка для сохранения результатов теста
+    """
     try:
-        cur = _conn.cursor()
-        cur.execute("""
-            SELECT name, age, gender, city, communication_mode, weather_cache
-            FROM fredi_user_contexts WHERE user_id = %s
-        """, (user_id,))
-        row = cur.fetchone()
-        cur.close()
-        if row:
-            weather_cache = row[5]
-            if isinstance(weather_cache, str):
-                try:
-                    weather_cache = json.loads(weather_cache)
-                except:
-                    pass
-            
-            return {
-                'name': row[0],
-                'age': row[1],
-                'gender': row[2],
-                'city': row[3],
-                'communication_mode': row[4],
-                'weather_cache': weather_cache
-            }
+        result = db_loop_manager.run_coro(
+            save_test_result_to_db_async,
+            user_id,
+            test_type,
+            user_data_dict,
+            timeout=30
+        )
+        return result if result is not None else None
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_test_result_to_db: {e}")
         return None
-    except Exception as e:
-        logger.error(f"❌ load_user_context {user_id}: {e}")
-        return None
-
-
-def load_all_users() -> List[int]:
-    """Загрузить всех пользователей"""
-    if not ensure_connection():
-        return []
-    try:
-        cur = _conn.cursor()
-        cur.execute("SELECT user_id FROM fredi_users")
-        rows = cur.fetchall()
-        cur.close()
-        return [row[0] for row in rows]
-    except Exception as e:
-        logger.error(f"❌ load_all_users: {e}")
-        return []
-
-
-def get_stats() -> Dict:
-    """Получить статистику"""
-    if not ensure_connection():
-        return {}
-    try:
-        cur = _conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM fredi_users")
-        users = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM fredi_test_results")
-        tests = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM fredi_test_answers")
-        answers = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM fredi_events")
-        events = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM fredi_reminders")
-        reminders = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM fredi_weekend_ideas_cache")
-        weekend_cache = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM fredi_question_analysis_cache")
-        question_cache = cur.fetchone()[0]
-        cur.close()
-        return {
-            'users': users,
-            'tests': tests,
-            'answers': answers,
-            'events': events,
-            'reminders': reminders,
-            'weekend_cache': weekend_cache,
-            'question_cache': question_cache
-        }
-    except Exception as e:
-        logger.error(f"❌ get_stats: {e}")
-        return {}
-
-
-# ============================================
-# ЗАГЛУШКА ДЛЯ ОБРАТНОЙ СОВМЕСТИМОСТИ
-# ============================================
-
-def db_loop_manager():
-    """Заглушка для обратной совместимости (для старых файлов)"""
-    import asyncio
-    try:
-        return asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.new_event_loop()
 
 
 # ============================================
@@ -786,29 +602,17 @@ def db_loop_manager():
 # ============================================
 
 __all__ = [
-    'connect',
-    'disconnect',
-    'ensure_connection',
-    'save_user',
-    'save_telegram_user',
-    'save_user_data',
-    'save_context',
-    'save_test_result',
-    'save_test_answer',
-    'log_event',
-    'add_reminder',
-    'get_user_reminders',
-    'complete_reminder',
-    'get_cached_weekend_ideas',
-    'cache_weekend_ideas',
-    'get_cached_question_analysis',
-    'cache_question_analysis',
-    'load_user_data',
-    'load_user_context',
-    'load_all_users',
-    'get_stats',
+    'db',
     'db_loop_manager',
-    'serialize_object'
+    'init_db',
+    'close_db',
+    'save_telegram_user',
+    'save_user_to_db',
+    'save_test_result_to_db',
+    'log_event',  # ✅ ДОБАВЛЕНО
+    'ensure_db_connection',
+    'execute_with_retry',
+    'sync_db_call'
 ]
 
-logger.info("✅ Простая синхронная БД загружена")
+logger.info("✅ db_instance инициализирован")
