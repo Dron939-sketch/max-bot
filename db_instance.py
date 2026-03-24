@@ -20,6 +20,48 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # ============================================
+# СЕРИАЛИЗАЦИЯ ОБЪЕКТОВ
+# ============================================
+
+def serialize_object(obj):
+    """
+    Рекурсивно сериализует объект в JSON-совместимый формат
+    Работает с любыми вложенными объектами, включая ConfinementElement
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, (list, tuple)):
+        return [serialize_object(item) for item in obj]
+    if isinstance(obj, dict):
+        return {str(k): serialize_object(v) for k, v in obj.items()}
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    
+    # Для объектов пользовательских классов (ConfinementElement, UserContext и др.)
+    if hasattr(obj, '__dict__'):
+        result = {}
+        for key, value in obj.__dict__.items():
+            if not key.startswith('_'):  # пропускаем приватные атрибуты
+                result[key] = serialize_object(value)
+        return result
+    
+    # Если у объекта есть метод to_dict
+    if hasattr(obj, 'to_dict'):
+        try:
+            return serialize_object(obj.to_dict())
+        except:
+            pass
+    
+    # Пробуем преобразовать в строку
+    try:
+        return str(obj)
+    except:
+        return f"<{type(obj).__name__}>"
+
+
+# ============================================
 # ПОДКЛЮЧЕНИЕ
 # ============================================
 
@@ -257,10 +299,13 @@ def save_telegram_user(user_id: int, first_name: str = None, username: str = Non
 
 
 def save_user_data(user_id: int, data: Dict) -> bool:
-    """Сохранить данные пользователя"""
+    """Сохранить данные пользователя с сериализацией"""
     if not ensure_connection():
         return False
     try:
+        # ✅ Сериализуем данные перед сохранением
+        serialized_data = serialize_object(data)
+        
         cur = _conn.cursor()
         cur.execute("""
             INSERT INTO fredi_user_data (user_id, data, updated_at)
@@ -268,7 +313,7 @@ def save_user_data(user_id: int, data: Dict) -> bool:
             ON CONFLICT (user_id) DO UPDATE SET
                 data = EXCLUDED.data,
                 updated_at = NOW()
-        """, (user_id, Json(data)))
+        """, (user_id, Json(serialized_data)))
         _conn.commit()
         cur.close()
         return True
@@ -279,10 +324,13 @@ def save_user_data(user_id: int, data: Dict) -> bool:
 
 def save_context(user_id: int, name: str = None, age: int = None, gender: str = None,
                  city: str = None, mode: str = None, data: Dict = None) -> bool:
-    """Сохранить контекст пользователя"""
+    """Сохранить контекст пользователя с сериализацией"""
     if not ensure_connection():
         return False
     try:
+        # ✅ Сериализуем данные перед сохранением
+        serialized_data = serialize_object(data) if data else None
+        
         cur = _conn.cursor()
         cur.execute("""
             INSERT INTO fredi_user_contexts (user_id, name, age, gender, city, communication_mode, weather_cache, updated_at)
@@ -295,7 +343,7 @@ def save_context(user_id: int, name: str = None, age: int = None, gender: str = 
                 communication_mode = EXCLUDED.communication_mode,
                 weather_cache = EXCLUDED.weather_cache,
                 updated_at = NOW()
-        """, (user_id, name, age, gender, city, mode, Json(data) if data else None))
+        """, (user_id, name, age, gender, city, mode, Json(serialized_data) if serialized_data else None))
         _conn.commit()
         cur.close()
         return True
@@ -308,10 +356,15 @@ def save_test_result(user_id: int, test_type: str, results: Dict,
                      profile_code: str = None, perception_type: str = None,
                      thinking_level: int = None, vectors: Dict = None,
                      deep_patterns: Dict = None) -> Optional[int]:
-    """Сохранить результат теста"""
+    """Сохранить результат теста с сериализацией"""
     if not ensure_connection():
         return None
     try:
+        # ✅ Сериализуем результаты перед сохранением
+        serialized_results = serialize_object(results)
+        serialized_vectors = serialize_object(vectors) if vectors else None
+        serialized_deep_patterns = serialize_object(deep_patterns) if deep_patterns else None
+        
         cur = _conn.cursor()
         cur.execute("""
             INSERT INTO fredi_test_results 
@@ -319,9 +372,9 @@ def save_test_result(user_id: int, test_type: str, results: Dict,
              thinking_level, vectors, deep_patterns, created_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
             RETURNING id
-        """, (user_id, test_type, Json(results), profile_code, perception_type,
-              thinking_level, Json(vectors) if vectors else None,
-              Json(deep_patterns) if deep_patterns else None))
+        """, (user_id, test_type, Json(serialized_results), profile_code, perception_type,
+              thinking_level, Json(serialized_vectors) if serialized_vectors else None,
+              Json(serialized_deep_patterns) if serialized_deep_patterns else None))
         test_id = cur.fetchone()[0]
         _conn.commit()
         cur.close()
@@ -333,15 +386,18 @@ def save_test_result(user_id: int, test_type: str, results: Dict,
 
 
 def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
-    """Логировать событие"""
+    """Логировать событие с сериализацией"""
     if not ensure_connection():
         return False
     try:
+        # ✅ Сериализуем данные перед сохранением
+        serialized_data = serialize_object(event_data) if event_data else None
+        
         cur = _conn.cursor()
         cur.execute("""
             INSERT INTO fredi_events (user_id, event_type, event_data, created_at)
             VALUES (%s, %s, %s, NOW())
-        """, (user_id, event_type, Json(event_data) if event_data else None))
+        """, (user_id, event_type, Json(serialized_data) if serialized_data else None))
         _conn.commit()
         cur.close()
         return True
@@ -355,15 +411,18 @@ def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
 # ============================================
 
 def add_reminder(user_id: int, reminder_type: str, remind_at, data: Dict = None) -> bool:
-    """Добавить напоминание"""
+    """Добавить напоминание с сериализацией"""
     if not ensure_connection():
         return False
     try:
+        # ✅ Сериализуем данные перед сохранением
+        serialized_data = serialize_object(data) if data else None
+        
         cur = _conn.cursor()
         cur.execute("""
             INSERT INTO fredi_reminders (user_id, reminder_type, remind_at, data, created_at)
             VALUES (%s, %s, %s, %s, NOW())
-        """, (user_id, reminder_type, remind_at, Json(data) if data else None))
+        """, (user_id, reminder_type, remind_at, Json(serialized_data) if serialized_data else None))
         _conn.commit()
         cur.close()
         logger.debug(f"📅 Напоминание {reminder_type} для {user_id} на {remind_at}")
@@ -394,11 +453,19 @@ def get_user_reminders(user_id: int, include_sent: bool = False) -> List[Dict]:
         
         result = []
         for row in rows:
+            # Данные могут быть уже десериализованы
+            data = row['data']
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except:
+                    pass
+            
             result.append({
                 'id': row['id'],
                 'reminder_type': row['reminder_type'],
                 'remind_at': row['remind_at'],
-                'data': row['data'],
+                'data': data,
                 'completed_at': row['completed_at'],
                 'created_at': row['created_at']
             })
@@ -500,11 +567,14 @@ def get_cached_question_analysis(user_id: int, question: str) -> Optional[Dict]:
 
 
 def cache_question_analysis(user_id: int, question: str, analysis: Dict) -> bool:
-    """Сохранить анализ вопроса в кэш"""
+    """Сохранить анализ вопроса в кэш с сериализацией"""
     if not ensure_connection():
         return False
     question_hash = hash(question) % 1000000
     try:
+        # ✅ Сериализуем анализ перед сохранением
+        serialized_analysis = serialize_object(analysis)
+        
         cur = _conn.cursor()
         cur.execute("""
             INSERT INTO fredi_question_analysis_cache (user_id, question_hash, question_text, analysis, expires_at)
@@ -512,7 +582,7 @@ def cache_question_analysis(user_id: int, question: str, analysis: Dict) -> bool
             ON CONFLICT (user_id, question_hash) DO UPDATE SET
                 analysis = EXCLUDED.analysis,
                 expires_at = NOW() + INTERVAL '5 minutes'
-        """, (user_id, question_hash, question[:500], Json(analysis)))
+        """, (user_id, question_hash, question[:500], Json(serialized_analysis)))
         _conn.commit()
         cur.close()
         return True
@@ -534,7 +604,16 @@ def load_user_data(user_id: int) -> Dict:
         cur.execute("SELECT data FROM fredi_user_data WHERE user_id = %s", (user_id,))
         row = cur.fetchone()
         cur.close()
-        return row[0] if row else {}
+        data = row[0] if row else {}
+        
+        # Если данные в виде строки, парсим JSON
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except:
+                pass
+        
+        return data
     except Exception as e:
         logger.error(f"❌ load_user_data {user_id}: {e}")
         return {}
@@ -547,18 +626,26 @@ def load_user_context(user_id: int) -> Optional[Dict]:
     try:
         cur = _conn.cursor()
         cur.execute("""
-            SELECT name, age, gender, city, communication_mode
+            SELECT name, age, gender, city, communication_mode, weather_cache
             FROM fredi_user_contexts WHERE user_id = %s
         """, (user_id,))
         row = cur.fetchone()
         cur.close()
         if row:
+            weather_cache = row[5]
+            if isinstance(weather_cache, str):
+                try:
+                    weather_cache = json.loads(weather_cache)
+                except:
+                    pass
+            
             return {
                 'name': row[0],
                 'age': row[1],
                 'gender': row[2],
                 'city': row[3],
-                'communication_mode': row[4]
+                'communication_mode': row[4],
+                'weather_cache': weather_cache
             }
         return None
     except Exception as e:
@@ -651,7 +738,8 @@ __all__ = [
     'load_user_context',
     'load_all_users',
     'get_stats',
-    'db_loop_manager'
+    'db_loop_manager',
+    'serialize_object'
 ]
 
 logger.info("✅ Простая синхронная БД загружена")
