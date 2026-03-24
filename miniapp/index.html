@@ -18,29 +18,28 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     
-    <!-- MAX Bridge -->
+    <!-- MAX Bridge (опционально) -->
     <script src="https://st.max.ru/js/max-web-app.js"></script>
     
-    <!-- ========== УНИВЕРСАЛЬНОЕ ПОЛУЧЕНИЕ USER_ID (ИСПРАВЛЕННОЕ - БЕРЕМ CHAT_ID) ========== -->
+    <!-- ========== УНИВЕРСАЛЬНОЕ ПОЛУЧЕНИЕ USER_ID ========== -->
     <script>
         // ============================================
         // ДИАГНОСТИКА
         // ============================================
-        console.log('=== ДИАГНОСТИКА MAX ===');
+        console.log('=== ДИАГНОСТИКА ===');
         console.log('navigator.userAgent:', navigator.userAgent);
-        console.log('window.MAX:', window.MAX);
         console.log('location.href:', location.href);
         console.log('location.hash:', location.hash);
         
         // ============================================
-        // 1. УНИВЕРСАЛЬНОЕ ПОЛУЧЕНИЕ USER_ID (CHAT_ID)
+        // 1. УНИВЕРСАЛЬНОЕ ПОЛУЧЕНИЕ USER_ID
         // ============================================
         function extractUserIdFromUrl() {
             const url = window.location.href;
             const decodedUrl = decodeURIComponent(url);
             console.log('🔍 Декодированный URL:', decodedUrl.substring(0, 500));
             
-            // Сначала ищем chat_id (основной ID пользователя в боте)
+            // Ищем chat_id (основной ID)
             const chatPatterns = [
                 /chat%22%3A%7B%22id%22%3A(\d+)/i,
                 /chat":\{"id":(\d+)/i,
@@ -60,7 +59,7 @@
                 }
             }
             
-            // Если chat_id не найден, ищем user_id
+            // Ищем user_id
             const userPatterns = [
                 /user%22%3A%7B%22id%22%3A(\d+)/i,
                 /user":\{"id":(\d+)/i,
@@ -73,7 +72,7 @@
                 if (match && match[1]) {
                     const id = parseInt(match[1]);
                     if (id > 100000) {
-                        console.log(`⚠️ Найден USER_ID (вместо CHAT_ID): ${id}`);
+                        console.log(`⚠️ Найден USER_ID: ${id}`);
                         return id;
                     }
                 }
@@ -83,13 +82,12 @@
         }
         
         // ============================================
-        // 2. ПОЛУЧЕНИЕ ИМЕНИ ПОЛЬЗОВАТЕЛЯ (ЧИСТОЕ)
+        // 2. ПОЛУЧЕНИЕ ИМЕНИ ПОЛЬЗОВАТЕЛЯ
         // ============================================
         function extractUserNameFromUrl() {
             const url = window.location.href;
             const decodedUrl = decodeURIComponent(url);
             
-            // Ищем first_name с правильным окончанием
             const patterns = [
                 /first_name%22%3A%22([^%]+?)%22/i,
                 /first_name":"([^"]+?)"/i,
@@ -100,9 +98,7 @@
                 const match = decodedUrl.match(pattern);
                 if (match && match[1]) {
                     let name = match[1];
-                    // Очищаем от лишних символов
                     name = name.replace(/["']/g, '').trim();
-                    // Декодируем URL-кодированные символы
                     try {
                         name = decodeURIComponent(name);
                     } catch(e) {}
@@ -121,10 +117,8 @@
         (function init() {
             console.log('🚀 Инициализация приложения...');
             
-            // Получаем ID из URL (приоритет: chat_id)
             let userId = extractUserIdFromUrl();
             
-            // Если не нашли, пробуем из localStorage
             if (!userId) {
                 const savedId = localStorage.getItem('fredi_user_id');
                 if (savedId && !isNaN(parseInt(savedId)) && parseInt(savedId) > 100000) {
@@ -133,10 +127,9 @@
                 }
             }
             
-            // Сохраняем ID
             if (userId) {
                 localStorage.setItem('fredi_user_id', userId);
-                console.log('🎯 Установлен user_id (CHAT_ID):', userId);
+                console.log('🎯 Установлен user_id:', userId);
             } else {
                 console.error('❌ Не удалось получить user_id!');
                 const isDebug = new URLSearchParams(window.location.search).get('debug') === '1';
@@ -148,7 +141,6 @@
                 }
             }
             
-            // Получаем имя
             let userName = extractUserNameFromUrl();
             if (!userName) {
                 userName = localStorage.getItem('userName') || 'друг';
@@ -157,21 +149,17 @@
                 localStorage.setItem('userName', userName);
             }
             
-            // Создаем глобальный контекст
             window.maxContext = {
                 user_id: userId,
                 user_name: userName,
-                isMax: !!(window.MAX && window.MAX.WebApp) || (window.location.hash && window.location.hash.includes('WebAppData')),
                 initialized: true
             };
             
             console.log('📦 maxContext:', {
                 user_id: window.maxContext.user_id,
-                user_name: window.maxContext.user_name,
-                isMax: window.maxContext.isMax
+                user_name: window.maxContext.user_name
             });
             
-            // Показываем ошибку только если нет ID и не режим разработки
             if (!userId && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')) {
                 document.body.innerHTML = `
                     <div style="display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:20px;background:#0e1621;color:white;">
@@ -190,28 +178,6 @@
                 `;
             }
         })();
-        
-        // ============================================
-        // 4. ОБРАБОТКА MAX.ready()
-        // ============================================
-        if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.ready) {
-            window.MAX.WebApp.ready(() => {
-                console.log('✅ MAX.ready() вызван');
-                if (window.MAX.WebApp.getUser) {
-                    window.MAX.WebApp.getUser().then(user => {
-                        if (user && user.id) {
-                            console.log('🔄 Обновляем user_id из MAX:', user.id);
-                            localStorage.setItem('fredi_user_id', user.id);
-                            if (window.maxContext) window.maxContext.user_id = user.id;
-                        }
-                        if (user && user.first_name) {
-                            localStorage.setItem('userName', user.first_name);
-                            if (window.maxContext) window.maxContext.user_name = user.first_name;
-                        }
-                    }).catch(e => console.warn('getUser error:', e));
-                }
-            });
-        }
     </script>
     
     <!-- ========== КОНФИГУРАЦИЯ API ========== -->
@@ -542,7 +508,6 @@
         .voice-record-btn.recording {
             background: #ff4444;
             animation: pulse-red 1s infinite;
-            transform: scale(1.05);
         }
         
         @keyframes pulse-red {
@@ -1424,7 +1389,7 @@
                         <span>🎙️ Говорите...</span>
                     </div>
                     <div class="voice-hint-text">
-                        🎤 Нажмите и <b>ДЕРЖИТЕ</b> для записи (до 30 сек)
+                        🎤 Нажмите для записи, нажмите еще раз для отправки
                     </div>
                 </div>
                 <div class="question-back"><button class="onboarding-btn secondary" id="backToProfileBtn">◀️ НАЗАД</button></div>
@@ -1479,20 +1444,20 @@
     </template>
 
     <!-- ========== СКРИПТЫ ========== -->
-    <script src="/static/api.js?v=18"></script>
-    <script src="/static/context.js?v=18"></script>
-    <script src="/static/onboarding.js?v=18"></script>
-    <script src="/static/script.js?v=18"></script>
-    <script src="/static/test.js?v=18"></script>
-    <script src="/static/animations.js?v=18"></script>
-    <script src="/static/animated-avatar.js?v=18"></script>
-    <script src="/static/dynamic-bg.js?v=18"></script>
-    <script src="/static/challenges.js?v=18"></script>
-    <script src="/static/notifications.js?v=18"></script>
-    <script src="/static/psychometric.js?v=18"></script>
-    <script src="/static/dashboard.js?v=18"></script>
+    <script src="/static/api.js?v=19"></script>
+    <script src="/static/context.js?v=19"></script>
+    <script src="/static/onboarding.js?v=19"></script>
+    <script src="/static/script.js?v=19"></script>
+    <script src="/static/test.js?v=19"></script>
+    <script src="/static/animations.js?v=19"></script>
+    <script src="/static/animated-avatar.js?v=19"></script>
+    <script src="/static/dynamic-bg.js?v=19"></script>
+    <script src="/static/challenges.js?v=19"></script>
+    <script src="/static/notifications.js?v=19"></script>
+    <script src="/static/psychometric.js?v=19"></script>
+    <script src="/static/dashboard.js?v=19"></script>
     
-    <!-- ========== МЕНЕДЖЕР МИКРОФОНА ========== -->
+    <!-- ========== ПРОСТОЙ МЕНЕДЖЕР МИКРОФОНА (ДЛЯ ЛЮБОГО БРАУЗЕРА) ========== -->
     <script>
         window.maxMicrophoneManager = {
             hasPermission: false,
@@ -1503,74 +1468,42 @@
             async requestMicrophone() {
                 console.log('🎤 Запрос доступа к микрофону...');
                 
-                const hasMediaDevices = navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
-                const hasMaxGetUserMedia = window.MAX && window.MAX.WebApp && typeof window.MAX.WebApp.getUserMedia === 'function';
-                
-                if (!hasMediaDevices && !hasMaxGetUserMedia) {
-                    console.error('❌ Микрофон недоступен');
-                    this.showNoMicrophoneSupport();
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    console.error('❌ Микрофон не поддерживается');
+                    this.showToast('❌ Микрофон не поддерживается', 'error');
                     return false;
                 }
                 
-                let stream = null;
-                
-                // ПРИОРИТЕТ 1: MAX API (для WebView в MAX)
-                if (hasMaxGetUserMedia) {
-                    try {
-                        console.log('🔄 Пробуем MAX.WebApp.getUserMedia...');
-                        stream = await window.MAX.WebApp.getUserMedia({ audio: true });
-                        if (stream) console.log('✅ Доступ через MAX API');
-                    } catch(e) { console.warn('MAX getUserMedia error:', e); }
-                }
-                
-                // ПРИОРИТЕТ 2: Web API (для обычного браузера)
-                if (!stream && hasMediaDevices) {
-                    try {
-                        console.log('🔄 Пробуем navigator.mediaDevices.getUserMedia...');
-                        stream = await navigator.mediaDevices.getUserMedia({ 
-                            audio: {
-                                echoCancellation: true,
-                                noiseSuppression: true,
-                                autoGainControl: true
-                            }
-                        });
-                        console.log('✅ Доступ через Web API');
-                    } catch(e) { console.warn('Web getUserMedia error:', e); }
-                }
-                
-                if (stream) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true
+                        }
+                    });
                     stream.getTracks().forEach(track => track.stop());
                     this.hasPermission = true;
                     localStorage.setItem('microphone_permission_granted', 'true');
                     this.showToast('✅ Микрофон готов!', 'success');
                     return true;
+                } catch (error) {
+                    console.error('❌ Ошибка:', error);
+                    this.hasPermission = false;
+                    
+                    if (error.name === 'NotAllowedError') {
+                        this.showPermissionInstructions();
+                    } else if (error.name === 'NotFoundError') {
+                        this.showToast('❌ Микрофон не найден', 'error');
+                    } else {
+                        this.showToast('❌ Не удалось получить доступ', 'error');
+                    }
+                    return false;
                 }
-                
-                this.hasPermission = false;
-                this.showPermissionInstructions();
-                return false;
-            },
-            
-            showNoMicrophoneSupport() {
-                const modal = document.createElement('div');
-                modal.className = 'microphone-modal';
-                modal.innerHTML = `
-                    <div class="microphone-modal-content">
-                        <div style="font-size:48px;margin-bottom:16px;">🎤</div>
-                        <h3>Микрофон не поддерживается</h3>
-                        <div style="color:#8e9aa6;margin:16px 0;">Вы можете написать вопрос текстом.</div>
-                        <button id="microphoneCloseBtn" class="modal-btn primary">📝 ПОНЯТНО</button>
-                    </div>
-                `;
-                document.body.appendChild(modal);
-                document.getElementById('microphoneCloseBtn')?.addEventListener('click', () => {
-                    modal.remove();
-                    document.getElementById('questionInput')?.focus();
-                });
             },
             
             showPermissionInstructions() {
-                const isMax = !!(window.MAX && window.MAX.WebApp);
+                const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
                 const modal = document.createElement('div');
                 modal.className = 'microphone-modal';
                 modal.innerHTML = `
@@ -1578,7 +1511,9 @@
                         <div style="font-size:48px;margin-bottom:16px;">🎤</div>
                         <h3>Нужен доступ к микрофону</h3>
                         <div style="color:#8e9aa6;margin:16px 0;text-align:left;">
-                            ${isMax ? '🔊 <b>ДЛЯ MAX (мессенджер)</b><br><br><b>СПОСОБ 1 (рекомендуемый):</b><br>Напишите вопрос текстом в поле ввода — это всегда работает.<br><br><b>СПОСОБ 2 (если хотите голос):</b><br>1️⃣ Настройки телефона → Приложения → MAX<br>2️⃣ Разрешения → Микрофон → Разрешить<br>3️⃣ Вернитесь и нажмите 🎤' : '🎤 <b>НУЖЕН ДОСТУП К МИКРОФОНУ</b><br><br>В настройках браузера разрешите доступ к микрофону.<br>Или просто напишите вопрос текстом.'}
+                            ${isMobile ? 
+                                '1️⃣ Настройки телефона → Браузер → Разрешения<br>2️⃣ Микрофон → Разрешить<br>3️⃣ Обновите страницу' : 
+                                'В адресной строке нажмите на иконку 🔒 → Разрешения → Микрофон → Разрешить<br>Затем обновите страницу'}
                         </div>
                         <div style="display:flex;gap:12px;flex-wrap:wrap;">
                             <button id="microphoneRetryBtn" class="modal-btn primary">🔄 ПРОВЕРИТЬ</button>
@@ -1595,39 +1530,41 @@
                 if (!this.hasPermission && !(await this.requestMicrophone())) return false;
                 
                 try {
-                    let stream = null;
-                    
-                    // Приоритет MAX API
-                    if (window.MAX?.WebApp?.getUserMedia) {
-                        try { stream = await window.MAX.WebApp.getUserMedia({ audio: true }); } catch(e) {}
-                    }
-                    
-                    // Fallback Web API
-                    if (!stream && navigator.mediaDevices) {
-                        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    }
-                    
-                    if (!stream) throw new Error('Нет микрофона');
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                     
                     this.mediaRecorder = new MediaRecorder(stream);
                     this.audioChunks = [];
-                    this.mediaRecorder.ondataavailable = e => { if (e.data.size > 0) this.audioChunks.push(e.data); };
+                    
+                    this.mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) this.audioChunks.push(event.data);
+                    };
+                    
                     this.mediaRecorder.onstop = () => {
                         const blob = new Blob(this.audioChunks, { type: 'audio/webm' });
-                        stream.getTracks().forEach(t => t.stop());
+                        stream.getTracks().forEach(track => track.stop());
                         this.processAudio(blob);
                     };
-                    this.mediaRecorder.start(1000);
+                    
+                    this.mediaRecorder.start();
                     this.isRecording = true;
                     
+                    // Таймер
                     const timerDiv = document.getElementById('recordingTimer');
                     if (timerDiv) {
                         timerDiv.style.display = 'block';
                         let sec = 0;
                         this.timerInterval = setInterval(() => timerDiv.textContent = `${++sec}s`, 1000);
                     }
+                    
+                    // Меняем кнопку
+                    const btn = document.getElementById('voiceRecordBtn');
+                    if (btn) {
+                        btn.classList.add('recording');
+                        btn.innerHTML = '⏹️';
+                    }
+                    
                     return true;
-                } catch(e) {
+                } catch (error) {
                     this.showToast('❌ Не удалось начать запись', 'error');
                     return false;
                 }
@@ -1637,35 +1574,51 @@
                 if (this.mediaRecorder && this.isRecording) {
                     this.mediaRecorder.stop();
                     this.isRecording = false;
+                    
                     if (this.timerInterval) clearInterval(this.timerInterval);
                     document.getElementById('recordingTimer').style.display = 'none';
+                    
+                    const btn = document.getElementById('voiceRecordBtn');
+                    if (btn) {
+                        btn.classList.remove('recording');
+                        btn.innerHTML = '🎤';
+                    }
                 }
             },
             
             async processAudio(blob) {
-                if (blob.size < 1000) { this.showToast('🎤 Слишком тихо', 'error'); return; }
+                if (blob.size < 1000) {
+                    this.showToast('🎤 Слишком тихо', 'error');
+                    return;
+                }
+                
                 this.showToast('🎤 Распознаю...', 'info');
+                
                 try {
                     const userId = window.maxContext?.user_id || localStorage.getItem('fredi_user_id');
                     const formData = new FormData();
                     formData.append('user_id', userId);
                     formData.append('voice', blob, 'recording.webm');
                     
-                    const res = await fetch(`${window.API_BASE_URL}/api/voice/process`, { method: 'POST', body: formData });
-                    const result = await res.json();
+                    const response = await fetch(`${window.API_BASE_URL}/api/voice/process`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const result = await response.json();
                     
                     if (result.success && result.recognized_text) {
+                        this.showToast('✅ Распознано!', 'success');
                         const input = document.getElementById('questionInput');
                         if (input) {
                             input.value = result.recognized_text;
                             document.getElementById('sendQuestionBtn')?.click();
                         }
-                        this.showToast('✅ Распознано!', 'success');
                     } else {
                         this.showToast(result.answer || '❌ Не распознано', 'error');
                     }
-                } catch(e) {
-                    console.error('Ошибка отправки аудио:', e);
+                } catch (error) {
+                    console.error('Ошибка:', error);
                     this.showToast('❌ Ошибка отправки', 'error');
                 }
             },
@@ -1680,32 +1633,23 @@
             }
         };
         
-        // Инициализация микрофона
+        // Инициализация
         setTimeout(() => window.maxMicrophoneManager.requestMicrophone(), 1000);
         
-        // Обработчики кнопки записи
+        // Обработчик кнопки (простой режим)
         document.addEventListener('DOMContentLoaded', () => {
-            const btn = document.getElementById('voiceRecordBtn');
-            if (btn) {
-                let timer, long = false;
-                const start = (e) => {
+            const voiceBtn = document.getElementById('voiceRecordBtn');
+            if (voiceBtn) {
+                voiceBtn.addEventListener('click', async (e) => {
                     e.preventDefault();
-                    timer = setTimeout(() => { long = true; btn.classList.add('recording'); window.maxMicrophoneManager.startRecording(); }, 200);
-                };
-                const end = (e) => {
-                    e.preventDefault();
-                    if (timer) clearTimeout(timer);
-                    if (long) { long = false; btn.classList.remove('recording'); window.maxMicrophoneManager.stopRecording(); }
-                    else window.maxMicrophoneManager.requestMicrophone();
-                };
-                btn.addEventListener('mousedown', start);
-                btn.addEventListener('mouseup', end);
-                btn.addEventListener('mouseleave', end);
-                btn.addEventListener('touchstart', start);
-                btn.addEventListener('touchend', end);
+                    if (window.maxMicrophoneManager.isRecording) {
+                        window.maxMicrophoneManager.stopRecording();
+                    } else {
+                        await window.maxMicrophoneManager.startRecording();
+                    }
+                });
             }
             
-            // Инициализация дашборда
             if (typeof FrediDashboard !== 'undefined') {
                 window.dashboard = new FrediDashboard();
             }
