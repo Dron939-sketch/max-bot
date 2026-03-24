@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики этапов тестирования (1-5) для MAX
-Версия 2.4 - ИСПРАВЛЕНО: синхронные вызовы БД через sync_db
+Версия 3.0 - ПОЛНОЕ СОХРАНЕНИЕ В БД: профиль, мысли психолога, ответы
 """
 
 import time
@@ -10,6 +10,8 @@ import logging
 import os
 import json
 import re
+import threading
+import asyncio
 from typing import Dict, Any, Optional, List
 
 from bot_instance import bot
@@ -37,7 +39,6 @@ from profiles import (
     VECTORS, LEVEL_PROFILES
 )
 from models import ConfinementModel9
-from services import generate_ai_profile
 
 # Импорты из state.py
 from state import (
@@ -46,17 +47,17 @@ from state import (
     clear_state, TestStates
 )
 
-# ✅ ИСПРАВЛЕНО: импорт из db_sync вместо db_instance
+# Импорты из db_sync
 from db_sync import sync_db
+
+# Импорты для генерации
+from services import generate_ai_profile, generate_psychologist_thought
 
 logger = logging.getLogger(__name__)
 
-# ============================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ БД - УДАЛЕНЫ (используем sync_db)
-# ============================================
 
 # ============================================
-# ДОБАВЛЕНА НЕДОСТАЮЩАЯ ФУНКЦИЯ
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================
 
 def clean_text_for_safe_display(text: str) -> str:
@@ -77,15 +78,13 @@ def clean_text_for_safe_display(text: str) -> str:
     text = re.sub(r'\n\s*\n', '\n\n', text)
     return text.strip()
 
-# ============================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# ============================================
 
 def calculate_progress(current: int, total: int) -> str:
     """Возвращает прогресс-бар"""
     percent = int((current / total) * 10)
     bar = "█" * percent + "░" * (10 - percent)
     return f"▸ Вопрос {current}/{total} • {bar}"
+
 
 def determine_perception_type(scores: dict) -> str:
     """Определяет тип восприятия из scores этапа 1"""
@@ -105,6 +104,7 @@ def determine_perception_type(scores: dict) -> str:
         return "СМЫСЛО-ОРИЕНТИРОВАННЫЙ"
     else:
         return "ПРАКТИКО-ОРИЕНТИРОВАННЫЙ"
+
 
 def calculate_thinking_level_by_scores(level_scores_dict: dict) -> int:
     """Рассчитывает уровень мышления для этапа 2"""
@@ -129,6 +129,7 @@ def calculate_thinking_level_by_scores(level_scores_dict: dict) -> int:
     else:
         return 9
 
+
 def get_level_group(level: int) -> str:
     """Группирует уровни для этапа 2"""
     if level <= 3:
@@ -138,6 +139,7 @@ def get_level_group(level: int) -> str:
     else:
         return "7-9"
 
+
 def calculate_final_level(stage2_level: int, stage3_scores: list) -> int:
     """Рассчитывает финальный уровень для этапа 3"""
     if not stage3_scores:
@@ -145,12 +147,14 @@ def calculate_final_level(stage2_level: int, stage3_scores: list) -> int:
     avg_behavior = sum(stage3_scores) / len(stage3_scores)
     return round((stage2_level + avg_behavior) / 2)
 
+
 def determine_dominant_dilts(dilts_counts: dict) -> str:
     """Определяет доминирующий уровень Дилтса для этапа 4"""
     if not dilts_counts:
         return "BEHAVIOR"
     dominant = max(dilts_counts.items(), key=lambda x: x[1])
     return dominant[0]
+
 
 def calculate_profile_final(user_data: dict) -> dict:
     """Финальный расчет профиля после этапа 4"""
@@ -186,6 +190,7 @@ def calculate_profile_final(user_data: dict) -> dict:
         "dilts_counts": dilts_counts
     }
 
+
 def calculate_profile_confidence(profile: dict) -> float:
     """Рассчитывает уверенность в профиле"""
     confidence = 0.5
@@ -208,6 +213,7 @@ def calculate_profile_confidence(profile: dict) -> float:
     confidence += clarification_count * 0.05
     
     return min(1.0, confidence)
+
 
 def convert_to_simple_language(scores, perception_type, thinking_level, deep_patterns=None):
     """Конвертирует технические данные в простые описания"""
@@ -287,6 +293,7 @@ def convert_to_simple_language(scores, perception_type, thinking_level, deep_pat
     
     return result
 
+
 def cleanup_old_state_files(max_age_hours=24):
     """Удаляет старые файлы состояний"""
     try:
@@ -305,8 +312,95 @@ def cleanup_old_state_files(max_age_hours=24):
     except Exception as e:
         logger.error(f"❌ Ошибка при очистке старых файлов: {e}")
 
+
 # Вызываем при загрузке модуля
 cleanup_old_state_files()
+
+
+# ============================================
+# ФУНКЦИИ ДЛЯ ФОНОВОЙ ГЕНЕРАЦИИ ПРОФИЛЯ
+# ============================================
+
+def background_generate_profile(user_id: int, test_id: int, user_data_dict: dict):
+    """
+    Фоновая генерация AI-профиля и мыслей психолога
+    Запускается в отдельном потоке
+    """
+    try:
+        logger.info(f"🧠 Фоновая генерация для пользователя {user_id}")
+        
+        profile_code = user_data_dict.get("profile_data", {}).get("display_name")
+        
+        # Генерируем AI-профиль
+        profile = None
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            profile = loop.run_until_complete(
+                generate_ai_profile(user_id, user_data_dict)
+            )
+            loop.close()
+        except Exception as e:
+            logger.error(f"❌ Ошибка генерации AI-профиля: {e}")
+        
+        if profile:
+            # Сохраняем в память
+            user_data[user_id]['ai_generated_profile'] = profile
+            
+            # Сохраняем в отдельную таблицу
+            sync_db.save_psychologist_thought(
+                user_id=user_id,
+                thought_text=profile,
+                test_result_id=test_id,
+                thought_type='profile_description',
+                metadata={
+                    'profile_code': profile_code,
+                    'perception_type': user_data_dict.get("perception_type"),
+                    'thinking_level': user_data_dict.get("thinking_level"),
+                    'generation_time': time.time()
+                }
+            )
+            logger.info(f"✅ AI-профиль сохранен для {user_id}")
+        
+        # Генерируем мысли психолога
+        thoughts = None
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            thoughts = loop.run_until_complete(
+                generate_psychologist_thought(user_id, user_data_dict)
+            )
+            loop.close()
+        except Exception as e:
+            logger.error(f"❌ Ошибка генерации мыслей психолога: {e}")
+        
+        if thoughts:
+            # Сохраняем в память
+            user_data[user_id]['psychologist_thought'] = thoughts
+            
+            # Сохраняем в отдельную таблицу
+            sync_db.save_psychologist_thought(
+                user_id=user_id,
+                thought_text=thoughts,
+                test_result_id=test_id,
+                thought_type='psychologist_thought',
+                metadata={
+                    'profile_code': profile_code,
+                    'generation_time': time.time()
+                }
+            )
+            logger.info(f"✅ Мысли психолога сохранены для {user_id}")
+        
+        # Сохраняем обновленные данные пользователя
+        sync_db.save_user_to_db(user_id)
+        
+        logger.info(f"🎉 Фоновая генерация завершена для {user_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка в фоновой генерации: {e}")
+        import traceback
+        traceback.print_exc()
+
 
 # ============================================
 # ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ
@@ -339,6 +433,7 @@ def show_stage_1_intro(message, user_id: int, state_data: dict):
     state_data["stage1_current"] = 0
     logger.info(f"✅ stage1 инициализирован, stage1_current=0")
 
+
 def start_stage_1(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 1"""
     logger.info(f"🎬 start_stage_1 для user {user_id}")
@@ -352,6 +447,7 @@ def start_stage_1(message, user_id: int, state_data: dict):
     logger.info(f"✅ state_data обновлен: stage1_current=0")
     
     ask_stage_1_question(message, user_id, state_data)
+
 
 def ask_stage_1_question(message, user_id: int, state_data: dict):
     """Задаёт вопрос ЭТАПА 1"""
@@ -387,6 +483,7 @@ def ask_stage_1_question(message, user_id: int, state_data: dict):
     
     safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     logger.info(f"✅ Вопрос {current+1} отправлен")
+
 
 def handle_stage_1_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 1"""
@@ -466,6 +563,7 @@ def handle_stage_1_answer(call, user_id: int, state_data: dict):
     finally:
         state_data["processing"] = False
 
+
 def finish_stage_1(message, user_id: int, state_data: dict):
     """Завершение ЭТАПА 1"""
     logger.info(f"🏁 finish_stage_1 для user {user_id}")
@@ -482,7 +580,7 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 1 complete, type={perception_type}")
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+    # Сохраняем в БД
     sync_db.save_user_to_db(user_id)
     
     result_text = STAGE_1_FEEDBACK.get(perception_type, STAGE_1_FEEDBACK["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ"])
@@ -500,6 +598,7 @@ def finish_stage_1(message, user_id: int, state_data: dict):
     for key in ['stage1_current', 'stage1_last_answered', 'processing', 'perception_scores']:
         if key in state_data:
             del state_data[key]
+
 
 # ============================================
 # ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ
@@ -531,6 +630,7 @@ def show_stage_2_intro(message, user_id: int, state_data: dict):
     
     safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
 
+
 def start_stage_2(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 2"""
     logger.info(f"🎬 start_stage_2 для user {user_id}")
@@ -544,6 +644,7 @@ def start_stage_2(message, user_id: int, state_data: dict):
     })
     
     ask_stage_2_question(message, user_id, state_data)
+
 
 def ask_stage_2_question(message, user_id: int, state_data: dict):
     """Задаёт вопрос ЭТАПА 2"""
@@ -581,6 +682,7 @@ def ask_stage_2_question(message, user_id: int, state_data: dict):
         ))
     
     safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
+
 
 def handle_stage_2_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 2"""
@@ -656,6 +758,7 @@ def handle_stage_2_answer(call, user_id: int, state_data: dict):
     finally:
         state_data["processing"] = False
 
+
 def finish_stage_2(message, user_id: int, state_data: dict):
     """Завершение ЭТАПА 2"""
     logger.info(f"🏁 finish_stage_2 для user {user_id}")
@@ -678,7 +781,7 @@ def finish_stage_2(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 2 complete, level={thinking_level}")
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+    # Сохраняем в БД
     sync_db.save_user_to_db(user_id)
     
     result_text = STAGE_2_FEEDBACK.get((perception_type, level_group))
@@ -692,6 +795,7 @@ def finish_stage_2(message, user_id: int, state_data: dict):
     
     safe_send_message(message, text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     state_data["stage"] = 3
+
 
 # ============================================
 # ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ
@@ -725,6 +829,7 @@ def show_stage_3_intro(message, user_id: int, state_data: dict):
     
     safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
 
+
 def start_stage_3(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 3"""
     logger.info(f"🎬 start_stage_3 для user {user_id}")
@@ -738,6 +843,7 @@ def start_stage_3(message, user_id: int, state_data: dict):
     })
     
     ask_stage_3_question(message, user_id, state_data)
+
 
 def ask_stage_3_question(message, user_id: int, state_data: dict):
     """Задаёт вопрос ЭТАПА 3"""
@@ -770,6 +876,7 @@ def ask_stage_3_question(message, user_id: int, state_data: dict):
         ))
     
     safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
+
 
 def handle_stage_3_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 3"""
@@ -841,6 +948,7 @@ def handle_stage_3_answer(call, user_id: int, state_data: dict):
     finally:
         state_data["processing"] = False
 
+
 def finish_stage_3(message, user_id: int, state_data: dict):
     """Завершение ЭТАПА 3"""
     logger.info(f"🏁 finish_stage_3 для user {user_id}")
@@ -871,7 +979,7 @@ def finish_stage_3(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 3 complete, final_level={final_level}")
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+    # Сохраняем в БД
     sync_db.save_user_to_db(user_id)
     
     result_text = STAGE_3_FEEDBACK.get(behavior_level, STAGE_3_FEEDBACK[1])
@@ -883,6 +991,7 @@ def finish_stage_3(message, user_id: int, state_data: dict):
     
     safe_send_message(message, text, reply_markup=keyboard, delete_previous=True, keep_last=1)
     state_data["stage"] = 4
+
 
 # ============================================
 # ЭТАП 4: ТОЧКА РОСТА
@@ -916,6 +1025,7 @@ def show_stage_4_intro(message, user_id: int, state_data: dict):
     
     safe_send_message(message, intro_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
 
+
 def start_stage_4(message, user_id: int, state_data: dict):
     """Начало ЭТАПА 4"""
     logger.info(f"🎬 start_stage_4 для user {user_id}")
@@ -928,6 +1038,7 @@ def start_stage_4(message, user_id: int, state_data: dict):
     })
     
     ask_stage_4_question(message, user_id, state_data)
+
 
 def ask_stage_4_question(message, user_id: int, state_data: dict):
     """Задаёт вопрос ЭТАПА 4"""
@@ -959,6 +1070,7 @@ def ask_stage_4_question(message, user_id: int, state_data: dict):
         ))
     
     safe_send_message(message, question_text, reply_markup=keyboard, delete_previous=True, keep_last=1)
+
 
 def handle_stage_4_answer(call, user_id: int, state_data: dict):
     """Обработка ответа ЭТАПА 4"""
@@ -1018,6 +1130,7 @@ def handle_stage_4_answer(call, user_id: int, state_data: dict):
     finally:
         state_data["processing"] = False
 
+
 def finish_stage_4(message, user_id: int, state_data: dict):
     """Завершение ЭТАПА 4"""
     logger.info(f"🏁 finish_stage_4 для user {user_id}")
@@ -1047,7 +1160,7 @@ def finish_stage_4(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 4 complete, profile={profile_data.get('display_name', 'unknown')}")
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
+    # Сохраняем в БД
     sync_db.save_user_to_db(user_id)
     
     show_preliminary_profile(message, user_id)
@@ -1485,11 +1598,10 @@ def handle_stage_5_answer(call, user_id: int, state_data: dict):
 
 
 def finish_stage_5(message, user_id: int, state_data: dict):
-    """Завершение 5-го этапа"""
+    """Завершение 5-го этапа с полным сохранением в БД"""
     logger.info(f"🏁 finish_stage_5 для user {user_id}")
     
     stage5_answers = state_data.get("stage5_answers", [])
-    
     deep_patterns = analyze_stage5_results(stage5_answers)
     
     logger.info(f"📊 deep_patterns = {deep_patterns}")
@@ -1500,16 +1612,16 @@ def finish_stage_5(message, user_id: int, state_data: dict):
     
     logger.info(f"✅ User {user_id}: Stage 5 complete")
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно через sync_db
     # Получаем данные пользователя
     user_data_dict = user_data.get(user_id, {})
     
-    # Сохраняем результат теста
+    # Получаем profile_code
     profile_code = None
     if user_data_dict.get("profile_data"):
         profile_code = user_data_dict["profile_data"].get("display_name")
     
-    sync_db.save_test_result(
+    # Сохраняем результат теста и получаем test_id
+    test_id = sync_db.save_test_result(
         user_id=user_id,
         test_type='full_profile',
         results=user_data_dict,
@@ -1521,16 +1633,21 @@ def finish_stage_5(message, user_id: int, state_data: dict):
         confinement_model=user_data_dict.get("confinement_model")
     )
     
+    logger.info(f"📝 Результаты теста сохранены, test_id={test_id}")
+    
+    # Сохраняем test_id в user_data для фоновой генерации
+    user_data[user_id]['last_test_result_id'] = test_id
+    
     # Сохраняем пользователя
     sync_db.save_user_to_db(user_id)
     
-    # Сохраняем все ответы
+    # Сохраняем все ответы (из state_data)
     all_answers = state_data.get("all_answers", [])
     if all_answers:
         for answer in all_answers:
             sync_db.save_test_answer(
                 user_id=user_id,
-                test_result_id=None,
+                test_result_id=test_id,
                 stage=answer.get('stage', 0),
                 question_index=answer.get('question_index', 0),
                 question_text=answer.get('question', ''),
@@ -1544,6 +1661,33 @@ def finish_stage_5(message, user_id: int, state_data: dict):
                 target=answer.get('target')
             )
     
+    # Сохраняем ответы 5-го этапа
+    for answer in stage5_answers:
+        sync_db.save_test_answer(
+            user_id=user_id,
+            test_result_id=test_id,
+            stage=5,
+            question_index=answer.get('question_id', 0),
+            question_text=answer.get('question', ''),
+            answer_text=answer.get('answer', ''),
+            answer_value=answer.get('option', ''),
+            pattern=answer.get('pattern'),
+            target=answer.get('target')
+        )
+    
+    logger.info(f"💾 Все ответы сохранены для user {user_id}")
+    
+    # Запускаем фоновую генерацию AI-профиля и мыслей психолога
+    logger.info(f"🚀 Запускаем фоновую генерацию для пользователя {user_id}")
+    
+    background_thread = threading.Thread(
+        target=background_generate_profile,
+        args=(user_id, test_id, user_data_dict),
+        daemon=True
+    )
+    background_thread.start()
+    
+    # Показываем финальный профиль
     try:
         from handlers.profile import show_final_profile
         show_final_profile(message, user_id)
@@ -1551,7 +1695,7 @@ def finish_stage_5(message, user_id: int, state_data: dict):
         logger.error(f"❌ Не удалось импортировать show_final_profile: {e}")
         safe_send_message(
             message,
-            "✅ Тестирование завершено! Спасибо за участие.",
+            "✅ Тестирование завершено! Спасибо за участие.\n\n🧠 Я готовлю ваш психологический портрет...\n\nРезультат придет через несколько секунд.",
             delete_previous=True,
             keep_last=1
         )
