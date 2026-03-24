@@ -41,6 +41,7 @@ def connect() -> bool:
         _conn = psycopg2.connect(DATABASE_URL)
         _connected = True
         _create_tables()
+        _migrate_tables()  # ✅ Добавляем миграцию
         logger.info("✅ PostgreSQL подключена")
         return True
     except Exception as e:
@@ -155,16 +156,74 @@ def _create_tables():
         )
     """)
     
+    # Кэш идей на выходные
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fredi_weekend_ideas_cache (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            ideas_text TEXT NOT NULL,
+            main_vector TEXT,
+            main_level INTEGER,
+            created_at TIMESTAMP DEFAULT NOW(),
+            expires_at TIMESTAMP DEFAULT NOW() + INTERVAL '1 hour'
+        )
+    """)
+    
+    # Кэш анализа вопросов
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fredi_question_analysis_cache (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            question_hash INTEGER NOT NULL,
+            question_text TEXT,
+            analysis JSONB NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW(),
+            expires_at TIMESTAMP DEFAULT NOW() + INTERVAL '5 minutes'
+        )
+    """)
+    
     # Индексы
     cur.execute("CREATE INDEX IF NOT EXISTS idx_test_user ON fredi_test_results(user_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_events_user ON fredi_events(user_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_user ON fredi_reminders(user_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_date ON fredi_reminders(remind_at)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_uncompleted ON fredi_reminders(remind_at) WHERE completed_at IS NULL")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_weekend_cache_user ON fredi_weekend_ideas_cache(user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_weekend_cache_expires ON fredi_weekend_ideas_cache(expires_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_question_cache_hash ON fredi_question_analysis_cache(user_id, question_hash)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_question_cache_expires ON fredi_question_analysis_cache(expires_at)")
     
     _conn.commit()
     cur.close()
     logger.info("✅ Таблицы созданы")
+
+
+def _migrate_tables():
+    """Миграция: добавляем отсутствующие столбцы"""
+    cur = _conn.cursor()
+    
+    # Добавляем completed_at в fredi_reminders если нет
+    try:
+        cur.execute("""
+            ALTER TABLE fredi_reminders 
+            ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP
+        """)
+        _conn.commit()
+        logger.info("✅ Столбец completed_at добавлен в fredi_reminders")
+    except Exception as e:
+        logger.warning(f"⚠️ Столбец completed_at уже существует или ошибка: {e}")
+    
+    # Добавляем индекс для незавершенных напоминаний
+    try:
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_reminders_uncompleted 
+            ON fredi_reminders(remind_at) WHERE completed_at IS NULL
+        """)
+        _conn.commit()
+        logger.info("✅ Индекс для незавершенных напоминаний создан")
+    except Exception as e:
+        logger.warning(f"⚠️ Индекс уже существует или ошибка: {e}")
+    
+    cur.close()
 
 
 # ============================================
@@ -288,7 +347,7 @@ def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
 
 
 # ============================================
-# НАПОМИНАНИЯ (ДОБАВЛЕНО)
+# НАПОМИНАНИЯ
 # ============================================
 
 def add_reminder(user_id: int, reminder_type: str, remind_at, data: Dict = None) -> bool:
@@ -322,7 +381,7 @@ def get_user_reminders(user_id: int, include_sent: bool = False) -> List[Dict]:
             WHERE user_id = %s
         """
         if not include_sent:
-            query += " AND completed_at IS NULL"
+            query += " AND (completed_at IS NULL OR completed_at = '1970-01-01')"
         query += " ORDER BY remind_at DESC LIMIT 100"
         
         cur.execute(query, (user_id,))
@@ -361,6 +420,100 @@ def complete_reminder(reminder_id: int) -> bool:
         return True
     except Exception as e:
         logger.error(f"❌ complete_reminder: {e}")
+        return False
+
+
+# ============================================
+# КЭШ ИДЕЙ НА ВЫХОДНЫЕ
+# ============================================
+
+def get_cached_weekend_ideas(user_id: int) -> Optional[str]:
+    """Получить кэшированные идеи на выходные"""
+    if not ensure_connection():
+        return None
+    try:
+        cur = _conn.cursor()
+        cur.execute("""
+            SELECT ideas_text FROM fredi_weekend_ideas_cache
+            WHERE user_id = %s AND expires_at > NOW()
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (user_id,))
+        row = cur.fetchone()
+        cur.close()
+        return row[0] if row else None
+    except Exception as e:
+        logger.error(f"❌ get_cached_weekend_ideas: {e}")
+        return None
+
+
+def cache_weekend_ideas(user_id: int, ideas_text: str, main_vector: str, main_level: int) -> bool:
+    """Сохранить идеи на выходные в кэш"""
+    if not ensure_connection():
+        return False
+    try:
+        cur = _conn.cursor()
+        # Удаляем старые
+        cur.execute("DELETE FROM fredi_weekend_ideas_cache WHERE user_id = %s", (user_id,))
+        # Вставляем новые
+        cur.execute("""
+            INSERT INTO fredi_weekend_ideas_cache (user_id, ideas_text, main_vector, main_level, expires_at)
+            VALUES (%s, %s, %s, %s, NOW() + INTERVAL '1 hour')
+        """, (user_id, ideas_text, main_vector, main_level))
+        _conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        logger.error(f"❌ cache_weekend_ideas: {e}")
+        return False
+
+
+# ============================================
+# КЭШ АНАЛИЗА ВОПРОСОВ
+# ============================================
+
+def get_cached_question_analysis(user_id: int, question: str) -> Optional[Dict]:
+    """Получить кэшированный анализ вопроса"""
+    if not ensure_connection():
+        return None
+    question_hash = hash(question) % 1000000
+    try:
+        cur = _conn.cursor()
+        cur.execute("""
+            SELECT analysis FROM fredi_question_analysis_cache
+            WHERE user_id = %s AND question_hash = %s AND expires_at > NOW()
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (user_id, question_hash))
+        row = cur.fetchone()
+        cur.close()
+        if row and row[0]:
+            return json.loads(row[0])
+        return None
+    except Exception as e:
+        logger.error(f"❌ get_cached_question_analysis: {e}")
+        return None
+
+
+def cache_question_analysis(user_id: int, question: str, analysis: Dict) -> bool:
+    """Сохранить анализ вопроса в кэш"""
+    if not ensure_connection():
+        return False
+    question_hash = hash(question) % 1000000
+    try:
+        cur = _conn.cursor()
+        cur.execute("""
+            INSERT INTO fredi_question_analysis_cache (user_id, question_hash, question_text, analysis, expires_at)
+            VALUES (%s, %s, %s, %s, NOW() + INTERVAL '5 minutes')
+            ON CONFLICT (user_id, question_hash) DO UPDATE SET
+                analysis = EXCLUDED.analysis,
+                expires_at = NOW() + INTERVAL '5 minutes'
+        """, (user_id, question_hash, question[:500], Json(analysis)))
+        _conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        logger.error(f"❌ cache_question_analysis: {e}")
         return False
 
 
@@ -439,12 +592,18 @@ def get_stats() -> Dict:
         events = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM fredi_reminders")
         reminders = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM fredi_weekend_ideas_cache")
+        weekend_cache = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM fredi_question_analysis_cache")
+        question_cache = cur.fetchone()[0]
         cur.close()
         return {
             'users': users,
             'tests': tests,
             'events': events,
-            'reminders': reminders
+            'reminders': reminders,
+            'weekend_cache': weekend_cache,
+            'question_cache': question_cache
         }
     except Exception as e:
         logger.error(f"❌ get_stats: {e}")
@@ -480,6 +639,10 @@ __all__ = [
     'add_reminder',
     'get_user_reminders',
     'complete_reminder',
+    'get_cached_weekend_ideas',
+    'cache_weekend_ideas',
+    'get_cached_question_analysis',
+    'cache_question_analysis',
     'load_user_data',
     'load_user_context',
     'load_all_users',
