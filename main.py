@@ -3206,6 +3206,22 @@ async def check_api():
 # ЛОГИРОВАНИЕ ВСЕХ ЭТАПОВ ТЕСТИРОВАНИЯ
 # ============================================
 
+def log_db_stats():
+    """Логирует статистику по БД"""
+    try:
+        from db_instance import get_db_stats
+        stats = get_db_stats()
+        logger.info(f"📊 === СТАТИСТИКА БАЗЫ ДАННЫХ ===")
+        logger.info(f"   Всего пользователей в БД: {stats.get('total_users', 0)}")
+        logger.info(f"   С профилем: {stats.get('users_with_profile', 0)}")
+        logger.info(f"   Завершили тест: {stats.get('test_completed', 0)}")
+        logger.info(f"   Всего записей user_data: {stats.get('user_data_count', 0)}")
+        return stats
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения статистики БД: {e}")
+        return None
+
+
 @api_app.post("/api/log-test-stage")
 async def log_test_stage(request: Request):
     """
@@ -3389,10 +3405,21 @@ async def debug_all_users():
                 "profile_code": data.get('profile_data', {}).get('display_name')
             }
         
+        # Получаем статистику БД
+        from db_instance import get_db_stats
+        db_stats = get_db_stats()
+        
+        logger.info(f"📊 === СТАТИСТИКА ПОЛЬЗОВАТЕЛЕЙ ===")
+        logger.info(f"   В памяти: {len(users_info)} пользователей")
+        logger.info(f"   В БД: {db_stats.get('total_users', 0)} пользователей")
+        logger.info(f"   С профилем в БД: {db_stats.get('users_with_profile', 0)}")
+        logger.info(f"   Завершили тест в БД: {db_stats.get('test_completed', 0)}")
+        
         return JSONResponse({
             "success": True,
             "total_users": len(users_info),
-            "users": users_info
+            "users": users_info,
+            "db_stats": db_stats
         })
         
     except Exception as e:
@@ -3402,6 +3429,7 @@ async def debug_all_users():
             content={"success": False, "error": str(e)}
         )
 
+
 @api_app.get("/api/admin/all-users")
 async def admin_all_users():
     """Админский эндпоинт для просмотра всех пользователей в БД"""
@@ -3409,26 +3437,38 @@ async def admin_all_users():
         # Данные в памяти
         memory_users = {}
         for user_id, data in user_data.items():
-            memory_users[user_id] = {
+            memory_users[str(user_id)] = {
                 "test_completed": data.get('test_completed', False),
                 "has_profile": bool(data.get('profile_data')),
                 "profile_code": data.get('profile_data', {}).get('display_name'),
                 "answers_count": len(data.get('all_answers', []))
             }
         
-        # Данные из БД (если есть функция load_all_users_data)
-        from db_instance import load_all_users_data
-        db_users = load_all_users_data() if hasattr(db_instance, 'load_all_users_data') else {}
+        # Получаем статистику БД
+        from db_instance import get_db_stats, get_all_users_from_db
+        db_stats = get_db_stats()
+        db_users = get_all_users_from_db() if hasattr(db_instance, 'get_all_users_from_db') else {}
+        
+        logger.info(f"📊 === АДМИНСКАЯ СТАТИСТИКА ===")
+        logger.info(f"   В памяти: {len(memory_users)} пользователей")
+        logger.info(f"   В БД: {db_stats.get('total_users', 0)} пользователей")
+        logger.info(f"   С профилем в БД: {db_stats.get('users_with_profile', 0)}")
+        logger.info(f"   Завершили тест в БД: {db_stats.get('test_completed', 0)}")
+        logger.info(f"   Всего записей user_data: {db_stats.get('user_data_count', 0)}")
         
         return JSONResponse({
             "success": True,
             "memory": memory_users,
             "db": db_users,
             "memory_count": len(memory_users),
-            "db_count": len(db_users)
+            "db_count": db_stats.get('total_users', 0),
+            "db_with_profile": db_stats.get('users_with_profile', 0),
+            "db_test_completed": db_stats.get('test_completed', 0)
         })
     except Exception as e:
+        logger.error(f"❌ Error in admin_all_users: {e}")
         return JSONResponse({"success": False, "error": str(e)})
+
 
 @api_app.post("/api/save-test-results")
 async def save_test_results(request: Request):
@@ -3437,37 +3477,58 @@ async def save_test_results(request: Request):
         user_id = data.get('user_id')
         results = data.get('results', {})
         
-        print(f"🔍 ===== СОХРАНЕНИЕ ТЕСТА =====")
-        print(f"   user_id: {user_id}")
-        print(f"   results keys: {list(results.keys())}")
-        print(f"   profile_data: {bool(results.get('profile_data'))}")
-        print(f"   test_completed: {results.get('test_completed')}")
+        logger.info(f"🔍 ===== СОХРАНЕНИЕ ТЕСТА =====")
+        logger.info(f"   user_id: {user_id}")
+        logger.info(f"   results keys: {list(results.keys())}")
+        logger.info(f"   profile_data: {bool(results.get('profile_data'))}")
+        logger.info(f"   test_completed: {results.get('test_completed')}")
         
         if not user_id:
             raise HTTPException(status_code=400, detail="user_id required")
         
         user_id = int(user_id)
         
-        # Сохраняем
-        save_user(user_id, user_names.get(user_id), None)
-        save_user_data(user_id, results)
-        save_test_result(user_id, 'full_profile', results)
+        # Сохраняем в память
+        if user_id not in user_data:
+            user_data[user_id] = {}
         
-        print(f"✅ Данные сохранены для {user_id}")
-        print(f"   test_completed в БД: {results.get('test_completed')}")
+        user_data[user_id].update(results)
+        user_data[user_id]['test_completed'] = True
+        user_data[user_id]['test_completed_at'] = datetime.now().isoformat()
+        
+        # Сохраняем в БД
+        save_user(user_id, user_names.get(user_id), None)
+        save_user_data(user_id, user_data[user_id])
+        save_test_result(user_id, 'full_profile', user_data[user_id])
+        
+        logger.info(f"✅ Данные сохранены для {user_id}")
+        logger.info(f"   test_completed: {user_data[user_id].get('test_completed')}")
+        logger.info(f"   profile_data: {bool(user_data[user_id].get('profile_data'))}")
+        
+        # Получаем статистику после сохранения
+        from db_instance import get_db_stats
+        db_stats = get_db_stats()
+        
+        logger.info(f"📊 === СТАТИСТИКА ПОСЛЕ СОХРАНЕНИЯ ===")
+        logger.info(f"   Всего пользователей в БД: {db_stats.get('total_users', 0)}")
+        logger.info(f"   С профилем в БД: {db_stats.get('users_with_profile', 0)}")
+        logger.info(f"   Завершили тест в БД: {db_stats.get('test_completed', 0)}")
         
         return JSONResponse({
             "success": True,
-            "message": "Результаты сохранены"
+            "message": "Результаты сохранены",
+            "db_stats": db_stats
         })
         
     except Exception as e:
-        print(f"❌ Ошибка: {e}")
+        logger.error(f"❌ Ошибка: {e}")
         import traceback
         traceback.print_exc()
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": str(e)}
         )
+
+
 if __name__ == "__main__":
     main()
