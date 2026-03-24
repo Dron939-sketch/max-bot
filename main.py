@@ -3201,5 +3201,205 @@ async def check_api():
         "version": "9.6",
         "timestamp": datetime.now().isoformat()
     })
+
+# ============================================
+# ЛОГИРОВАНИЕ ВСЕХ ЭТАПОВ ТЕСТИРОВАНИЯ
+# ============================================
+
+@api_app.post("/api/log-test-stage")
+async def log_test_stage(request: Request):
+    """
+    Логирует прохождение каждого этапа теста
+    """
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        stage = data.get('stage')
+        question_index = data.get('question_index')
+        total_questions = data.get('total_questions')
+        answers_count = data.get('answers_count')
+        
+        logger.info(f"📊 === ЭТАП ТЕСТА {stage} ===")
+        logger.info(f"   user_id: {user_id}")
+        logger.info(f"   вопрос: {question_index + 1}/{total_questions}")
+        logger.info(f"   ответов в этапе: {answers_count}")
+        logger.info(f"   timestamp: {datetime.now().isoformat()}")
+        
+        return JSONResponse({"success": True})
+        
+    except Exception as e:
+        logger.error(f"❌ Error in log_test_stage: {e}")
+        return JSONResponse({"success": False, "error": str(e)})
+
+
+@api_app.post("/api/log-stage-complete")
+async def log_stage_complete(request: Request):
+    """
+    Логирует завершение этапа теста
+    """
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        stage = data.get('stage')
+        answers = data.get('answers', [])
+        stage_results = data.get('stage_results', {})
+        
+        logger.info(f"🎉 === ЭТАП {stage} ЗАВЕРШЕН ===")
+        logger.info(f"   user_id: {user_id}")
+        logger.info(f"   количество ответов: {len(answers)}")
+        logger.info(f"   результаты: {json.dumps(stage_results, ensure_ascii=False)[:200]}")
+        logger.info(f"   timestamp: {datetime.now().isoformat()}")
+        
+        # Сохраняем в user_data для отладки
+        if user_id not in user_data:
+            user_data[user_id] = {}
+        
+        stage_key = f'stage{stage}_completed_at'
+        user_data[user_id][stage_key] = datetime.now().isoformat()
+        
+        return JSONResponse({"success": True})
+        
+    except Exception as e:
+        logger.error(f"❌ Error in log_stage_complete: {e}")
+        return JSONResponse({"success": False, "error": str(e)})
+
+
+@api_app.post("/api/log-test-complete")
+async def log_test_complete(request: Request):
+    """
+    Логирует полное завершение теста
+    """
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        results = data.get('results', {})
+        
+        logger.info(f"🏆 === ТЕСТ ПОЛНОСТЬЮ ЗАВЕРШЕН ===")
+        logger.info(f"   user_id: {user_id}")
+        logger.info(f"   profile_data: {bool(results.get('profile_data'))}")
+        logger.info(f"   profile_code: {results.get('profile_data', {}).get('display_name')}")
+        logger.info(f"   perception_type: {results.get('perception_type')}")
+        logger.info(f"   thinking_level: {results.get('thinking_level')}")
+        logger.info(f"   answers_count: {len(results.get('all_answers', []))}")
+        logger.info(f"   timestamp: {datetime.now().isoformat()}")
+        
+        return JSONResponse({"success": True})
+        
+    except Exception as e:
+        logger.error(f"❌ Error in log_test_complete: {e}")
+        return JSONResponse({"success": False, "error": str(e)})
+
+
+@api_app.post("/api/log-interpretation-saved")
+async def log_interpretation_saved(request: Request):
+    """
+    Логирует сохранение интерпретации
+    """
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        interpretation_length = data.get('length', 0)
+        
+        logger.info(f"🧠 === ИНТЕРПРЕТАЦИЯ СОХРАНЕНА ===")
+        logger.info(f"   user_id: {user_id}")
+        logger.info(f"   длина: {interpretation_length} символов")
+        logger.info(f"   timestamp: {datetime.now().isoformat()}")
+        
+        return JSONResponse({"success": True})
+        
+    except Exception as e:
+        logger.error(f"❌ Error in log_interpretation_saved: {e}")
+        return JSONResponse({"success": False, "error": str(e)})
+
+
+@api_app.post("/api/log-thought-saved")
+async def log_thought_saved(request: Request):
+    """
+    Логирует сохранение мыслей психолога
+    """
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        thought_length = data.get('length', 0)
+        
+        logger.info(f"💭 === МЫСЛИ ПСИХОЛОГА СОХРАНЕНЫ ===")
+        logger.info(f"   user_id: {user_id}")
+        logger.info(f"   длина: {thought_length} символов")
+        logger.info(f"   timestamp: {datetime.now().isoformat()}")
+        
+        return JSONResponse({"success": True})
+        
+    except Exception as e:
+        logger.error(f"❌ Error in log_thought_saved: {e}")
+        return JSONResponse({"success": False, "error": str(e)})
+
+
+@api_app.get("/api/test-progress/{user_id}")
+async def get_test_progress_log(user_id: int):
+    """
+    Получить информацию о прогрессе теста пользователя
+    """
+    try:
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        stages_completed = []
+        for i in range(1, 6):
+            stage_key = f'stage{i}_completed_at'
+            if stage_key in user_info:
+                stages_completed.append({
+                    "stage": i,
+                    "completed_at": user_info[stage_key]
+                })
+        
+        return JSONResponse({
+            "success": True,
+            "user_id": user_id,
+            "test_completed": user_info.get('test_completed', False),
+            "test_completed_at": user_info.get('test_completed_at'),
+            "stages_completed": stages_completed,
+            "has_profile": bool(user_info.get('profile_data')),
+            "has_interpretation": bool(user_info.get('ai_generated_profile')),
+            "has_thought": bool(user_info.get('psychologist_thought')),
+            "answers_count": len(user_info.get('all_answers', []))
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_test_progress_log: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/debug-all-users")
+async def debug_all_users():
+    """
+    Показать всех пользователей в памяти
+    """
+    try:
+        users_info = {}
+        for user_id, data in user_data.items():
+            users_info[user_id] = {
+                "test_completed": data.get('test_completed', False),
+                "has_profile": bool(data.get('profile_data')),
+                "has_interpretation": bool(data.get('ai_generated_profile')),
+                "has_thought": bool(data.get('psychologist_thought')),
+                "answers_count": len(data.get('all_answers', [])),
+                "profile_code": data.get('profile_data', {}).get('display_name')
+            }
+        
+        return JSONResponse({
+            "success": True,
+            "total_users": len(users_info),
+            "users": users_info
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in debug_all_users: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
 if __name__ == "__main__":
     main()
