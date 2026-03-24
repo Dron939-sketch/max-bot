@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Синхронные обертки для работы с БД - для вызовов из любого потока
-ВЕРСИЯ 2.4 - ИСПРАВЛЕНО: принимает 10 параметров в save_test_result
+ВЕРСИЯ 2.5 - ИСПРАВЛЕНО: импорт save_test_result_full_async
 """
 
 import logging
@@ -13,7 +13,7 @@ from typing import Optional, Dict, Any, List
 
 from db_instance import db_loop_manager, db, save_user_to_db as db_save_user
 from db_instance import save_telegram_user as db_save_telegram_user
-from db_instance import save_test_result_to_db_async as async_save_test_result
+from db_instance import save_test_result_full_async as async_save_test_result
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +297,36 @@ class SyncDB:
             return result if result is not None else None
         except Exception as e:
             logger.error(f"❌ Ошибка get_telegram_user: {e}")
+            return None
+    
+    @staticmethod
+    def save_user_context(user_id: int, context: Dict[str, Any]) -> bool:
+        """Синхронное сохранение контекста пользователя"""
+        try:
+            from db_instance import save_user_context
+            return save_user_context(user_id, context)
+        except Exception as e:
+            logger.error(f"❌ Ошибка save_user_context: {e}")
+            return False
+    
+    @staticmethod
+    def get_user_goals(user_id: int, limit: int = 10) -> List[Dict]:
+        """Синхронное получение целей пользователя"""
+        try:
+            from db_instance import get_user_goals
+            return get_user_goals(user_id, limit)
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_user_goals: {e}")
+            return []
+    
+    @staticmethod
+    def save_goal(user_id: int, goal_text: str) -> Optional[int]:
+        """Синхронное сохранение цели"""
+        try:
+            from db_instance import save_goal
+            return save_goal(user_id, goal_text)
+        except Exception as e:
+            logger.error(f"❌ Ошибка save_goal: {e}")
             return None
 
 
