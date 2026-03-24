@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Синхронные обертки для работы с БД - для вызовов из любого потока
-ВЕРСИЯ 2.3 - ИСПРАВЛЕНО: добавлен импорт save_test_result_to_db
+ВЕРСИЯ 2.4 - ИСПРАВЛЕНО: принимает 10 параметров в save_test_result
 """
 
 import logging
@@ -158,18 +158,26 @@ class SyncDB:
         perception_type: str = None,
         thinking_level: int = None,
         vectors: Dict = None,
-        behavioral_levels: Dict = None,
         deep_patterns: Dict = None,
         confinement_model: Dict = None
     ) -> Optional[int]:
-        """Синхронное сохранение результата теста"""
+        """
+        Синхронное сохранение результата теста
+        Принимает 9 параметров + results (всего 10 параметров)
+        """
         try:
-            # ✅ Используем импортированную функцию async_save_test_result
+            # Вызываем асинхронную функцию сохранения
             result = db_loop_manager.run_coro(
-                async_save_test_result,  # ← функция из db_instance
-                user_id, test_type, results, profile_code,
-                perception_type, thinking_level, vectors,
-                behavioral_levels, deep_patterns, confinement_model,
+                async_save_test_result,
+                user_id, 
+                test_type, 
+                results, 
+                profile_code,
+                perception_type, 
+                thinking_level, 
+                vectors,
+                deep_patterns, 
+                confinement_model,
                 timeout=30
             )
             return result if result is not None else None
