@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Сервисные функции для работы с API и генерации ответов
-Версия 9.8.3 - С ДИАГНОСТИКОЙ speech_to_text
+Версия 9.8.4 - ДОБАВЛЕНА ПОГОДА И УЛУЧШЕНА ДИАГНОСТИКА
 """
 
 import os
@@ -146,6 +146,108 @@ def make_json_serializable(obj):
     if hasattr(obj, '__dict__'):
         return make_json_serializable(obj.__dict__)
     return str(obj)
+
+
+# ============================================
+# ПОГОДА (OPENWEATHER)
+# ============================================
+
+async def get_weather(city: str, lang: str = "ru") -> Optional[Dict[str, Any]]:
+    """
+    Получает погоду для города через OpenWeather API
+    
+    Args:
+        city: название города
+        lang: язык ответа (ru, en, и т.д.)
+    
+    Returns:
+        dict: информация о погоде или None при ошибке
+    """
+    if not OPENWEATHER_API_KEY:
+        logger.error("❌ OPENWEATHER_API_KEY не настроен")
+        return None
+    
+    if not city or not city.strip():
+        logger.warning("⚠️ Город не указан")
+        return None
+    
+    city = city.strip()
+    logger.info(f"🌤️ Запрос погоды для города: {city}")
+    
+    url = "https://api.openweathermap.org/data/2.5/weather"
+    params = {
+        "q": city,
+        "appid": OPENWEATHER_API_KEY,
+        "units": "metric",
+        "lang": lang
+    }
+    
+    try:
+        client = await get_http_client()
+        if client is None:
+            logger.error("❌ Не удалось получить HTTPX клиент")
+            return None
+        
+        response = await client.get(url, params=params, timeout=10.0)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Маппинг иконок на эмодзи
+            icon_map = {
+                "01d": "☀️", "01n": "🌙",
+                "02d": "⛅", "02n": "☁️",
+                "03d": "☁️", "03n": "☁️",
+                "04d": "☁️", "04n": "☁️",
+                "09d": "🌧️", "09n": "🌧️",
+                "10d": "🌦️", "10n": "🌧️",
+                "11d": "⛈️", "11n": "⛈️",
+                "13d": "❄️", "13n": "❄️",
+                "50d": "🌫️", "50n": "🌫️"
+            }
+            
+            icon_code = data["weather"][0]["icon"]
+            weather_emoji = icon_map.get(icon_code, "🌡️")
+            
+            weather = {
+                "city": data.get("name", city),
+                "temp": round(data["main"]["temp"]),
+                "feels_like": round(data["main"]["feels_like"]),
+                "temp_min": round(data["main"]["temp_min"]),
+                "temp_max": round(data["main"]["temp_max"]),
+                "humidity": data["main"]["humidity"],
+                "pressure": data["main"]["pressure"],
+                "description": data["weather"][0]["description"].capitalize(),
+                "icon": icon_code,
+                "emoji": weather_emoji,
+                "wind_speed": round(data["wind"]["speed"]),
+                "clouds": data["clouds"]["all"] if "clouds" in data else 0,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            logger.info(f"✅ Погода получена: {weather['city']}, {weather['temp']}°C, {weather['description']}")
+            return weather
+            
+        elif response.status_code == 404:
+            logger.warning(f"⚠️ Город не найден: {city}")
+            return None
+        elif response.status_code == 401:
+            logger.error("❌ Неверный API ключ OpenWeather")
+            return None
+        elif response.status_code == 429:
+            logger.error("❌ Превышен лимит запросов к OpenWeather")
+            return None
+        else:
+            logger.error(f"❌ OpenWeather API error {response.status_code}: {response.text[:200]}")
+            return None
+            
+    except httpx.TimeoutException as e:
+        logger.error(f"❌ Таймаут при запросе погоды: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения погоды: {e}")
+        logger.error(traceback.format_exc())
+        return None
 
 
 # ============================================
@@ -1212,6 +1314,7 @@ async def generate_suggestions(question: str, answer: str, profile_code: str, mo
         "Какие есть варианты?"
     ]
 
+
 # ============================================
 # ФУНКЦИИ ДЛЯ СОХРАНЕНИЯ В БД
 # ============================================
@@ -1312,9 +1415,13 @@ __all__ = [
     'call_deepseek',
     'speech_to_text',
     'text_to_speech',
+    'get_weather',  # новая функция погоды
     'bold',
     'italic',
     'emoji_text',
     'make_json_serializable',
-    'close_http_client'
+    'close_http_client',
+    'save_generated_content_to_db',
+    'generate_psychologist_thought_with_save',
+    'generate_ai_profile_with_save'
 ]
