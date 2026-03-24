@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики целей и маршрутов для MAX
-Версия 2.4 - ИСПРАВЛЕНО: замена db на синхронные функции
+Версия 2.3 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
 """
 
 import logging
 import time
 import asyncio
-import threading
+import threading  # ✅ ДОБАВЛЕНО
 from typing import Dict, Any, List, Optional
 
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
@@ -34,41 +34,34 @@ from state import (
     TestStates, user_names, clear_state
 )
 
-# ✅ ИСПРАВЛЕНО: импорт синхронных функций из db_instance
-from db_instance import (
-    save_user,
-    save_user_data,
-    save_context,
-    save_test_result,
-    log_event,
-    add_reminder,
-    get_user_reminders,
-    complete_reminder,
-    load_user_data,
-    load_user_context,
-    load_all_users,
-    get_stats
-)
+# ✅ ДОБАВЛЕНО: импорт для БД
+from db_instance import db, save_user_to_db
 
 # Импорты из formatters.py
 from formatters import bold, italic, clean_text_for_safe_display
 
 logger = logging.getLogger(__name__)
 
-
 # ============================================
-# ✅ ФУНКЦИЯ ДЛЯ ЗАПУСКА СИНХРОННЫХ ВЫЗОВОВ В ФОНЕ
+# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
 # ============================================
 
-def run_sync_in_background(func, *args, **kwargs):
-    """Запускает синхронную функцию в отдельном потоке"""
+def run_async_task(coro_func, *args, **kwargs):
+    """
+    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
+    """
     def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            func(*args, **kwargs)
+            coro = coro_func(*args, **kwargs)
+            loop.run_until_complete(coro)
         except Exception as e:
-            logger.error(f"❌ Ошибка в фоновой задаче: {e}")
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+        finally:
+            loop.close()
+    
     threading.Thread(target=_wrapper, daemon=True).start()
-
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -100,15 +93,14 @@ def get_user_name(user_id: int) -> str:
     """Получает имя пользователя"""
     return user_names.get(user_id, "друг")
 
-
 # ============================================
-# ✅ ИСПРАВЛЕНО: СИНХРОННЫЕ ФУНКЦИИ ДЛЯ БД
+# ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
 # ============================================
 
-def save_goal_to_db_sync(user_id: int, goal_data: Dict[str, Any], status: str = "selected"):
-    """Синхронно сохраняет выбранную цель в БД"""
+async def save_goal_to_db(user_id: int, goal_data: Dict[str, Any], status: str = "selected"):
+    """Сохраняет выбранную цель в БД"""
     try:
-        log_event(
+        await db.log_event(
             user_id,
             'goal_selected',
             {
@@ -124,10 +116,11 @@ def save_goal_to_db_sync(user_id: int, goal_data: Dict[str, Any], status: str = 
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения цели для {user_id}: {e}")
 
-def save_route_to_db_sync(user_id: int, route_data: Dict[str, Any], goal_data: Dict[str, Any]):
-    """Синхронно сохраняет маршрут в БД"""
+async def save_route_to_db(user_id: int, route_data: Dict[str, Any], goal_data: Dict[str, Any]):
+    """Сохраняет маршрут в БД"""
     try:
         # Сохраняем в user_routes
+        from state import user_routes
         user_routes[user_id] = {
             'route_data': route_data,
             'goal': goal_data,
@@ -136,8 +129,19 @@ def save_route_to_db_sync(user_id: int, route_data: Dict[str, Any], goal_data: D
             'started_at': time.time()
         }
         
+        # Сохраняем в таблицу маршрутов
+        await db.save_user_route(
+            user_id=user_id,
+            route_data={
+                'route': route_data,
+                'goal': goal_data
+            },
+            current_step=1,
+            progress=[]
+        )
+        
         # Логируем событие
-        log_event(
+        await db.log_event(
             user_id,
             'route_started',
             {
@@ -150,25 +154,33 @@ def save_route_to_db_sync(user_id: int, route_data: Dict[str, Any], goal_data: D
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения маршрута для {user_id}: {e}")
 
-def update_route_progress_in_db_sync(user_id: int, step: int, progress: List[int]):
-    """Синхронно обновляет прогресс по маршруту в БД"""
+async def update_route_progress_in_db(user_id: int, step: int, progress: List[int]):
+    """Обновляет прогресс по маршруту в БД"""
     try:
-        log_event(
-            user_id,
-            'route_step_completed',
-            {
-                'step': step,
-                'progress': progress,
-                'timestamp': time.time()
-            }
-        )
+        route_data = user_routes.get(user_id, {})
+        if route_data:
+            await db.update_user_route(
+                route_id=route_data.get('route_id'),  # Нужно хранить route_id
+                current_step=step,
+                progress=progress
+            )
+            
+            await db.log_event(
+                user_id,
+                'route_step_completed',
+                {
+                    'step': step,
+                    'progress': progress,
+                    'timestamp': time.time()
+                }
+            )
     except Exception as e:
         logger.error(f"❌ Ошибка обновления прогресса маршрута для {user_id}: {e}")
 
-def save_feasibility_result_to_db_sync(user_id: int, goal_data: Dict[str, Any], result: Dict[str, Any]):
-    """Синхронно сохраняет результат проверки реальности в БД"""
+async def save_feasibility_result_to_db(user_id: int, goal_data: Dict[str, Any], result: Dict[str, Any]):
+    """Сохраняет результат проверки реальности в БД"""
     try:
-        log_event(
+        await db.log_event(
             user_id,
             'feasibility_checked',
             {
@@ -181,7 +193,6 @@ def save_feasibility_result_to_db_sync(user_id: int, goal_data: Dict[str, Any], 
         )
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения результата проверки для {user_id}: {e}")
-
 
 # ============================================
 # КАТЕГОРИИ ЦЕЛЕЙ (для обратной совместимости)
@@ -210,6 +221,7 @@ def show_goals_categories(message, user_id: int):
 👇 <b>Куда двинемся?</b>
 """
     
+    # Строим клавиатуру с основными категориями
     keyboard = InlineKeyboardMarkup()
     keyboard.row(
         InlineKeyboardButton("🗣 Отношения", callback_data="goal_cat_relations"),
@@ -240,6 +252,7 @@ def show_goals_for_category(call, category: str):
     
     mode = user_data_dict.get("communication_mode", "coach")
     
+    # Определяем цели для категории
     category_goals = {
         "relations": [
             {"id": "improve_relations", "name": "Улучшить отношения с близкими", "time": "4-6 недель", "difficulty": "medium", "description": "Построй гармоничные отношения с семьей и друзьями"},
@@ -284,6 +297,7 @@ def show_goals_for_category(call, category: str):
         )
         return
     
+    # Названия категорий
     category_names = {
         "relations": "🗣 Отношения",
         "money": "💰 Деньги",
@@ -301,8 +315,10 @@ def show_goals_for_category(call, category: str):
 👇 <b>Выбери конкретную цель:</b>
 """
     
+    # Строим клавиатуру с целями
     keyboard = InlineKeyboardMarkup()
     for goal in goals:
+        # Определяем эмодзи сложности
         difficulty_emoji = {
             "easy": "🟢",
             "medium": "🟡", 
@@ -332,6 +348,7 @@ def select_goal(call, goal_id: str):
     
     mode = user_data_dict.get("communication_mode", "coach")
     
+    # Ищем цель по ID во всех категориях
     goal_info = find_goal_by_id(goal_id, mode)
     
     if not goal_info:
@@ -343,10 +360,11 @@ def select_goal(call, goal_id: str):
         )
         return
     
+    # Сохраняем выбранную цель
     update_user_state_data(user_id, current_goal=goal_info)
     
-    # ✅ ИСПРАВЛЕНО: синхронное сохранение в фоне
-    run_sync_in_background(save_goal_to_db_sync, user_id, goal_info, "selected")
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_goal_to_db, user_id, goal_info, "selected")
     
     text = f"""
 🧠 <b>ВЫБРАННАЯ ЦЕЛЬ</b>
@@ -380,6 +398,7 @@ def select_goal(call, goal_id: str):
 async def get_dynamic_destinations(profile_code: str, mode: str) -> List[Dict]:
     """Динамически подбирает цели под профиль и режим"""
     
+    # Парсим профиль (СБ-4_ТФ-4_УБ-4_ЧВ-4)
     parts = profile_code.split('_')
     scores = {}
     for part in parts:
@@ -390,10 +409,12 @@ async def get_dynamic_destinations(profile_code: str, mode: str) -> List[Dict]:
     if not scores:
         scores = {"СБ": 4, "ТФ": 4, "УБ": 4, "ЧВ": 4}
     
+    # Находим слабые и сильные стороны
     sorted_vectors = sorted(scores.items(), key=lambda x: x[1])
     weakest = sorted_vectors[0] if sorted_vectors else ("СБ", 4)
     strongest = sorted_vectors[-1] if sorted_vectors else ("ЧВ", 4)
     
+    # База целей для разных режимов
     destinations_db = {
         "coach": {
             "weak": {
@@ -540,17 +561,22 @@ async def get_dynamic_destinations(profile_code: str, mode: str) -> List[Dict]:
     
     mode_db = destinations_db.get(mode, destinations_db["coach"])
     
+    # Собираем цели
     destinations = []
     
+    # Цели для слабого вектора
     if "weak" in mode_db and weakest[0] in mode_db["weak"]:
         destinations.extend(mode_db["weak"][weakest[0]])
     
+    # Цели для сильного вектора (развитие силы)
     if "strong" in mode_db and strongest[0] in mode_db["strong"]:
         destinations.extend(mode_db["strong"][strongest[0]])
     
+    # Добавляем общие цели
     if "general" in mode_db:
         destinations.extend(mode_db["general"])
     
+    # Убираем дубликаты по id
     seen = set()
     unique_destinations = []
     for dest in destinations:
@@ -558,7 +584,7 @@ async def get_dynamic_destinations(profile_code: str, mode: str) -> List[Dict]:
             seen.add(dest["id"])
             unique_destinations.append(dest)
     
-    return unique_destinations[:9]
+    return unique_destinations[:9]  # Не больше 9 целей
 
 
 async def show_dynamic_destinations(call: CallbackQuery, state_data: Dict):
@@ -575,6 +601,7 @@ async def show_dynamic_destinations(call: CallbackQuery, state_data: Dict):
     profile_data = user_data_dict.get("profile_data", {})
     profile_code = profile_data.get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
     
+    # Получаем динамические цели
     destinations = await get_dynamic_destinations(profile_code, mode)
     
     text = f"""
@@ -588,9 +615,11 @@ async def show_dynamic_destinations(call: CallbackQuery, state_data: Dict):
 👇 {bold('Куда двинемся?')}
 """
     
+    # Строим клавиатуру
     keyboard = InlineKeyboardMarkup()
     
     for dest in destinations:
+        # Определяем эмодзи сложности
         difficulty_emoji = {
             "easy": "🟢",
             "medium": "🟡",
@@ -598,17 +627,35 @@ async def show_dynamic_destinations(call: CallbackQuery, state_data: Dict):
         }.get(dest.get("difficulty", "medium"), "⚪")
         
         button_text = f"{difficulty_emoji} {dest['name']}"
-        keyboard.add(InlineKeyboardButton(text=button_text, callback_data=f"dynamic_dest_{dest['id']}"))
+        
+        keyboard.add(InlineKeyboardButton(
+            text=button_text,
+            callback_data=f"dynamic_dest_{dest['id']}"
+        ))
     
-    keyboard.add(InlineKeyboardButton(text="✏️ Сформулирую сам", callback_data="custom_destination"))
-    keyboard.add(InlineKeyboardButton(text="◀️ НАЗАД", callback_data="back_to_mode_selected"))
+    keyboard.add(InlineKeyboardButton(
+        text="✏️ Сформулирую сам", 
+        callback_data="custom_destination"
+    ))
+    keyboard.add(InlineKeyboardButton(
+        text="◀️ НАЗАД", 
+        callback_data="back_to_mode_selected"
+    ))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(
+        call.message,
+        text,
+        reply_markup=keyboard,
+        parse_mode='HTML',
+        delete_previous=True
+    )
     set_state(user_id, TestStates.destination_selection)
 
 
 async def show_theoretical_path(call: CallbackQuery, state_data: Dict, goal_info: Dict):
-    """Показывает теоретический путь к цели после её выбора"""
+    """
+    Показывает теоретический путь к цели после её выбора
+    """
     
     user_id = call.from_user.id
     context = get_user_context_obj(user_id)
@@ -617,12 +664,16 @@ async def show_theoretical_path(call: CallbackQuery, state_data: Dict, goal_info
     goal_id = goal_info.get("id", "income_growth")
     mode = state_data.get("communication_mode", "coach")
     
+    # Получаем теоретический путь из reality_check
     path = get_theoretical_path(goal_id, mode)
     
+    # Сохраняем путь в state
     update_user_state_data(user_id, theoretical_path=path, current_destination=goal_info)
     
-    run_sync_in_background(save_goal_to_db_sync, user_id, goal_info, "in_progress")
+    # ✅ ИСПРАВЛЕНО: Сохраняем цель в БД через run_async_task
+    run_async_task(save_goal_to_db, user_id, goal_info, "in_progress")
     
+    # Форматируем текст пути для отображения
     path_text = path.get('formatted_text', 'Маршрут строится...')
     
     text = f"""
@@ -646,7 +697,13 @@ async def show_theoretical_path(call: CallbackQuery, state_data: Dict, goal_info
     keyboard.add(InlineKeyboardButton(text="🔄 ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     keyboard.add(InlineKeyboardButton(text="◀️ НАЗАД", callback_data="back_to_mode_selected"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(
+        call.message,
+        text,
+        reply_markup=keyboard,
+        parse_mode='HTML',
+        delete_previous=True
+    )
     set_state(user_id, TestStates.theoretical_path_shown)
 
 
@@ -660,8 +717,10 @@ async def handle_dynamic_destination(call: CallbackQuery, state_data: Dict):
     mode = user_data_dict.get("communication_mode", "coach")
     profile_code = user_data_dict.get("profile_data", {}).get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
     
+    # Получаем все цели
     all_destinations = await get_dynamic_destinations(profile_code, mode)
     
+    # Находим выбранную
     dest_info = None
     for dest in all_destinations:
         if dest["id"] == dest_id:
@@ -672,6 +731,7 @@ async def handle_dynamic_destination(call: CallbackQuery, state_data: Dict):
         await call.answer("❌ Цель не найдена")
         return
     
+    # ПОКАЗЫВАЕМ ТЕОРЕТИЧЕСКИЙ ПУТЬ
     await show_theoretical_path(call, state_data, dest_info)
 
 
@@ -693,8 +753,15 @@ async def custom_destination(call: CallbackQuery, state_data: Dict):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton(text="◀️ НАЗАД", callback_data="show_dynamic_destinations"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(
+        call.message,
+        text,
+        reply_markup=keyboard,
+        parse_mode='HTML',
+        delete_previous=True
+    )
     
+    # Устанавливаем состояние ожидания цели
     set_state(user_id, "awaiting_custom_goal")
 
 
@@ -703,10 +770,13 @@ async def custom_destination(call: CallbackQuery, state_data: Dict):
 # ============================================
 
 async def show_reality_check(call: CallbackQuery, state_data: Dict):
-    """Запускает проверку реальности для выбранной цели"""
+    """
+    Запускает проверку реальности для выбранной цели
+    """
     user_id = call.from_user.id
     context = get_user_context_obj(user_id)
     
+    # Проверяем, есть ли цель
     goal = state_data.get("current_destination")
     if not goal:
         text = f"""
@@ -723,14 +793,19 @@ async def show_reality_check(call: CallbackQuery, state_data: Dict):
         safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
         return
     
+    # Проверяем, есть ли базовый контекст
     if not (context and getattr(context, 'life_context_complete', False)):
+        # Если нет — собираем
         await start_life_context_collection(call, state_data, goal)
     else:
+        # Если есть — задаём целевые вопросы
         await ask_goal_specific_questions(call, state_data, goal)
 
 
 async def start_life_context_collection(call: CallbackQuery, state_data: Dict, goal: Dict):
-    """Сбор базового контекста жизни (1 раз)"""
+    """
+    Сбор базового контекста жизни (1 раз)
+    """
     
     user_id = call.from_user.id
     user_name = get_user_name(user_id)
@@ -752,13 +827,21 @@ async def start_life_context_collection(call: CallbackQuery, state_data: Dict, g
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton(text="⏭ ПРОПУСТИТЬ (будет неточно)", callback_data="skip_life_context"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(
+        call.message,
+        text,
+        reply_markup=keyboard,
+        parse_mode='HTML',
+        delete_previous=True
+    )
     set_state(user_id, TestStates.collecting_life_context)
     update_user_state_data(user_id, pending_goal=goal)
 
 
 async def ask_goal_specific_questions(call: CallbackQuery, state_data: Dict, goal: Dict):
-    """Задаёт вопросы, специфичные для цели"""
+    """
+    Задаёт вопросы, специфичные для цели
+    """
     
     user_id = call.from_user.id
     context = get_user_context_obj(user_id)
@@ -786,13 +869,21 @@ async def ask_goal_specific_questions(call: CallbackQuery, state_data: Dict, goa
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton(text="⏭ ПРОПУСТИТЬ (общий план)", callback_data="skip_goal_questions"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(
+        call.message,
+        text,
+        reply_markup=keyboard,
+        parse_mode='HTML',
+        delete_previous=True
+    )
     set_state(user_id, TestStates.collecting_goal_context)
     update_user_state_data(user_id, pending_goal=goal)
 
 
 async def calculate_and_show_feasibility(call: CallbackQuery, state_data: Dict):
-    """Рассчитывает достижимость и показывает результат"""
+    """
+    Рассчитывает достижимость и показывает результат
+    """
     
     context = get_user_context_obj(call.from_user.id)
     user_name = get_user_name(call.from_user.id)
@@ -805,8 +896,10 @@ async def calculate_and_show_feasibility(call: CallbackQuery, state_data: Dict):
     goal_id = goal.get("id", "income_growth")
     mode = state_data.get("communication_mode", "coach")
     
+    # Получаем теоретический путь
     path = get_theoretical_path(goal_id, mode)
     
+    # Собираем контекст
     life_context = {}
     if context:
         life_context = {
@@ -819,11 +912,14 @@ async def calculate_and_show_feasibility(call: CallbackQuery, state_data: Dict):
     goal_context = state_data.get("goal_context", {})
     profile = state_data.get("profile_data", {})
     
+    # Рассчитываем
     result = calculate_feasibility(path, life_context, goal_context, profile)
     
+    # Сохраняем результат
     update_user_state_data(call.from_user.id, feasibility_result=result)
     
-    run_sync_in_background(save_feasibility_result_to_db_sync, call.from_user.id, goal, result)
+    # ✅ ИСПРАВЛЕНО: Сохраняем результат в БД через run_async_task
+    run_async_task(save_feasibility_result_to_db, call.from_user.id, goal, result)
     
     text = f"""
 🧠 {bold('ФРЕДИ: РЕАЛЬНОСТЬ ЦЕЛИ')}
@@ -851,12 +947,20 @@ async def calculate_and_show_feasibility(call: CallbackQuery, state_data: Dict):
     keyboard.add(InlineKeyboardButton(text="📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal"))
     keyboard.add(InlineKeyboardButton(text="◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(
+        call.message,
+        text,
+        reply_markup=keyboard,
+        parse_mode='HTML',
+        delete_previous=True
+    )
     set_state(call.from_user.id, TestStates.feasibility_result)
 
 
 async def skip_life_context(call: CallbackQuery, state_data: Dict):
-    """Пропускает сбор жизненного контекста"""
+    """
+    Пропускает сбор жизненного контекста
+    """
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
     text = f"""
@@ -876,16 +980,21 @@ async def skip_life_context(call: CallbackQuery, state_data: Dict):
 
 
 async def skip_goal_questions(call: CallbackQuery, state_data: Dict):
-    """Пропускает целевые вопросы"""
+    """
+    Пропускает целевые вопросы
+    """
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
+    # Используем данные по умолчанию
     update_user_state_data(call.from_user.id, goal_context={"time_per_week": 5, "budget": 0})
     
     await calculate_and_show_feasibility(call, state_data)
 
 
 async def skip_to_route(call: CallbackQuery, state_data: Dict):
-    """Пропускает проверку и сразу строит маршрут"""
+    """
+    Пропускает проверку и сразу строит маршрут
+    """
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
     if not goal:
@@ -896,20 +1005,25 @@ async def skip_to_route(call: CallbackQuery, state_data: Dict):
 
 
 async def accept_feasibility_plan(call: CallbackQuery, state_data: Dict):
-    """Принимает план и переходит к построению маршрута"""
+    """
+    Принимает план и переходит к построению маршрута
+    """
     goal = state_data.get("current_destination")
     
     if not goal:
         await call.answer("❌ Цель не найдена")
         return
     
-    run_sync_in_background(save_goal_to_db_sync, call.from_user.id, goal, "accepted")
+    # ✅ ИСПРАВЛЕНО: Сохраняем согласие в БД через run_async_task
+    run_async_task(save_goal_to_db, call.from_user.id, goal, "accepted")
     
     await build_route(call, state_data, goal.get('id'))
 
 
 async def adjust_timeline(call: CallbackQuery, state_data: Dict):
-    """Предлагает скорректировать сроки"""
+    """
+    Предлагает скорректировать сроки
+    """
     goal = state_data.get("current_destination")
     
     text = f"""
@@ -935,7 +1049,9 @@ async def adjust_timeline(call: CallbackQuery, state_data: Dict):
 
 
 async def reduce_goal(call: CallbackQuery, state_data: Dict):
-    """Предлагает снизить планку цели"""
+    """
+    Предлагает снизить планку цели
+    """
     text = f"""
 🧠 {bold('ФРЕДИ: СНИЖЕНИЕ ПЛАНКИ')}
 
@@ -957,12 +1073,17 @@ async def reduce_goal(call: CallbackQuery, state_data: Dict):
 
 
 async def apply_extended_timeline(call: CallbackQuery, state_data: Dict):
-    """Применяет увеличенный срок и пересчитывает"""
+    """
+    Применяет увеличенный срок и пересчитывает
+    """
     await accept_feasibility_plan(call, state_data)
 
 
 async def select_goal_50(call: CallbackQuery, state_data: Dict):
-    """Выбирает цель +50%"""
+    """
+    Выбирает цель +50%
+    """
+    # Создаём новую цель с меньшей амбициозностью
     new_goal = {
         "id": "income_growth_50",
         "name": "Увеличить доход на 50%",
@@ -973,13 +1094,16 @@ async def select_goal_50(call: CallbackQuery, state_data: Dict):
     
     update_user_state_data(call.from_user.id, current_destination=new_goal)
     
-    run_sync_in_background(save_goal_to_db_sync, call.from_user.id, new_goal, "adjusted")
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_goal_to_db, call.from_user.id, new_goal, "adjusted")
     
     await show_theoretical_path(call, state_data, new_goal)
 
 
 async def select_goal_30(call: CallbackQuery, state_data: Dict):
-    """Выбирает цель +30%"""
+    """
+    Выбирает цель +30%
+    """
     new_goal = {
         "id": "income_growth_30",
         "name": "Увеличить доход на 30%",
@@ -990,13 +1114,16 @@ async def select_goal_30(call: CallbackQuery, state_data: Dict):
     
     update_user_state_data(call.from_user.id, current_destination=new_goal)
     
-    run_sync_in_background(save_goal_to_db_sync, call.from_user.id, new_goal, "adjusted")
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_goal_to_db, call.from_user.id, new_goal, "adjusted")
     
     await show_theoretical_path(call, state_data, new_goal)
 
 
 async def select_goal_blocks(call: CallbackQuery, state_data: Dict):
-    """Выбирает работу с блоками"""
+    """
+    Выбирает работу с блоками
+    """
     new_goal = {
         "id": "money_blocks",
         "name": "Проработать денежные блоки",
@@ -1007,7 +1134,8 @@ async def select_goal_blocks(call: CallbackQuery, state_data: Dict):
     
     update_user_state_data(call.from_user.id, current_destination=new_goal)
     
-    run_sync_in_background(save_goal_to_db_sync, call.from_user.id, new_goal, "adjusted")
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_goal_to_db, call.from_user.id, new_goal, "adjusted")
     
     await show_theoretical_path(call, state_data, new_goal)
 
@@ -1020,6 +1148,7 @@ async def build_route(call: CallbackQuery, state_data: Dict, goal_id: str):
     """Строит маршрут к цели (после проверки реальности или сразу)"""
     user_id = call.from_user.id
     
+    # Получаем информацию о цели
     mode = state_data.get("communication_mode", "coach")
     goal_info = find_goal_by_id(goal_id, mode)
     
@@ -1030,12 +1159,14 @@ async def build_route(call: CallbackQuery, state_data: Dict, goal_id: str):
         safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
         return
     
+    # Отправляем статусное сообщение
     status_msg = safe_send_message(
         call.message,
         f"🧠 Строю маршрут к цели: {bold(goal_info.get('name'))}...\n\nЭто займёт несколько секунд.",
         delete_previous=True
     )
     
+    # Генерируем маршрут через ИИ
     try:
         route = await generate_route_ai(user_id, state_data, goal_info)
     except Exception as e:
@@ -1045,10 +1176,12 @@ async def build_route(call: CallbackQuery, state_data: Dict, goal_id: str):
     if route:
         update_user_state_data(user_id, current_route=route)
         
-        run_sync_in_background(save_route_to_db_sync, user_id, route, goal_info)
+        # ✅ ИСПРАВЛЕНО: Сохраняем маршрут в БД через run_async_task
+        run_async_task(save_route_to_db, user_id, route, goal_info)
         
         await show_route_step(call, state_data, 1, route, status_msg)
     else:
+        # Если ИИ не сработал, показываем резервный маршрут
         await show_fallback_route(call, state_data, goal_info, status_msg)
 
 
@@ -1062,8 +1195,10 @@ async def show_route_step(
     """Показывает текущий шаг маршрута"""
     user_id = call.from_user.id
     
+    # ✅ ВАЖНО: проверяем, что state_data - это словарь
     if not isinstance(state_data, dict):
         logger.error(f"❌ state_data не является словарем: {type(state_data)}")
+        # Пробуем получить state_data заново
         state_data = get_user_state_data_dict(user_id)
     
     destination = state_data.get("current_destination", {})
@@ -1074,6 +1209,7 @@ async def show_route_step(
     mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
     
     route_text = route.get('full_text', 'Маршрут строится...')
+    # Очищаем от Markdown
     route_text = clean_text_for_safe_display(route_text)
     
     text = f"""
@@ -1092,8 +1228,10 @@ async def show_route_step(
     keyboard.add(InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="smart_questions"))
     keyboard.add(InlineKeyboardButton(text="◀️ К ЦЕЛЯМ", callback_data="show_dynamic_destinations"))
     
+    # Удаляем статусное сообщение, если оно есть
     if status_msg:
         try:
+            # ✅ safe_delete_message - синхронная функция, не используем await
             safe_delete_message(call.message.chat.id, status_msg.message_id)
         except Exception as e:
             logger.error(f"Ошибка при удалении статусного сообщения: {e}")
@@ -1112,6 +1250,7 @@ async def show_fallback_route(call: CallbackQuery, state_data: Dict, destination
     """Резервный маршрут, если ИИ не отвечает"""
     user_id = call.from_user.id
     
+    # ✅ ВАЖНО: проверяем, что state_data - это словарь
     if not isinstance(state_data, dict):
         logger.error(f"❌ state_data не является словарем: {type(state_data)}")
         state_data = get_user_state_data_dict(user_id)
@@ -1147,8 +1286,10 @@ async def show_fallback_route(call: CallbackQuery, state_data: Dict, destination
     keyboard.add(InlineKeyboardButton(text="✅ НАЧАТЬ", callback_data="route_step_done"))
     keyboard.add(InlineKeyboardButton(text="◀️ К ЦЕЛЯМ", callback_data="show_dynamic_destinations"))
     
+    # Удаляем статусное сообщение, если оно есть
     if status_msg:
         try:
+            # ✅ safe_delete_message - синхронная функция
             safe_delete_message(call.message.chat.id, status_msg.message_id)
         except Exception as e:
             logger.error(f"Ошибка при удалении статусного сообщения: {e}")
@@ -1173,9 +1314,13 @@ async def route_step_done(call: CallbackQuery, state_data: Dict):
     route_progress.append(step)
     next_step = step + 1
     
-    update_user_state_data(user_id, route_step=next_step, route_progress=route_progress)
+    update_user_state_data(user_id,
+        route_step=next_step,
+        route_progress=route_progress
+    )
     
-    run_sync_in_background(update_route_progress_in_db_sync, user_id, step, route_progress)
+    # ✅ ИСПРАВЛЕНО: Обновляем прогресс в БД через run_async_task
+    run_async_task(update_route_progress_in_db, user_id, step, route_progress)
     
     if next_step > 3:
         await complete_route(call, state_data)
@@ -1199,11 +1344,16 @@ async def complete_route(call: CallbackQuery, state_data: Dict):
     
     destination = state_data.get("current_destination", {})
     
-    run_sync_in_background(log_event, user_id, 'route_completed', {
-        'goal_id': destination.get('id'),
-        'goal_name': destination.get('name'),
-        'timestamp': time.time()
-    })
+    # ✅ ИСПРАВЛЕНО: Логируем завершение в БД через run_async_task
+    run_async_task(db.log_event,
+        user_id,
+        'route_completed',
+        {
+            'goal_id': destination.get('id'),
+            'goal_name': destination.get('name'),
+            'timestamp': time.time()
+        }
+    )
     
     text = f"""
 🎉 {bold('МАРШРУТ ЗАВЕРШЕН!')}
@@ -1230,10 +1380,11 @@ async def complete_route(call: CallbackQuery, state_data: Dict):
         delete_previous=True
     )
     
+    # Очищаем данные маршрута
     update_user_state_data(user_id, route_step=None, current_destination=None, current_route=None)
     
-    run_sync_in_background(save_user, user_id, get_user_name(user_id), None)
-    run_sync_in_background(save_user_data, user_id, user_data.get(user_id, {}))
+    # ✅ ИСПРАВЛЕНО: Сохраняем пользователя в БД через run_async_task
+    run_async_task(save_user_to_db, user_id, user_data, user_contexts, user_routes)
 
 
 # ============================================
@@ -1242,6 +1393,7 @@ async def complete_route(call: CallbackQuery, state_data: Dict):
 
 def find_goal_by_id(goal_id: str, mode: str) -> Optional[Dict]:
     """Ищет цель по ID во всех категориях"""
+    # Сначала проверяем в динамических целях (используем заглушку)
     all_goals = {
         "improve_relations": {"id": "improve_relations", "name": "Улучшить отношения с близкими", "time": "4-6 недель", "difficulty": "medium", "description": "Построй гармоничные отношения с семьей и друзьями"},
         "find_partner": {"id": "find_partner", "name": "Найти партнёра", "time": "3-5 месяцев", "difficulty": "hard", "description": "Встретить человека для серьёзных отношений"},
@@ -1296,11 +1448,13 @@ __all__ = [
     'route_step_done',
     'complete_route',
     'find_goal_by_id',
+    # Новые функции для категорий
     'show_goals_categories',
     'show_goals_for_category',
     'select_goal',
-    'save_goal_to_db_sync',
-    'save_route_to_db_sync',
-    'update_route_progress_in_db_sync',
-    'save_feasibility_result_to_db_sync'
+    # ✅ ДОБАВЛЕНО: функции для БД
+    'save_goal_to_db',
+    'save_route_to_db',
+    'update_route_progress_in_db',
+    'save_feasibility_result_to_db'
 ]
