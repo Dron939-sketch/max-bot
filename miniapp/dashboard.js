@@ -1,6 +1,6 @@
 // ============================================
 // ЛИЧНЫЙ КАБИНЕТ - КОНСОРЦИУМ ФРЕДИ
-// Версия 3.4 - БОЕВАЯ (без демо-режима)
+// Версия 3.5 - УНИВЕРСАЛЬНЫЙ ГОЛОСОВОЙ ВВОД
 // ============================================
 
 class FrediDashboard {
@@ -23,12 +23,14 @@ class FrediDashboard {
         this.psychometric = null;
         this.animatedAvatar = null;
         
-        // Состояние голосовой записи
+        // Голосовой ввод
         this.isRecording = false;
         this.mediaRecorder = null;
         this.audioChunks = [];
         this.recordingTimer = null;
         this.recordingStartTime = null;
+        this.recognition = null;
+        this.voiceMethod = null; // 'mediaRecorder' или 'speechRecognition'
         
         // Детекция WEBVIEW
         this.isWebView = /; wv\)/.test(navigator.userAgent) || 
@@ -97,6 +99,7 @@ class FrediDashboard {
             await this.loadPsychologistThought();
             this.renderDashboard();
             this.initVoiceInput();
+            this.detectVoiceMethod();
             
             if (this.isTestCompleted) {
                 await this.initAnimatedAvatar();
@@ -104,6 +107,359 @@ class FrediDashboard {
         } catch (error) {
             console.error('❌ Ошибка инициализации:', error);
             this.showError('Ошибка загрузки данных. Попробуйте позже.');
+        }
+    }
+    
+    // ============================================
+    // ОПРЕДЕЛЕНИЕ ДОСТУПНОГО МЕТОДА ГОЛОСА
+    // ============================================
+    
+    detectVoiceMethod() {
+        // Проверяем Web Speech API
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const hasSpeechRecognition = !!SpeechRecognition;
+        
+        // Проверяем MediaRecorder
+        const hasMediaRecorder = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+        
+        console.log('🎤 Доступные методы голоса:');
+        console.log('   Web Speech API:', hasSpeechRecognition);
+        console.log('   MediaRecorder:', hasMediaRecorder);
+        console.log('   WebView:', this.isWebView);
+        
+        // Приоритет: MediaRecorder (более надёжный), затем SpeechRecognition
+        if (hasMediaRecorder) {
+            this.voiceMethod = 'mediaRecorder';
+            console.log('✅ Выбран метод: MediaRecorder (запись + сервер)');
+        } else if (hasSpeechRecognition) {
+            this.voiceMethod = 'speechRecognition';
+            this.initSpeechRecognition();
+            console.log('✅ Выбран метод: Web Speech API (распознавание на устройстве)');
+        } else {
+            this.voiceMethod = 'none';
+            console.log('⚠️ Голосовой ввод не поддерживается');
+        }
+        
+        // Показываем подсказку в WebView
+        if (this.isWebView && this.voiceMethod !== 'mediaRecorder') {
+            this.showVoiceHint();
+        }
+    }
+    
+    showVoiceHint() {
+        setTimeout(() => {
+            const voiceBtn = document.getElementById('dashboardVoiceBtn');
+            if (voiceBtn) {
+                const hint = document.createElement('div');
+                hint.className = 'voice-hint-bubble';
+                hint.innerHTML = '🎤 Для голосового ввода нажмите ⋮ → "Открыть в браузере"';
+                hint.style.cssText = 'position:absolute;bottom:80px;left:50%;transform:translateX(-50%);background:#ff9800;color:white;padding:8px 16px;border-radius:20px;font-size:12px;white-space:nowrap;z-index:1000;';
+                voiceBtn.parentNode.style.position = 'relative';
+                voiceBtn.parentNode.appendChild(hint);
+                setTimeout(() => hint.remove(), 5000);
+            }
+        }, 1000);
+    }
+    
+    // ============================================
+    // WEB SPEECH API
+    // ============================================
+    
+    initSpeechRecognition() {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) return false;
+        
+        this.recognition = new SpeechRecognition();
+        this.recognition.lang = 'ru-RU';
+        this.recognition.interimResults = false;
+        this.recognition.maxAlternatives = 1;
+        
+        this.recognition.onstart = () => {
+            console.log('🎤 Web Speech API: запись начата');
+            this.isRecording = true;
+            this.showVoiceStatus('🎤 Слушаю...', 'recording');
+        };
+        
+        this.recognition.onresult = (event) => {
+            const text = event.results[0][0].transcript;
+            console.log('🎤 Распознано:', text);
+            this.hideVoiceStatus();
+            this.showFloatingMessage(`📝 Вы сказали: ${text}`, 'success');
+            this.sendQuestionToBot(text);
+        };
+        
+        this.recognition.onerror = (event) => {
+            console.error('Web Speech API error:', event.error);
+            this.hideVoiceStatus();
+            if (event.error === 'not-allowed') {
+                this.showFloatingMessage('❌ Разрешите доступ к микрофону в настройках телефона', 'error');
+            } else {
+                this.showFloatingMessage('❌ Не удалось распознать речь', 'error');
+            }
+            this.isRecording = false;
+        };
+        
+        this.recognition.onend = () => {
+            this.isRecording = false;
+            this.hideVoiceStatus();
+        };
+        
+        return true;
+    }
+    
+    startSpeechRecognition() {
+        if (this.recognition && !this.isRecording) {
+            try {
+                this.recognition.start();
+            } catch (e) {
+                console.error('Ошибка запуска SpeechRecognition:', e);
+                this.fallbackToMediaRecorder();
+            }
+        }
+    }
+    
+    // ============================================
+    // MEDIA RECORDER (запись + сервер)
+    // ============================================
+    
+    setupMediaRecorder(button) {
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+        let recordingStartTime = null;
+        let timerInterval = null;
+        let stream = null;
+        
+        const voiceStatus = document.getElementById('voiceStatusDashboard');
+        const timerEl = document.getElementById('dashboardRecordingTimer');
+        
+        const isSamsung = /Samsung|SM-|GT-|SHV-|SCH-|SPH-/.test(navigator.userAgent);
+        
+        const startRecording = async () => {
+            try {
+                console.log('🎤 MediaRecorder: запрос доступа...');
+                
+                if (isSamsung) {
+                    this.showFloatingMessage('🔊 На Samsung: проверьте разрешения в настройках MAX', 'info');
+                }
+                
+                stream = null;
+                
+                // Пробуем через MAX WebApp
+                if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUserMedia) {
+                    try {
+                        stream = await window.MAX.WebApp.getUserMedia({ audio: true });
+                        console.log('✅ Доступ через MAX');
+                    } catch (e) {
+                        console.warn('MAX getUserMedia не сработал:', e);
+                    }
+                }
+                
+                // Стандартный Web API
+                if (!stream) {
+                    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    console.log('✅ Доступ через Web API');
+                }
+                
+                // Определяем MIME тип
+                let mimeType = '';
+                const mimeTypes = ['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/3gpp'];
+                for (const type of mimeTypes) {
+                    if (MediaRecorder.isTypeSupported(type)) {
+                        mimeType = type;
+                        break;
+                    }
+                }
+                console.log('📱 MIME тип:', mimeType || 'default');
+                
+                mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+                audioChunks = [];
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) audioChunks.push(event.data);
+                };
+                
+                mediaRecorder.onstop = async () => {
+                    if (stream) {
+                        stream.getTracks().forEach(track => track.stop());
+                        stream = null;
+                    }
+                    
+                    if (audioChunks.length === 0) {
+                        this.showFloatingMessage('❌ Не удалось записать голос', 'error');
+                        isRecording = false;
+                        return;
+                    }
+                    
+                    const audioBlob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
+                    
+                    if (audioBlob.size < 5000) {
+                        this.showFloatingMessage('❌ Запись слишком короткая. Поговорите дольше.', 'error');
+                        isRecording = false;
+                        return;
+                    }
+                    
+                    await this.sendVoiceToServer(audioBlob);
+                    isRecording = false;
+                };
+                
+                // Для Samsung меньше интервал
+                const interval = isSamsung ? 500 : 1000;
+                mediaRecorder.start(interval);
+                isRecording = true;
+                recordingStartTime = Date.now();
+                
+                // Обновляем UI
+                button.classList.add('recording');
+                button.innerHTML = '<span class="voice-icon">⏹️</span><span class="voice-text">Отпустите</span>';
+                if (voiceStatus) voiceStatus.style.display = 'flex';
+                if (timerEl) timerEl.textContent = '0s';
+                
+                timerInterval = setInterval(() => {
+                    if (isRecording && recordingStartTime) {
+                        const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+                        if (timerEl) timerEl.textContent = `${elapsed}s`;
+                        if (elapsed >= 30) stopRecording();
+                    }
+                }, 200);
+                
+                setTimeout(() => {
+                    if (isRecording) stopRecording();
+                }, 30000);
+                
+            } catch (error) {
+                console.error('MediaRecorder error:', error);
+                let errorMessage = '❌ Не удалось получить доступ к микрофону.';
+                
+                if (isSamsung) {
+                    errorMessage = '🔊 На Samsung:\n1. Настройки → Приложения → MAX\n2. Разрешения → Микрофон → Разрешить\n3. Вернитесь и нажмите 🎤';
+                } else if (error.name === 'NotAllowedError') {
+                    errorMessage = '❌ Разрешение на микрофон отклонено. Проверьте настройки.';
+                }
+                
+                this.showFloatingMessage(errorMessage, 'error');
+                this._resetVoiceUI(button, voiceStatus, timerInterval);
+                
+                // Пробуем SpeechRecognition как fallback
+                if (this.voiceMethod === 'speechRecognition') {
+                    this.showFloatingMessage('🔄 Пробуем другой способ...', 'info');
+                    this.startSpeechRecognition();
+                }
+            }
+        };
+        
+        const stopRecording = () => {
+            if (mediaRecorder && isRecording && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+                isRecording = false;
+                if (timerInterval) clearInterval(timerInterval);
+            }
+        };
+        
+        button.onmousedown = startRecording;
+        button.onmouseup = stopRecording;
+        button.onmouseleave = stopRecording;
+        
+        button.ontouchstart = (e) => { e.preventDefault(); startRecording(); };
+        button.ontouchend = (e) => { e.preventDefault(); stopRecording(); };
+    }
+    
+    fallbackToMediaRecorder() {
+        this.voiceMethod = 'mediaRecorder';
+        const voiceBtn = document.getElementById('dashboardVoiceBtn');
+        if (voiceBtn) {
+            this.setupMediaRecorder(voiceBtn);
+        }
+        this.showFloatingMessage('🔄 Переключено на запись голоса', 'info');
+    }
+    
+    // ============================================
+    // ГОЛОСОВОЙ ВВОД (универсальный)
+    // ============================================
+    
+    setupVoiceButton(button) {
+        if (this.voiceMethod === 'mediaRecorder') {
+            this.setupMediaRecorder(button);
+        } else if (this.voiceMethod === 'speechRecognition') {
+            button.onclick = () => {
+                if (!this.isRecording) {
+                    this.startSpeechRecognition();
+                } else {
+                    this.recognition?.stop();
+                }
+            };
+            button.onmousedown = null;
+            button.ontouchstart = null;
+        } else {
+            button.disabled = true;
+            button.style.opacity = '0.5';
+            button.title = 'Голосовой ввод не поддерживается';
+            this.showFloatingMessage('🎤 Голосовой ввод не поддерживается. Используйте текстовый ввод.', 'info');
+        }
+    }
+    
+    _resetVoiceUI(button, voiceStatus, timerInterval) {
+        if (button) {
+            button.classList.remove('recording');
+            button.innerHTML = '<span class="voice-icon">🎤</span><span class="voice-text">Нажмите и говорите</span>';
+        }
+        if (voiceStatus) voiceStatus.style.display = 'none';
+        if (timerInterval) clearInterval(timerInterval);
+    }
+    
+    showVoiceStatus(message, type) {
+        const statusDiv = document.getElementById('voiceStatusDashboard');
+        if (statusDiv) {
+            statusDiv.style.display = 'flex';
+            const textSpan = statusDiv.querySelector('.recording-text');
+            if (textSpan) textSpan.textContent = message;
+        }
+    }
+    
+    hideVoiceStatus() {
+        const statusDiv = document.getElementById('voiceStatusDashboard');
+        if (statusDiv) statusDiv.style.display = 'none';
+    }
+    
+    async sendVoiceToServer(audioBlob) {
+        this.showFloatingMessage('🎤 Распознаю речь...', 'info');
+        
+        const formData = new FormData();
+        formData.append('user_id', this.userId);
+        formData.append('voice', audioBlob, 'voice.webm');
+        
+        try {
+            const response = await fetch(`${window.api.baseUrl}/api/voice/process`, {
+                method: 'POST',
+                body: formData
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                if (result.recognized_text) {
+                    this.showFloatingMessage(`📝 Вы сказали: ${result.recognized_text}`, 'success');
+                    await this.sendQuestionToBot(result.recognized_text);
+                }
+                if (result.answer) {
+                    this.showFloatingMessage(result.answer, 'info');
+                    this.playAudioResponse(result.audio_url);
+                }
+            } else {
+                this.showFloatingMessage(result.error || 'Не удалось распознать речь', 'error');
+            }
+        } catch (error) {
+            console.error('Send voice error:', error);
+            this.showFloatingMessage('❌ Ошибка отправки голоса', 'error');
+        }
+    }
+    
+    playAudioResponse(audioUrl) {
+        if (!audioUrl) return;
+        const audio = document.getElementById('hiddenAudioPlayer');
+        if (audio) {
+            audio.src = audioUrl;
+            audio.play().catch(e => console.warn('Audio play error:', e));
         }
     }
     
@@ -118,7 +474,6 @@ class FrediDashboard {
             const status = await window.api.request(`/api/user-status?user_id=${this.userId}`);
             console.log('📊 Статус пользователя:', status);
             
-            // Устанавливаем флаг на основе данных из БД
             this.isTestCompleted = status.test_completed === true || 
                                    status.has_profile === true || 
                                    status.has_interpretation === true;
@@ -127,7 +482,6 @@ class FrediDashboard {
             console.log('📌 isTestCompleted:', this.isTestCompleted);
             console.log('📌 profileCode:', this.profileCode);
             
-            // Если профиля нет в памяти, загружаем из БД
             if (!status.has_profile && !status.test_completed) {
                 console.log('🔄 Профиль не найден в памяти, загружаем из БД...');
                 
@@ -145,7 +499,6 @@ class FrediDashboard {
                 }
             }
             
-            // Загружаем имя пользователя
             try {
                 const userData = await window.api.request(`/api/user-data?user_id=${this.userId}`);
                 if (userData && userData.user_name) {
@@ -156,7 +509,6 @@ class FrediDashboard {
                 console.warn('Не удалось загрузить имя из БД:', nameError);
             }
             
-            // Если тест пройден, загружаем полный профиль
             if (this.isTestCompleted) {
                 const profile = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
                 this.userData = profile;
@@ -170,10 +522,6 @@ class FrediDashboard {
             this.isTestCompleted = false;
         }
     }
-    
-    // ============================================
-    // ЗАГРУЗКА ПРОФИЛЯ
-    // ============================================
     
     async loadProfileData() {
         try {
@@ -194,10 +542,6 @@ class FrediDashboard {
         }
     }
     
-    // ============================================
-    // ЗАГРУЗКА МЫСЛЕЙ ПСИХОЛОГА
-    // ============================================
-    
     async loadPsychologistThought() {
         try {
             const response = await window.api.request(`/api/thought?user_id=${this.userId}`);
@@ -208,10 +552,6 @@ class FrediDashboard {
             this.psychologistThought = 'Мысли психолога пока недоступны.';
         }
     }
-    
-    // ============================================
-    // ФОРМАТИРОВАНИЕ
-    // ============================================
     
     formatProfileText(data) {
         const profile = data.profile_data || {};
@@ -260,10 +600,6 @@ class FrediDashboard {
         return growthPoints[weakest] || 'Исследование себя.';
     }
     
-    // ============================================
-    // ОТРИСОВКА ЭКРАНА ТЕСТА
-    // ============================================
-    
     renderTestRequiredScreen() {
         const container = document.getElementById('screenContainer');
         if (!container) return;
@@ -289,10 +625,6 @@ class FrediDashboard {
         const startBtn = document.getElementById('startTestBtn');
         if (startBtn) startBtn.onclick = () => this.startTest();
     }
-    
-    // ============================================
-    // ОТРИСОВКА ДАШБОРДА
-    // ============================================
     
     renderDashboard() {
         const container = document.getElementById('screenContainer');
@@ -387,9 +719,26 @@ class FrediDashboard {
         this.attachDashboardEvents();
     }
     
-    // ============================================
-    // ЭКРАНЫ
-    // ============================================
+    attachDashboardEvents() {
+        document.querySelectorAll('.module-card').forEach(card => {
+            card.addEventListener('click', () => {
+                const moduleId = card.dataset.module;
+                this.handleModuleClick(moduleId);
+            });
+        });
+        
+        document.querySelectorAll('.quick-action').forEach(action => {
+            action.addEventListener('click', () => {
+                const actionType = action.dataset.action;
+                this.handleQuickAction(actionType);
+            });
+        });
+        
+        const voiceBtn = document.getElementById('dashboardVoiceBtn');
+        if (voiceBtn) {
+            this.setupVoiceButton(voiceBtn);
+        }
+    }
     
     renderProfileScreen() {
         const container = document.getElementById('screenContainer');
@@ -618,199 +967,6 @@ class FrediDashboard {
         return text.replace(/\n/g, '<br>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
     }
     
-    // ============================================
-    // ОБРАБОТЧИКИ СОБЫТИЙ
-    // ============================================
-    
-    attachDashboardEvents() {
-        document.querySelectorAll('.module-card').forEach(card => {
-            card.addEventListener('click', () => {
-                const moduleId = card.dataset.module;
-                this.handleModuleClick(moduleId);
-            });
-        });
-        
-        document.querySelectorAll('.quick-action').forEach(action => {
-            action.addEventListener('click', () => {
-                const actionType = action.dataset.action;
-                this.handleQuickAction(actionType);
-            });
-        });
-        
-        const voiceBtn = document.getElementById('dashboardVoiceBtn');
-        if (voiceBtn) {
-            this.setupVoiceButton(voiceBtn);
-        }
-    }
-    
-    // ============================================
-    // 🎤 ГОЛОСОВОЙ ВВОД (рабочая версия)
-    // ============================================
-    
-    setupVoiceButton(button) {
-        let mediaRecorder = null;
-        let audioChunks = [];
-        let isRecording = false;
-        let recordingStartTime = null;
-        let timerInterval = null;
-        
-        const voiceStatus = document.getElementById('voiceStatusDashboard');
-        const timerEl = document.getElementById('dashboardRecordingTimer');
-        
-        const startRecording = async () => {
-            try {
-                console.log('🎤 Запрос доступа к микрофону...');
-                
-                let stream = null;
-                let mimeType = '';
-                
-                if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUserMedia) {
-                    try {
-                        stream = await window.MAX.WebApp.getUserMedia({ audio: true });
-                        console.log('✅ Доступ к микрофону через MAX');
-                    } catch (e) {
-                        console.warn('MAX getUserMedia не сработал:', e);
-                    }
-                }
-                
-                if (!stream) {
-                    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    console.log('✅ Доступ к микрофону через Web API');
-                }
-                
-                const mimeTypes = ['audio/webm', 'audio/mp4', 'audio/ogg'];
-                for (const type of mimeTypes) {
-                    if (MediaRecorder.isTypeSupported(type)) {
-                        mimeType = type;
-                        break;
-                    }
-                }
-                
-                mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
-                audioChunks = [];
-                
-                mediaRecorder.ondataavailable = (event) => {
-                    if (event.data.size > 0) audioChunks.push(event.data);
-                };
-                
-                mediaRecorder.onstop = async () => {
-                    stream.getTracks().forEach(track => track.stop());
-                    
-                    if (audioChunks.length > 0) {
-                        const audioBlob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
-                        if (audioBlob.size > 5000) {
-                            await this.sendVoiceToServer(audioBlob);
-                        } else {
-                            this.showFloatingMessage('Запись слишком короткая', 'error');
-                        }
-                    }
-                    isRecording = false;
-                };
-                
-                mediaRecorder.start(1000);
-                isRecording = true;
-                recordingStartTime = Date.now();
-                
-                button.classList.add('recording');
-                button.innerHTML = '<span class="voice-icon">⏹️</span><span class="voice-text">Отпустите</span>';
-                if (voiceStatus) voiceStatus.style.display = 'flex';
-                if (timerEl) timerEl.textContent = '0s';
-                
-                timerInterval = setInterval(() => {
-                    if (isRecording && recordingStartTime) {
-                        const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
-                        if (timerEl) timerEl.textContent = `${elapsed}s`;
-                        if (elapsed >= 30) stopRecording();
-                    }
-                }, 1000);
-                
-                setTimeout(() => { if (isRecording) stopRecording(); }, 30000);
-                
-            } catch (error) {
-                console.error('Microphone error:', error);
-                this.showFloatingMessage('❌ Не удалось получить доступ к микрофону', 'error');
-                this._resetVoiceUI(button, voiceStatus, timerInterval);
-            }
-        };
-        
-        const stopRecording = () => {
-            if (mediaRecorder && isRecording && mediaRecorder.state === 'recording') {
-                mediaRecorder.stop();
-                isRecording = false;
-                if (timerInterval) clearInterval(timerInterval);
-            }
-        };
-        
-        button.onmousedown = startRecording;
-        button.onmouseup = stopRecording;
-        button.onmouseleave = stopRecording;
-        
-        button.ontouchstart = (e) => { e.preventDefault(); startRecording(); };
-        button.ontouchend = (e) => { e.preventDefault(); stopRecording(); };
-    }
-    
-    _resetVoiceUI(button, voiceStatus, timerInterval) {
-        if (button) {
-            button.classList.remove('recording');
-            button.innerHTML = '<span class="voice-icon">🎤</span><span class="voice-text">Нажмите и говорите</span>';
-        }
-        if (voiceStatus) voiceStatus.style.display = 'none';
-        if (timerInterval) clearInterval(timerInterval);
-    }
-    
-    async sendVoiceToServer(audioBlob) {
-        this.showFloatingMessage('🎤 Распознаю речь...', 'info');
-        
-        const formData = new FormData();
-        formData.append('user_id', this.userId);
-        formData.append('voice', audioBlob, 'voice.webm');
-        
-        try {
-            const response = await fetch(`${window.api.baseUrl}/api/voice/process`, {
-                method: 'POST',
-                body: formData
-            });
-            
-            const result = await response.json();
-            
-            if (result.success) {
-                if (result.recognized_text) {
-                    this.showFloatingMessage(`📝 Вы сказали: ${result.recognized_text}`, 'success');
-                    const questionInput = document.getElementById('questionInput');
-                    if (questionInput) {
-                        questionInput.value = result.recognized_text;
-                        const sendBtn = document.getElementById('sendQuestionBtn');
-                        if (sendBtn && result.recognized_text.length > 3) {
-                            setTimeout(() => sendBtn.click(), 500);
-                        }
-                    }
-                }
-                if (result.answer) {
-                    this.showFloatingMessage(result.answer, 'info');
-                    this.playAudioResponse(result.audio_url);
-                }
-            } else {
-                this.showFloatingMessage(result.error || 'Не удалось распознать речь', 'error');
-            }
-        } catch (error) {
-            console.error('Send voice error:', error);
-            this.showFloatingMessage('❌ Ошибка отправки голоса', 'error');
-        }
-    }
-    
-    playAudioResponse(audioUrl) {
-        if (!audioUrl) return;
-        const audio = document.getElementById('hiddenAudioPlayer');
-        if (audio) {
-            audio.src = audioUrl;
-            audio.play().catch(e => console.warn('Audio play error:', e));
-        }
-    }
-    
-    // ============================================
-    // ОБРАБОТЧИКИ ДЕЙСТВИЙ
-    // ============================================
-    
     handleQuickAction(actionType) {
         if (this.animatedAvatar) {
             this.animatedAvatar.setMood('happy');
@@ -891,10 +1047,6 @@ class FrediDashboard {
         }
     }
     
-    // ============================================
-    // ВСПЛЫВАЮЩИЕ СООБЩЕНИЯ
-    // ============================================
-    
     showFloatingMessage(text, type = 'info') {
         const floatingMsg = document.getElementById('floatingMessage');
         const textEl = document.getElementById('floatingMessageText');
@@ -914,10 +1066,6 @@ class FrediDashboard {
             closeBtn.onclick = () => floatingMsg.style.display = 'none';
         }
     }
-    
-    // ============================================
-    // ВСПОМОГАТЕЛЬНЫЕ
-    // ============================================
     
     startTest() {
         window.location.hash = '#test';
@@ -940,7 +1088,13 @@ class FrediDashboard {
     initVoiceInput() {
         window.startVoiceRecording = () => {
             const voiceBtn = document.getElementById('dashboardVoiceBtn');
-            if (voiceBtn) voiceBtn.dispatchEvent(new Event('mousedown'));
+            if (voiceBtn) {
+                if (this.voiceMethod === 'mediaRecorder') {
+                    voiceBtn.dispatchEvent(new Event('mousedown'));
+                } else if (this.voiceMethod === 'speechRecognition') {
+                    voiceBtn.click();
+                }
+            }
         };
     }
     
