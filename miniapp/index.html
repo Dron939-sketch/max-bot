@@ -21,59 +21,66 @@
     <!-- MAX Bridge -->
     <script src="https://st.max.ru/js/max-web-app.js"></script>
     
-    <!-- ========== МОБИЛЬНАЯ ИНИЦИАЛИЗАЦИЯ ========== -->
+    <!-- ========== КРИТИЧЕСКИ ВАЖНО: УСТАНОВКА maxContext ========== -->
     <script>
-        // Принудительная инициализация для мобильных
+        // ============================================
+        // ДИАГНОСТИКА MAX
+        // ============================================
         (function() {
-            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-            const isMaxWebView = !!(window.MAX && window.MAX.WebApp);
-            
-            console.log('📱 Мобильное устройство detected:', isMobile);
-            console.log('📱 MAX WebView:', isMaxWebView);
-            
-            // Запрос микрофона при первом касании (только для мобильных)
-            if (isMobile) {
-                document.addEventListener('touchstart', async function requestMicrophoneOnTouch() {
-                    document.removeEventListener('touchstart', requestMicrophoneOnTouch);
-                    console.log('🎤 Запрос микрофона после касания...');
-                    
-                    try {
-                        // Для MAX WebView используем специальный метод
-                        if (isMaxWebView && window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUserMedia) {
-                            const stream = await window.MAX.WebApp.getUserMedia({ audio: true });
-                            stream.getTracks().forEach(track => track.stop());
-                            console.log('✅ Микрофон разрешён через MAX');
-                        } else if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                            stream.getTracks().forEach(track => track.stop());
-                            console.log('✅ Микрофон разрешён через Web API');
-                        }
-                        localStorage.setItem('microphone_permission', 'granted');
-                    } catch (e) {
-                        console.warn('❌ Микрофон не разрешён:', e);
-                        localStorage.setItem('microphone_permission', 'denied');
-                    }
-                }, { once: true });
-            }
+            console.log('=== ДИАГНОСТИКА MAX ===');
+            console.log('navigator.userAgent:', navigator.userAgent);
+            console.log('window.MAX:', window.MAX);
+            console.log('window.Telegram:', window.Telegram);
+            console.log('location.href:', location.href);
+            console.log('location.search:', location.search);
         })();
-    </script>
-    
-    <!-- ========== КРИТИЧЕСКИ ВАЖНО: УСТАНОВКА maxContext ДО ВСЕХ СКРИПТОВ ========== -->
-    <script>
-        // Функция получения user_id из MAX
+        
+        // ============================================
+        // ПОЛУЧЕНИЕ USER_ID ИЗ MAX
+        // ============================================
         function getUserIdFromMax() {
             console.log('🔍 Получение user_id из MAX...');
             
             // 1. MAX мессенджер (основной способ)
-            if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.initDataUnsafe) {
-                const initData = window.MAX.WebApp.initDataUnsafe;
-                if (initData.user && initData.user.id) {
-                    console.log('✅ user_id из MAX.WebApp:', initData.user.id);
-                    return initData.user.id;
+            if (window.MAX && window.MAX.WebApp) {
+                console.log('✅ MAX.WebApp найден');
+                
+                // Пробуем получить из initDataUnsafe
+                if (window.MAX.WebApp.initDataUnsafe) {
+                    const initData = window.MAX.WebApp.initDataUnsafe;
+                    console.log('📦 initDataUnsafe:', initData);
+                    
+                    if (initData.user && initData.user.id) {
+                        console.log('✅ user_id из MAX.WebApp.user.id:', initData.user.id);
+                        return initData.user.id;
+                    }
+                    if (initData.user_id) {
+                        console.log('✅ user_id из MAX.WebApp.user_id:', initData.user_id);
+                        return initData.user_id;
+                    }
                 }
-                if (initData.user_id) {
-                    console.log('✅ user_id из MAX.WebApp.user_id:', initData.user_id);
-                    return initData.user_id;
+                
+                // Пробуем получить через getUser (асинхронно)
+                if (window.MAX.WebApp.getUser) {
+                    console.log('🔄 Пытаемся получить через getUser()...');
+                    window.MAX.WebApp.getUser().then(user => {
+                        if (user && user.id) {
+                            console.log('✅ user_id из getUser():', user.id);
+                            window.maxContext = window.maxContext || {};
+                            window.maxContext.user_id = user.id;
+                            window.maxContext.user_name = user.first_name || 'Друг';
+                            window.maxContext.isMax = true;
+                            localStorage.setItem('fredi_user_id', user.id);
+                            if (user.first_name) {
+                                localStorage.setItem('userName', user.first_name);
+                            }
+                            // Перезагружаем страницу после получения ID
+                            if (!window.maxContext._loaded) {
+                                window.maxContext._loaded = true;
+                                location.reload();
+                            }
+                        }
+                    }).catch(err => console.warn('getUser error:', err));
                 }
             }
             
@@ -86,7 +93,7 @@
                 }
             }
             
-            // 3. Из URL параметров (для отладки и тестирования)
+            // 3. Из URL параметров (для тестирования и прямой ссылки)
             const urlParams = new URLSearchParams(window.location.search);
             const urlUserId = urlParams.get('user_id') || urlParams.get('userId') || urlParams.get('uid');
             if (urlUserId) {
@@ -97,34 +104,44 @@
             
             // 4. Из localStorage (сохранённый ранее)
             const savedUserId = localStorage.getItem('fredi_user_id');
-            if (savedUserId) {
+            if (savedUserId && !savedUserId.startsWith('test_')) {
                 console.log('✅ user_id из localStorage:', savedUserId);
                 return savedUserId;
             }
             
-            // 5. Тестовый ID только для разработки (если не в MAX)
-            if (!window.MAX || !window.MAX.WebApp) {
-                console.warn('⚠️ Режим разработки: используется тестовый user_id');
-                const testId = Math.floor(Math.random() * 1000000000).toString();
+            // 5. Если в MAX, но данные еще не загружены - ждем
+            if (window.MAX && window.MAX.WebApp) {
+                console.log('⏳ MAX.WebApp есть, ждем загрузки данных пользователя...');
+                return null;
+            }
+            
+            // 6. Режим разработки (локально) - только если явно указано
+            const isLocalhost = window.location.hostname === 'localhost' || 
+                               window.location.hostname === '127.0.0.1' ||
+                               window.location.hostname === '';
+            
+            if (isLocalhost) {
+                console.warn('⚠️ Локальная разработка: используем тестовый ID');
+                const testId = 'test_' + Math.floor(Math.random() * 1000000000).toString();
                 localStorage.setItem('fredi_user_id', testId);
                 console.log('🔧 Создан тестовый ID:', testId);
                 return testId;
             }
             
+            // 7. В продакшене без MAX - показываем ошибку
             console.error('❌ Не удалось получить user_id!');
             return null;
         }
         
-        // Функция получения имени пользователя
+        // ============================================
+        // ПОЛУЧЕНИЕ ИМЕНИ ПОЛЬЗОВАТЕЛЯ
+        // ============================================
         function getUserNameFromMax() {
             // MAX
             if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.initDataUnsafe) {
                 const initData = window.MAX.WebApp.initDataUnsafe;
                 if (initData.user && initData.user.first_name) {
                     return initData.user.first_name;
-                }
-                if (initData.first_name) {
-                    return initData.first_name;
                 }
             }
             
@@ -145,39 +162,95 @@
             return null;
         }
         
-        // УСТАНАВЛИВАЕМ ГЛОБАЛЬНЫЙ maxContext
-        window.maxContext = window.maxContext || {};
-        window.maxContext.user_id = getUserIdFromMax();
-        window.maxContext.user_name = getUserNameFromMax() || 'Друг';
-        window.maxContext.isMax = !!(window.MAX && window.MAX.WebApp);
-        
-        console.log('🎯 maxContext установлен:', {
-            user_id: window.maxContext.user_id,
-            user_name: window.maxContext.user_name,
-            isMax: window.maxContext.isMax
-        });
-        
-        // Если нет user_id — показываем ошибку и блокируем загрузку
-        if (!window.maxContext.user_id) {
-            console.error('❌ КРИТИЧЕСКАЯ ОШИБКА: Нет user_id!');
-            document.addEventListener('DOMContentLoaded', function() {
-                document.body.innerHTML = `
-                    <div style="display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:20px;background:#0e1621;color:white;">
-                        <div>
-                            <div style="font-size:64px;margin-bottom:20px;">🔐</div>
-                            <h2 style="margin-bottom:12px;">Ошибка входа</h2>
-                            <p style="color:#8e9aa6;margin-bottom:24px;">
-                                Не удалось идентифицировать пользователя.<br>
-                                Пожалуйста, откройте приложение через MAX.
-                            </p>
-                            <button onclick="location.reload()" style="padding:14px 32px;background:#248bf2;color:white;border:none;border-radius:40px;font-size:16px;cursor:pointer;">
-                                🔄 ПОВТОРИТЬ
-                            </button>
-                        </div>
-                    </div>
-                `;
-            });
+        // ============================================
+        // ОЖИДАНИЕ ИНИЦИАЛИЗАЦИИ MAX
+        // ============================================
+        function waitForMax(callback, attempts = 0) {
+            // Если уже есть данные
+            if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.initDataUnsafe && 
+                (window.MAX.WebApp.initDataUnsafe.user || window.MAX.WebApp.initDataUnsafe.user_id)) {
+                console.log('✅ MAX данные уже есть');
+                callback();
+                return;
+            }
+            
+            // Если есть метод ready
+            if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.ready) {
+                window.MAX.WebApp.ready(() => {
+                    console.log('✅ MAX.ready() вызван');
+                    callback();
+                });
+                return;
+            }
+            
+            // Ждем до 5 секунд
+            if (attempts < 50) {
+                setTimeout(() => waitForMax(callback, attempts + 1), 100);
+            } else {
+                console.warn('⚠️ MAX не инициализировался, продолжаем без него');
+                callback();
+            }
         }
+        
+        // ============================================
+        // ОСНОВНАЯ ИНИЦИАЛИЗАЦИЯ
+        // ============================================
+        let initCompleted = false;
+        
+        function initMaxContext() {
+            if (initCompleted) return;
+            initCompleted = true;
+            
+            const userId = getUserIdFromMax();
+            const userName = getUserNameFromMax();
+            
+            window.maxContext = {
+                user_id: userId,
+                user_name: userName || 'Друг',
+                isMax: !!(window.MAX && window.MAX.WebApp),
+                _initTime: new Date().toISOString()
+            };
+            
+            console.log('🎯 maxContext установлен:', {
+                user_id: window.maxContext.user_id,
+                user_name: window.maxContext.user_name,
+                isMax: window.maxContext.isMax
+            });
+            
+            // Если нет user_id и не в режиме разработки — показываем ошибку
+            if (!userId && !window.location.hostname.includes('localhost')) {
+                showAuthError();
+            }
+        }
+        
+        function showAuthError() {
+            const errorHtml = `
+                <div style="display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:20px;background:#0e1621;color:white;">
+                    <div>
+                        <div style="font-size:64px;margin-bottom:20px;">🔐</div>
+                        <h2 style="margin-bottom:12px;">Ошибка входа</h2>
+                        <p style="color:#8e9aa6;margin-bottom:24px;line-height:1.6;">
+                            Не удалось идентифицировать пользователя.<br>
+                            Пожалуйста, откройте приложение через MAX.
+                        </p>
+                        <button onclick="location.reload()" style="padding:14px 32px;background:#248bf2;color:white;border:none;border-radius:40px;font-size:16px;cursor:pointer;">
+                            🔄 ПОВТОРИТЬ
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            if (document.body) {
+                document.body.innerHTML = errorHtml;
+            } else {
+                document.addEventListener('DOMContentLoaded', () => {
+                    document.body.innerHTML = errorHtml;
+                });
+            }
+        }
+        
+        // Запускаем инициализацию
+        waitForMax(initMaxContext);
     </script>
     
     <!-- ========== КОНФИГУРАЦИЯ API ========== -->
@@ -194,9 +267,12 @@
         } else if (hostname === 'max-bot-1-ywpz.onrender.com') {
             window.API_BASE_URL = window.location.origin;
             console.log('🌐 Основной домен, API:', window.API_BASE_URL);
-        } else {
+        } else if (hostname === 'localhost' || hostname === '127.0.0.1') {
             window.API_BASE_URL = 'http://localhost:10000';
             console.log('🌐 Локальная разработка, API:', window.API_BASE_URL);
+        } else {
+            window.API_BASE_URL = MAIN_API_URL;
+            console.log('🌐 Неизвестный домен, используем основной API:', window.API_BASE_URL);
         }
         
         localStorage.setItem('api_base_url', window.API_BASE_URL);
@@ -1216,7 +1292,6 @@
             color: var(--max-text-secondary);
         }
         
-        /* Стили для фолбэк дашборда */
         .dashboard-fallback {
             display: flex;
             flex-direction: column;
@@ -1347,59 +1422,330 @@
     <div id="recordingTimer" class="recording-timer" style="display: none;">0s</div>
     <div id="toastMessage" class="toast-message"></div>
 
-    <!-- ШАБЛОНЫ ЭКРАНОВ (сокращены для краткости, но должны быть полные) -->
-    <!-- ... все шаблоны из предыдущей версии ... -->
-    
+    <!-- ========== ШАБЛОНЫ ЭКРАНОВ ========== -->
+    <template id="onboardingScreen1">
+        <div class="onboarding-container">
+            <div class="onboarding-content">
+                <div class="onboarding-avatar">🧠</div>
+                <div class="onboarding-title">Фреди</div>
+                <div class="onboarding-subtitle">виртуальный психолог</div>
+                <div class="onboarding-text" id="onboardingText1">
+                    Привет, <span id="userNamePlaceholder">друг</span>!<br><br>
+                    Я — Фреди, виртуальный психолог.<br>
+                    Оцифрованная версия Андрея Мейстера — его цифровой слепок.<br><br>
+                    🎭 Короче, я — это он, только батарейка дольше держит и пожрать не прошу.<br><br>
+                    🕒 Нам нужно познакомиться, потому что я пока не экстрасенс.<br><br>
+                    🧐 Чтобы я понимал, с кем имею дело — давай пройдём тест.<br><br>
+                    📊 Всего 5 этапов:<br><br>
+                    1️⃣ Конфигурация восприятия<br>
+                    2️⃣ Конфигурация мышления<br>
+                    3️⃣ Конфигурация поведения<br>
+                    4️⃣ Точка роста<br>
+                    5️⃣ Глубинные паттерны<br><br>
+                    ⏱ 15 минут — и я буду знать о тебе больше, чем ты думаешь.
+                </div>
+                <div class="onboarding-buttons">
+                    <button class="onboarding-btn primary" id="startTestBtn">🚀 Давай, погнали!</button>
+                    <button class="onboarding-btn secondary" id="whoAreYouBtn">🤨 А ты кто вообще такой?</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="onboardingScreen2">
+        <div class="onboarding-container">
+            <div class="onboarding-content">
+                <div class="onboarding-text">
+                    🎭 Ну, вопрос хороший. Давайте по существу.<br><br>
+                    Видите ли, дорогой человек, я — экспериментальная модель.<br>
+                    Андрей Мейстер однажды подумал: "А что, если я создам свою цифровую копию? Пусть работает, пока я сплю, ем или просто ленюсь".<br><br>
+                    Так я и появился. 🧠<br><br>
+                    🧐 Что я умею:<br><br>
+                    • Вижу паттерны там, где вы видите просто день сурка<br>
+                    • Нахожу систему в ваших "случайных" решениях<br>
+                    • Понимаю, почему вы выбираете одних и тех же "не тех" людей<br>
+                    • Я реально беспристрастен — у меня нет плохого настроения<br><br>
+                    🎯 Конкретно по тесту:<br><br>
+                    1️⃣ Восприятие — поймём, какую линзу вы носите<br>
+                    2️⃣ Мышление — узнаем, как вы пережёвываете реальность<br>
+                    3️⃣ Поведение — посмотрим, что вы делаете "на автомате"<br>
+                    4️⃣ Точка роста — я скажу, куда вам двигаться<br>
+                    5️⃣ Глубинные паттерны — заглянем в детство и подсознание<br><br>
+                    ⏱ 15 минут — и я составлю ваш профиль.
+                </div>
+                <div class="onboarding-buttons">
+                    <button class="onboarding-btn primary" id="letsGoBtn">👌 Погнали!</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="contextCityScreen">
+        <div class="context-container">
+            <div class="context-content">
+                <div class="context-title">📝 Давайте познакомимся</div>
+                <div class="context-question">Из какого вы города?</div>
+                <div class="context-hint">(Напишите название)</div>
+                <div class="context-input-group">
+                    <input type="text" class="context-input" id="cityInput" placeholder="Например: Москва">
+                    <button class="context-submit" id="submitCityBtn">➡️</button>
+                </div>
+                <button class="context-skip" id="skipContextBtn">⏭ Позже</button>
+            </div>
+        </div>
+    </template>
+
+    <template id="contextGenderScreen">
+        <div class="context-container">
+            <div class="context-content">
+                <div class="context-title">📝 Давайте познакомимся</div>
+                <div class="context-question">Укажите ваш пол:</div>
+                <div class="gender-buttons">
+                    <button class="gender-btn" id="genderMaleBtn"><span class="gender-emoji">👨</span><span class="gender-text">Мужской</span></button>
+                    <button class="gender-btn" id="genderFemaleBtn"><span class="gender-emoji">👩</span><span class="gender-text">Женский</span></button>
+                </div>
+                <button class="context-skip" id="skipGenderBtn">⏭ Позже</button>
+            </div>
+        </div>
+    </template>
+
+    <template id="contextAgeScreen">
+        <div class="context-container">
+            <div class="context-content">
+                <div class="context-title">📝 Давайте познакомимся</div>
+                <div class="context-question">Сколько вам лет?</div>
+                <div class="context-hint">(Напишите число)</div>
+                <div class="context-input-group">
+                    <input type="number" class="context-input" id="ageInput" placeholder="Например: 35" min="1" max="120">
+                    <button class="context-submit" id="submitAgeBtn">➡️</button>
+                </div>
+                <button class="context-skip" id="skipAgeBtn">⏭ Позже</button>
+            </div>
+        </div>
+    </template>
+
+    <template id="contextCompleteScreen">
+        <div class="context-complete-container">
+            <div class="context-complete-content">
+                <div class="context-complete-title">✅ Отлично! Теперь я знаю о вас:</div>
+                <div class="context-info" id="contextInfo">
+                    📍 Город: <span id="infoCity">Москва</span><br>
+                    👤 Пол: <span id="infoGender">Мужчина</span><br>
+                    📅 Возраст: <span id="infoAge">35</span> лет<br>
+                    <span id="infoWeather">🌧 Погода: пасмурно, +5°C</span>
+                </div>
+                <div class="context-next-text">
+                    🎯 Теперь я буду учитывать это в наших разговорах!<br><br>
+                    🧠 <b>ЧТО ДАЛЬШЕ?</b><br><br>
+                    Чтобы я мог помочь по-настоящему, нужно пройти тест (15 минут).<br>
+                    Он определит ваш психологический профиль по 4 векторам и глубинным паттернам.
+                </div>
+                <div class="context-complete-buttons">
+                    <button class="onboarding-btn primary" id="startRealTestBtn">🚀 НАЧАТЬ ТЕСТ</button>
+                    <button class="onboarding-btn secondary" id="whatTestGivesBtn">📖 ЧТО ДАЕТ ТЕСТ</button>
+                    <button class="onboarding-btn secondary" id="askQuestionPreBtn">❓ ЗАДАТЬ ВОПРОС</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="benefitsScreen">
+        <div class="benefits-container">
+            <div class="benefits-content">
+                <div class="benefits-title">🔍 ЧТО ВЫ УЗНАЕТЕ О СЕБЕ:</div>
+                <div class="benefits-list">
+                    <div class="benefit-item"><div class="benefit-stage">🧠 ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ</div><div class="benefit-desc">Линза, через которую вы смотрите на мир.</div></div>
+                    <div class="benefit-item"><div class="benefit-stage">🧠 ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ</div><div class="benefit-desc">Как вы обрабатываете информацию.</div></div>
+                    <div class="benefit-item"><div class="benefit-stage">🧠 ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ</div><div class="benefit-desc">Ваши автоматические реакции.</div></div>
+                    <div class="benefit-item"><div class="benefit-stage">🧠 ЭТАП 4: ТОЧКА РОСТА</div><div class="benefit-desc">Где находится рычаг изменений.</div></div>
+                    <div class="benefit-item"><div class="benefit-stage">🧠 ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ</div><div class="benefit-desc">Тип привязанности, защитные механизмы, базовые убеждения.</div></div>
+                </div>
+                <div class="benefits-after">
+                    ⚡ <b>ПОСЛЕ ТЕСТА ВЫ ПОЛУЧИТЕ:</b><br><br>
+                    ✅ Полный психологический портрет<br>
+                    ✅ Глубинный анализ подсознательных паттернов<br>
+                    ✅ Выбор стиля общения: 🔮 КОУЧ | 🧠 ПСИХОЛОГ | ⚡ ТРЕНЕР<br>
+                    ✅ Индивидуальный навигатор по целям<br>
+                    ✅ Напоминания и поддержка на пути<br><br>
+                    ⏱ <b>Всего 15 минут</b>
+                </div>
+                <div class="benefits-buttons">
+                    <button class="onboarding-btn primary" id="startTestFromBenefitsBtn">🚀 НАЧАТЬ ТЕСТ</button>
+                    <button class="onboarding-btn secondary" id="backToContextBtn">◀️ НАЗАД</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="finalProfileScreen">
+        <div class="final-profile-container">
+            <div class="final-profile-content">
+                <div class="profile-header"><div class="profile-emoji">🧠</div><h2 class="profile-title">ВАШ ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ</h2></div>
+                <div class="profile-text" id="profileText"></div>
+                <div class="profile-buttons">
+                    <button class="onboarding-btn primary" id="psychologistThoughtBtn">🧠 МЫСЛИ ПСИХОЛОГА</button>
+                    <div class="button-row">
+                        <button class="onboarding-btn secondary" id="askQuestionBtn">🎤 ХОЧУ ВЫСКАЗАТЬСЯ</button>
+                        <button class="onboarding-btn secondary" id="chooseGoalBtn">🎯 ВЫБРАТЬ ЦЕЛЬ</button>
+                    </div>
+                    <button class="onboarding-btn secondary" id="chooseModeBtn">⚙️ ВЫБРАТЬ РЕЖИМ</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="askQuestionScreen">
+        <div class="ask-question-container">
+            <div class="ask-question-content">
+                <h2 class="ask-question-title">✏️ ЗАДАВАЙТЕ ЛЮБОЙ ВОПРОС</h2>
+                <div class="ask-question-text">Если мой создатель знает ответ на него — значит и я вам что-то отвечу 😉</div>
+                <div class="voice-hint">🎤 <b>Можно отправить голосовое сообщение</b> — я внимательно выслушаю.</div>
+                <div class="question-input-area">
+                    <div class="input-group">
+                        <input type="text" id="questionInput" class="question-input" placeholder="Напишите ваш вопрос...">
+                        <button id="sendQuestionBtn" class="question-submit">➡️</button>
+                    </div>
+                    <div class="voice-input-area">
+                        <button id="voiceRecordBtn" class="voice-record-btn">🎤</button>
+                    </div>
+                    <div class="voice-status" id="voiceStatus" style="display: none;">
+                        <span class="voice-status-dot"></span>
+                        <span>🎙️ Говорите...</span>
+                    </div>
+                    <div class="voice-hint-text">
+                        🎤 Нажмите и <b>ДЕРЖИТЕ</b> для записи (до 60 сек)
+                        <span class="voice-hold-hint">удержание</span>
+                    </div>
+                </div>
+                <div class="question-back"><button class="onboarding-btn secondary" id="backToProfileBtn">◀️ НАЗАД</button></div>
+            </div>
+        </div>
+    </template>
+
+    <template id="chooseGoalScreen">
+        <div class="choose-goal-container">
+            <div class="choose-goal-content">
+                <h2 class="choose-goal-title">🎯 ВЫБЕРИТЕ ЦЕЛЬ</h2>
+                <div class="goal-description"><span id="goalUserName">друг</span>, я проанализировал твой профиль и подобрал цели, которые сейчас наиболее актуальны.</div>
+                <div class="profile-badge"><span class="badge-label">Твой профиль:</span><span class="badge-code" id="profileCode">СБ-4_ТФ-4_УБ-4_ЧВ-4</span></div>
+                <div class="mode-badge"><span class="badge-label">Режим:</span><span class="badge-code" id="modeCode">🔮 КОУЧ</span></div>
+                <div class="goals-list" id="goalsList"></div>
+                <div class="custom-goal"><button class="onboarding-btn secondary" id="customGoalBtn">✏️ Сформулирую сам</button></div>
+                <div class="goal-back"><button class="onboarding-btn secondary" id="backToProfileFromGoalBtn">◀️ НАЗАД</button></div>
+            </div>
+        </div>
+    </template>
+
+    <template id="chooseModeScreen">
+        <div class="choose-mode-container">
+            <div class="choose-mode-content">
+                <h2 class="choose-mode-title">⚙️ ВЫБЕРИТЕ РЕЖИМ</h2>
+                <div class="mode-description">Слушай, я могу быть разным. Хочешь конкретики — давай определимся, в каком качестве я сегодня буду полезен.</div>
+                <div class="profile-badge"><span class="badge-label">Твой профиль:</span><span class="badge-code" id="modeProfileCode">СБ-4_ТФ-4_УБ-4_ЧВ-4</span></div>
+                <div class="mode-cards" id="modeCards">
+                    <div class="mode-card" data-mode="coach"><div class="mode-emoji">🔮</div><div class="mode-name">КОУЧ</div><div class="mode-desc">Если хочешь, чтобы я помог тебе самому найти решения.</div><div class="mode-what">Задавать открытые вопросы, отражать твои мысли, направлять.</div><div class="mode-get">• Жить станет легче<br>• Появится больше радости от простых вещей<br>• Начнёшь замечать возможности вместо проблем</div></div>
+                    <div class="mode-card" data-mode="psychologist"><div class="mode-emoji">🧠</div><div class="mode-name">ПСИХОЛОГ</div><div class="mode-desc">Если хочешь копнуть вглубь, разобраться с причинами, а не следствиями.</div><div class="mode-what">Исследовать твои глубинные паттерны, защитные механизмы, прошлый опыт.</div><div class="mode-get">• Перестанешь реагировать на триггеры<br>• Исчезнут старые сценарии<br>• Поймёшь, откуда растут ноги у твоих страхов</div></div>
+                    <div class="mode-card" data-mode="trainer"><div class="mode-emoji">⚡</div><div class="mode-name">ТРЕНЕР</div><div class="mode-desc">Если нужны чёткие инструменты, навыки и результат.</div><div class="mode-what">Формировать твои поведенческие и мыслительные навыки.</div><div class="mode-get">• Научишься чётко формулировать мысли<br>• Освоишь алгоритмы ведения переговоров<br>• Сформируешь полезные привычки</div></div>
+                </div>
+                <div class="mode-back"><button class="onboarding-btn secondary" id="backToProfileFromModeBtn">◀️ НАЗАД</button></div>
+            </div>
+        </div>
+    </template>
+
+    <template id="psychologistThoughtLoadingScreen">
+        <div class="thought-loading-container">
+            <div class="thought-loading-content">
+                <div class="loading-spinner">🧠</div>
+                <div class="loading-text">Анализирую через конфайнмент-модель...</div>
+                <div class="loading-time">Это займёт около 15-20 секунд</div>
+            </div>
+        </div>
+    </template>
+
+    <template id="psychologistThoughtResultScreen">
+        <div class="thought-result-container">
+            <div class="thought-result-content">
+                <div class="thought-header"><div class="thought-emoji">🧠</div><h2 class="thought-title">МЫСЛИ ПСИХОЛОГА</h2></div>
+                <div class="thought-text" id="thoughtText"></div>
+                <div class="thought-buttons">
+                    <button class="onboarding-btn secondary" id="backToProfileFromThoughtBtn">◀️ НАЗАД</button>
+                    <button class="onboarding-btn secondary" id="askQuestionFromThoughtBtn">🎤 ЗАДАТЬ ВОПРОС</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
     <!-- ========== СКРИПТЫ ========== -->
-    <script src="/api.js?v=10"></script>
-    <script src="/context.js?v=10"></script>
-    <script src="/onboarding.js?v=10"></script>
-    <script src="/script.js?v=10"></script>
-    <script src="/test.js?v=10"></script>
-    <script src="/animations.js?v=10"></script>
-    <script src="/animated-avatar.js?v=10"></script>
-    <script src="/dynamic-bg.js?v=10"></script>
-    <script src="/challenges.js?v=10"></script>
-    <script src="/notifications.js?v=10"></script>
-    <script src="/psychometric.js?v=10"></script>
-    <script src="/dashboard.js?v=10"></script>
+    <script src="/api.js?v=11"></script>
+    <script src="/context.js?v=11"></script>
+    <script src="/onboarding.js?v=11"></script>
+    <script src="/script.js?v=11"></script>
+    <script src="/test.js?v=11"></script>
+    <script src="/animations.js?v=11"></script>
+    <script src="/animated-avatar.js?v=11"></script>
+    <script src="/dynamic-bg.js?v=11"></script>
+    <script src="/challenges.js?v=11"></script>
+    <script src="/notifications.js?v=11"></script>
+    <script src="/psychometric.js?v=11"></script>
+    <script src="/dashboard.js?v=11"></script>
     
-    <!-- Дополнительная инициализация для мобильных -->
+    <!-- ========== ФИНАЛЬНАЯ ИНИЦИАЛИЗАЦИЯ ========== -->
     <script>
+        // Создаем объект для управления микрофоном
+        window.maxMicrophoneManager = {
+            requestMicrophone: async function() {
+                try {
+                    let stream = null;
+                    if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUserMedia) {
+                        stream = await window.MAX.WebApp.getUserMedia({ audio: true });
+                    } else {
+                        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    }
+                    stream.getTracks().forEach(track => track.stop());
+                    return true;
+                } catch (e) {
+                    console.error('Microphone error:', e);
+                    return false;
+                }
+            },
+            showToast: function(message, type) {
+                const toast = document.getElementById('toastMessage');
+                if (toast) {
+                    toast.textContent = message;
+                    toast.className = `toast-message ${type} show`;
+                    setTimeout(() => toast.classList.remove('show'), 3000);
+                }
+            }
+        };
+        
+        // Дополнительная инициализация для мобильных
         (function() {
             const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
             
             if (isMobile) {
                 console.log('📱 Мобильная версия: добавляем дополнительные обработчики');
                 
-                // Добавляем кнопку для повторного запроса микрофона в дашборде
-                const originalRenderDashboard = window.FrediDashboard?.prototype?.renderDashboard;
-                if (originalRenderDashboard && window.FrediDashboard) {
-                    window.FrediDashboard.prototype.renderDashboard = function() {
-                        originalRenderDashboard.call(this);
+                // Ждем загрузки дашборда
+                const checkDashboard = setInterval(() => {
+                    if (window.dashboard && typeof window.dashboard.showFloatingMessage === 'function') {
+                        clearInterval(checkDashboard);
+                        console.log('✅ Дашборд загружен, добавляем обработчики');
                         
-                        // Добавляем кнопку запроса микрофона после отрисовки
-                        setTimeout(() => {
-                            const container = document.getElementById('screenContainer');
-                            if (container && !document.getElementById('mobileMicrophoneBtn')) {
-                                const micBtn = document.createElement('button');
-                                micBtn.id = 'mobileMicrophoneBtn';
-                                micBtn.className = 'microphone-request-btn';
-                                micBtn.innerHTML = '🎤 АКТИВИРОВАТЬ МИКРОФОН';
-                                micBtn.onclick = async () => {
-                                    if (window.maxMicrophoneManager) {
-                                        const granted = await window.maxMicrophoneManager.requestMicrophone();
-                                        if (granted) {
-                                            this.showFloatingMessage('✅ Микрофон активирован!', 'success');
-                                            micBtn.style.display = 'none';
-                                        }
+                        // Добавляем обработчик для микрофона
+                        const micBtn = document.getElementById('mobileMicrophoneBtn');
+                        if (micBtn) {
+                            micBtn.onclick = async () => {
+                                if (window.maxMicrophoneManager) {
+                                    const granted = await window.maxMicrophoneManager.requestMicrophone();
+                                    if (granted && window.dashboard) {
+                                        window.dashboard.showFloatingMessage('✅ Микрофон активирован!', 'success');
+                                        micBtn.style.display = 'none';
                                     }
-                                };
-                                container.appendChild(micBtn);
-                            }
-                        }, 1000);
-                    };
-                }
+                                }
+                            };
+                        }
+                    }
+                }, 500);
             }
         })();
     </script>
