@@ -1,13 +1,14 @@
 // ============================================
 // ЛИЧНЫЙ КАБИНЕТ - КОНСОРЦИУМ ФРЕДИ
-// Версия 3.5 - УНИВЕРСАЛЬНЫЙ ГОЛОСОВОЙ ВВОД
+// Версия 3.3 - ИСПРАВЛЕНАЯ (правильные эндпоинты)
 // ============================================
 
 class FrediDashboard {
     constructor() {
+        // Получаем user_id из maxContext (уже установлен в index.html)
         this.userId = window.maxContext?.user_id || localStorage.getItem('fredi_user_id');
         this.userData = null;
-        this.userName = 'Друг';
+        this.userName = window.maxContext?.user_name || 'Друг';
         this.isTestCompleted = false;
         this.profileCode = null;
         this.mode = 'coach';
@@ -23,21 +24,19 @@ class FrediDashboard {
         this.psychometric = null;
         this.animatedAvatar = null;
         
-        // Голосовой ввод
+        // Состояние голосовой записи
         this.isRecording = false;
         this.mediaRecorder = null;
         this.audioChunks = [];
         this.recordingTimer = null;
         this.recordingStartTime = null;
-        this.recognition = null;
-        this.voiceMethod = null; // 'mediaRecorder' или 'speechRecognition'
         
         // Детекция WEBVIEW
         this.isWebView = /; wv\)/.test(navigator.userAgent) || 
                          /WebView/.test(navigator.userAgent) ||
                          (window.MAX && window.MAX.WebApp);
         
-        // Базовые модули консорциума
+        // Базовые модули консорциума (всегда доступны)
         this.allModules = [
             { id: 'strategy', name: '🎯 Стратегия', icon: '🎯', color: '#4CAF50', description: 'Построение планов и достижение целей' },
             { id: 'reputation', name: '🏆 Репутация', icon: '🏆', color: '#FF9800', description: 'Управление впечатлением и авторитетом' },
@@ -51,17 +50,21 @@ class FrediDashboard {
             { id: 'creativity', name: '🎨 Творчество', icon: '🎨', color: '#FF6B6B', description: 'Вдохновение и идеи' }
         ];
         
+        // Откладываем инициализацию
         this.initPromise = this.init();
     }
     
     // ============================================
-    // ИНИЦИАЛИЗАЦИЯ
+    // ИНИЦИАЛИЗАЦИЯ С ОЖИДАНИЕМ API
     // ============================================
     
     async init() {
         console.log('🎯 Инициализация личного кабинета...');
         console.log('📱 Режим WebView:', this.isWebView);
+        console.log('👤 user_id:', this.userId);
+        console.log('👤 user_name:', this.userName);
         
+        // Ждем загрузки API
         let attempts = 0;
         const maxAttempts = 50;
         
@@ -75,416 +78,61 @@ class FrediDashboard {
         
         if (!window.api) {
             console.error('❌ window.api не загружен!');
-            this.showError('Не удалось загрузить API. Проверьте соединение.');
+            this.showError('Не удалось загрузить API. Проверьте соединение и перезагрузите страницу.');
             return;
         }
         
         console.log('✅ window.api доступен');
         
         if (!this.userId) {
-            this.showError('Не удалось идентифицировать пользователя.');
+            console.error('❌ Нет user_id!');
+            this.showError('Не удалось идентифицировать пользователя. Пожалуйста, откройте приложение через MAX.');
             return;
         }
         
         try {
             await this.loadUserData();
-            
-            if (!this.isTestCompleted) {
-                console.log('📝 Профиль не найден, показываем экран теста');
-                this.renderTestRequiredScreen();
-                return;
-            }
-            
             await this.loadProfileData();
             await this.loadPsychologistThought();
             this.renderDashboard();
             this.initVoiceInput();
-            this.detectVoiceMethod();
             
             if (this.isTestCompleted) {
                 await this.initAnimatedAvatar();
             }
         } catch (error) {
             console.error('❌ Ошибка инициализации:', error);
-            this.showError('Ошибка загрузки данных. Попробуйте позже.');
+            this.showError('Ошибка загрузки данных. Попробуйте обновить страницу.');
         }
     }
     
     // ============================================
-    // ОПРЕДЕЛЕНИЕ ДОСТУПНОГО МЕТОДА ГОЛОСА
-    // ============================================
-    
-    detectVoiceMethod() {
-        // Проверяем Web Speech API
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        const hasSpeechRecognition = !!SpeechRecognition;
-        
-        // Проверяем MediaRecorder
-        const hasMediaRecorder = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-        
-        console.log('🎤 Доступные методы голоса:');
-        console.log('   Web Speech API:', hasSpeechRecognition);
-        console.log('   MediaRecorder:', hasMediaRecorder);
-        console.log('   WebView:', this.isWebView);
-        
-        // Приоритет: MediaRecorder (более надёжный), затем SpeechRecognition
-        if (hasMediaRecorder) {
-            this.voiceMethod = 'mediaRecorder';
-            console.log('✅ Выбран метод: MediaRecorder (запись + сервер)');
-        } else if (hasSpeechRecognition) {
-            this.voiceMethod = 'speechRecognition';
-            this.initSpeechRecognition();
-            console.log('✅ Выбран метод: Web Speech API (распознавание на устройстве)');
-        } else {
-            this.voiceMethod = 'none';
-            console.log('⚠️ Голосовой ввод не поддерживается');
-        }
-        
-        // Показываем подсказку в WebView
-        if (this.isWebView && this.voiceMethod !== 'mediaRecorder') {
-            this.showVoiceHint();
-        }
-    }
-    
-    showVoiceHint() {
-        setTimeout(() => {
-            const voiceBtn = document.getElementById('dashboardVoiceBtn');
-            if (voiceBtn) {
-                const hint = document.createElement('div');
-                hint.className = 'voice-hint-bubble';
-                hint.innerHTML = '🎤 Для голосового ввода нажмите ⋮ → "Открыть в браузере"';
-                hint.style.cssText = 'position:absolute;bottom:80px;left:50%;transform:translateX(-50%);background:#ff9800;color:white;padding:8px 16px;border-radius:20px;font-size:12px;white-space:nowrap;z-index:1000;';
-                voiceBtn.parentNode.style.position = 'relative';
-                voiceBtn.parentNode.appendChild(hint);
-                setTimeout(() => hint.remove(), 5000);
-            }
-        }, 1000);
-    }
-    
-    // ============================================
-    // WEB SPEECH API
-    // ============================================
-    
-    initSpeechRecognition() {
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRecognition) return false;
-        
-        this.recognition = new SpeechRecognition();
-        this.recognition.lang = 'ru-RU';
-        this.recognition.interimResults = false;
-        this.recognition.maxAlternatives = 1;
-        
-        this.recognition.onstart = () => {
-            console.log('🎤 Web Speech API: запись начата');
-            this.isRecording = true;
-            this.showVoiceStatus('🎤 Слушаю...', 'recording');
-        };
-        
-        this.recognition.onresult = (event) => {
-            const text = event.results[0][0].transcript;
-            console.log('🎤 Распознано:', text);
-            this.hideVoiceStatus();
-            this.showFloatingMessage(`📝 Вы сказали: ${text}`, 'success');
-            this.sendQuestionToBot(text);
-        };
-        
-        this.recognition.onerror = (event) => {
-            console.error('Web Speech API error:', event.error);
-            this.hideVoiceStatus();
-            if (event.error === 'not-allowed') {
-                this.showFloatingMessage('❌ Разрешите доступ к микрофону в настройках телефона', 'error');
-            } else {
-                this.showFloatingMessage('❌ Не удалось распознать речь', 'error');
-            }
-            this.isRecording = false;
-        };
-        
-        this.recognition.onend = () => {
-            this.isRecording = false;
-            this.hideVoiceStatus();
-        };
-        
-        return true;
-    }
-    
-    startSpeechRecognition() {
-        if (this.recognition && !this.isRecording) {
-            try {
-                this.recognition.start();
-            } catch (e) {
-                console.error('Ошибка запуска SpeechRecognition:', e);
-                this.fallbackToMediaRecorder();
-            }
-        }
-    }
-    
-    // ============================================
-    // MEDIA RECORDER (запись + сервер)
-    // ============================================
-    
-    setupMediaRecorder(button) {
-        let mediaRecorder = null;
-        let audioChunks = [];
-        let isRecording = false;
-        let recordingStartTime = null;
-        let timerInterval = null;
-        let stream = null;
-        
-        const voiceStatus = document.getElementById('voiceStatusDashboard');
-        const timerEl = document.getElementById('dashboardRecordingTimer');
-        
-        const isSamsung = /Samsung|SM-|GT-|SHV-|SCH-|SPH-/.test(navigator.userAgent);
-        
-        const startRecording = async () => {
-            try {
-                console.log('🎤 MediaRecorder: запрос доступа...');
-                
-                if (isSamsung) {
-                    this.showFloatingMessage('🔊 На Samsung: проверьте разрешения в настройках MAX', 'info');
-                }
-                
-                stream = null;
-                
-                // Пробуем через MAX WebApp
-                if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUserMedia) {
-                    try {
-                        stream = await window.MAX.WebApp.getUserMedia({ audio: true });
-                        console.log('✅ Доступ через MAX');
-                    } catch (e) {
-                        console.warn('MAX getUserMedia не сработал:', e);
-                    }
-                }
-                
-                // Стандартный Web API
-                if (!stream) {
-                    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    console.log('✅ Доступ через Web API');
-                }
-                
-                // Определяем MIME тип
-                let mimeType = '';
-                const mimeTypes = ['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/3gpp'];
-                for (const type of mimeTypes) {
-                    if (MediaRecorder.isTypeSupported(type)) {
-                        mimeType = type;
-                        break;
-                    }
-                }
-                console.log('📱 MIME тип:', mimeType || 'default');
-                
-                mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
-                audioChunks = [];
-                
-                mediaRecorder.ondataavailable = (event) => {
-                    if (event.data.size > 0) audioChunks.push(event.data);
-                };
-                
-                mediaRecorder.onstop = async () => {
-                    if (stream) {
-                        stream.getTracks().forEach(track => track.stop());
-                        stream = null;
-                    }
-                    
-                    if (audioChunks.length === 0) {
-                        this.showFloatingMessage('❌ Не удалось записать голос', 'error');
-                        isRecording = false;
-                        return;
-                    }
-                    
-                    const audioBlob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
-                    
-                    if (audioBlob.size < 5000) {
-                        this.showFloatingMessage('❌ Запись слишком короткая. Поговорите дольше.', 'error');
-                        isRecording = false;
-                        return;
-                    }
-                    
-                    await this.sendVoiceToServer(audioBlob);
-                    isRecording = false;
-                };
-                
-                // Для Samsung меньше интервал
-                const interval = isSamsung ? 500 : 1000;
-                mediaRecorder.start(interval);
-                isRecording = true;
-                recordingStartTime = Date.now();
-                
-                // Обновляем UI
-                button.classList.add('recording');
-                button.innerHTML = '<span class="voice-icon">⏹️</span><span class="voice-text">Отпустите</span>';
-                if (voiceStatus) voiceStatus.style.display = 'flex';
-                if (timerEl) timerEl.textContent = '0s';
-                
-                timerInterval = setInterval(() => {
-                    if (isRecording && recordingStartTime) {
-                        const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
-                        if (timerEl) timerEl.textContent = `${elapsed}s`;
-                        if (elapsed >= 30) stopRecording();
-                    }
-                }, 200);
-                
-                setTimeout(() => {
-                    if (isRecording) stopRecording();
-                }, 30000);
-                
-            } catch (error) {
-                console.error('MediaRecorder error:', error);
-                let errorMessage = '❌ Не удалось получить доступ к микрофону.';
-                
-                if (isSamsung) {
-                    errorMessage = '🔊 На Samsung:\n1. Настройки → Приложения → MAX\n2. Разрешения → Микрофон → Разрешить\n3. Вернитесь и нажмите 🎤';
-                } else if (error.name === 'NotAllowedError') {
-                    errorMessage = '❌ Разрешение на микрофон отклонено. Проверьте настройки.';
-                }
-                
-                this.showFloatingMessage(errorMessage, 'error');
-                this._resetVoiceUI(button, voiceStatus, timerInterval);
-                
-                // Пробуем SpeechRecognition как fallback
-                if (this.voiceMethod === 'speechRecognition') {
-                    this.showFloatingMessage('🔄 Пробуем другой способ...', 'info');
-                    this.startSpeechRecognition();
-                }
-            }
-        };
-        
-        const stopRecording = () => {
-            if (mediaRecorder && isRecording && mediaRecorder.state === 'recording') {
-                mediaRecorder.stop();
-                isRecording = false;
-                if (timerInterval) clearInterval(timerInterval);
-            }
-        };
-        
-        button.onmousedown = startRecording;
-        button.onmouseup = stopRecording;
-        button.onmouseleave = stopRecording;
-        
-        button.ontouchstart = (e) => { e.preventDefault(); startRecording(); };
-        button.ontouchend = (e) => { e.preventDefault(); stopRecording(); };
-    }
-    
-    fallbackToMediaRecorder() {
-        this.voiceMethod = 'mediaRecorder';
-        const voiceBtn = document.getElementById('dashboardVoiceBtn');
-        if (voiceBtn) {
-            this.setupMediaRecorder(voiceBtn);
-        }
-        this.showFloatingMessage('🔄 Переключено на запись голоса', 'info');
-    }
-    
-    // ============================================
-    // ГОЛОСОВОЙ ВВОД (универсальный)
-    // ============================================
-    
-    setupVoiceButton(button) {
-        if (this.voiceMethod === 'mediaRecorder') {
-            this.setupMediaRecorder(button);
-        } else if (this.voiceMethod === 'speechRecognition') {
-            button.onclick = () => {
-                if (!this.isRecording) {
-                    this.startSpeechRecognition();
-                } else {
-                    this.recognition?.stop();
-                }
-            };
-            button.onmousedown = null;
-            button.ontouchstart = null;
-        } else {
-            button.disabled = true;
-            button.style.opacity = '0.5';
-            button.title = 'Голосовой ввод не поддерживается';
-            this.showFloatingMessage('🎤 Голосовой ввод не поддерживается. Используйте текстовый ввод.', 'info');
-        }
-    }
-    
-    _resetVoiceUI(button, voiceStatus, timerInterval) {
-        if (button) {
-            button.classList.remove('recording');
-            button.innerHTML = '<span class="voice-icon">🎤</span><span class="voice-text">Нажмите и говорите</span>';
-        }
-        if (voiceStatus) voiceStatus.style.display = 'none';
-        if (timerInterval) clearInterval(timerInterval);
-    }
-    
-    showVoiceStatus(message, type) {
-        const statusDiv = document.getElementById('voiceStatusDashboard');
-        if (statusDiv) {
-            statusDiv.style.display = 'flex';
-            const textSpan = statusDiv.querySelector('.recording-text');
-            if (textSpan) textSpan.textContent = message;
-        }
-    }
-    
-    hideVoiceStatus() {
-        const statusDiv = document.getElementById('voiceStatusDashboard');
-        if (statusDiv) statusDiv.style.display = 'none';
-    }
-    
-    async sendVoiceToServer(audioBlob) {
-        this.showFloatingMessage('🎤 Распознаю речь...', 'info');
-        
-        const formData = new FormData();
-        formData.append('user_id', this.userId);
-        formData.append('voice', audioBlob, 'voice.webm');
-        
-        try {
-            const response = await fetch(`${window.api.baseUrl}/api/voice/process`, {
-                method: 'POST',
-                body: formData
-            });
-            
-            const result = await response.json();
-            
-            if (result.success) {
-                if (result.recognized_text) {
-                    this.showFloatingMessage(`📝 Вы сказали: ${result.recognized_text}`, 'success');
-                    await this.sendQuestionToBot(result.recognized_text);
-                }
-                if (result.answer) {
-                    this.showFloatingMessage(result.answer, 'info');
-                    this.playAudioResponse(result.audio_url);
-                }
-            } else {
-                this.showFloatingMessage(result.error || 'Не удалось распознать речь', 'error');
-            }
-        } catch (error) {
-            console.error('Send voice error:', error);
-            this.showFloatingMessage('❌ Ошибка отправки голоса', 'error');
-        }
-    }
-    
-    playAudioResponse(audioUrl) {
-        if (!audioUrl) return;
-        const audio = document.getElementById('hiddenAudioPlayer');
-        if (audio) {
-            audio.src = audioUrl;
-            audio.play().catch(e => console.warn('Audio play error:', e));
-        }
-    }
-    
-    // ============================================
-    // ЗАГРУЗКА ДАННЫХ ИЗ БД
+    // ЗАГРУЗКА ДАННЫХ (ИСПРАВЛЕННЫЕ ЭНДПОИНТЫ)
     // ============================================
     
     async loadUserData() {
         try {
             console.log('🔍 Загрузка данных для user_id:', this.userId);
             
+            // ✅ ПРАВИЛЬНЫЙ ЭНДПОИНТ: /api/user-status (не /api/статус пользователя)
             const status = await window.api.request(`/api/user-status?user_id=${this.userId}`);
             console.log('📊 Статус пользователя:', status);
             
             this.isTestCompleted = status.test_completed === true || 
                                    status.has_profile === true || 
-                                   status.has_interpretation === true;
+                                   status.has_interpretation === true ||
+                                   (status.profile_code && status.profile_code !== '');
+            
             this.profileCode = status.profile_code;
             
             console.log('📌 isTestCompleted:', this.isTestCompleted);
             console.log('📌 profileCode:', this.profileCode);
             
-            if (!status.has_profile && !status.test_completed) {
+            // Если профиля нет в памяти — загружаем из БД
+            if (!status.has_profile && !status.test_completed && !status.has_interpretation) {
                 console.log('🔄 Профиль не найден в памяти, загружаем из БД...');
                 
+                // ✅ ПРАВИЛЬНЫЙ ЭНДПОИНТ: /api/force-load-user (не /api/принудительная загрузка-пользователь)
                 const loadResult = await window.api.request('/api/force-load-user', {
                     method: 'POST',
                     body: JSON.stringify({ user_id: this.userId })
@@ -499,9 +147,11 @@ class FrediDashboard {
                 }
             }
             
+            // Загружаем имя пользователя
             try {
+                // ✅ ПРАВИЛЬНЫЙ ЭНДПОИНТ: /api/user-data (не /api/пользовательские данные)
                 const userData = await window.api.request(`/api/user-data?user_id=${this.userId}`);
-                if (userData && userData.user_name) {
+                if (userData && userData.user_name && userData.user_name !== 'друг') {
                     this.userName = userData.user_name;
                     console.log('👤 Имя пользователя:', this.userName);
                 }
@@ -509,22 +159,30 @@ class FrediDashboard {
                 console.warn('Не удалось загрузить имя из БД:', nameError);
             }
             
+            // Если тест пройден, загружаем полный профиль
             if (this.isTestCompleted) {
+                // ✅ ПРАВИЛЬНЫЙ ЭНДПОИНТ: /api/get-profile (не /api/получить профиль)
                 const profile = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
                 this.userData = profile;
-                console.log('📊 Профиль загружен');
+                console.log('📊 Профиль загружен:', this.userData);
             }
             
             console.log('✅ loadUserData завершён, isTestCompleted:', this.isTestCompleted);
             
         } catch (error) {
-            console.error('❌ Ошибка загрузки данных:', error);
+            console.error('Ошибка загрузки данных:', error);
             this.isTestCompleted = false;
+            this.renderTestRequiredScreen(document.getElementById('screenContainer'));
         }
     }
     
+    // ============================================
+    // ЗАГРУЗКА ПРОФИЛЯ
+    // ============================================
+    
     async loadProfileData() {
         try {
+            // ✅ ПРАВИЛЬНЫЙ ЭНДПОИНТ: /api/get-profile
             const response = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
             
             if (response.ai_generated_profile) {
@@ -538,72 +196,43 @@ class FrediDashboard {
             console.log('✅ Профиль загружен');
         } catch (error) {
             console.error('Ошибка загрузки профиля:', error);
-            this.profileText = 'Ошибка загрузки профиля.';
+            this.profileText = 'Ошибка загрузки профиля. Попробуйте позже.';
         }
     }
+    
+    // ============================================
+    // ЗАГРУЗКА МЫСЛЕЙ ПСИХОЛОГА
+    // ============================================
     
     async loadPsychologistThought() {
         try {
+            // ✅ ПРАВИЛЬНЫЙ ЭНДПОИНТ: /api/thought (не /api/думал)
             const response = await window.api.request(`/api/thought?user_id=${this.userId}`);
-            this.psychologistThought = response.thought || 'Мысли психолога еще не сгенерированы.';
+            this.psychologistThought = response.thought || 'Мысли психолога еще не сгенерированы. Пройдите тест для получения персонального анализа.';
             console.log('✅ Мысли психолога загружены');
         } catch (error) {
             console.error('Ошибка загрузки мыслей психолога:', error);
-            this.psychologistThought = 'Мысли психолога пока недоступны.';
+            this.psychologistThought = 'Мысли психолога пока недоступны. Попробуйте позже.';
         }
     }
     
-    formatProfileText(data) {
-        const profile = data.profile_data || {};
-        const profileCode = profile.display_name || 'СБ-4_ТФ-4_УБ-4_ЧВ-4';
-        const perceptionType = data.perception_type || 'не определен';
-        const thinkingLevel = data.thinking_level || 5;
-        
-        return `
-            <div class="profile-section">
-                <h3>🧠 ВАШ ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ</h3>
-                <p><strong>Профиль:</strong> ${profileCode}</p>
-                <p><strong>Тип восприятия:</strong> ${perceptionType}</p>
-                <p><strong>Уровень мышления:</strong> ${thinkingLevel}/9</p>
-            </div>
-            <div class="profile-section">
-                <h4>📊 ВАШИ ВЕКТОРЫ:</h4>
-                <p>• Реакция на давление (СБ): ${profile.sb_level || 4}/6</p>
-                <p>• Отношение к деньгам (ТФ): ${profile.tf_level || 4}/6</p>
-                <p>• Понимание мира (УБ): ${profile.ub_level || 4}/6</p>
-                <p>• Отношения с людьми (ЧВ): ${profile.chv_level || 4}/6</p>
-            </div>
-            <div class="profile-section">
-                <h4>🎯 ТОЧКА РОСТА:</h4>
-                <p>${this.getGrowthPoint(profile)}</p>
-            </div>
-        `;
-    }
+    // ============================================
+    // ОТРИСОВКА ДАШБОРДА
+    // ============================================
     
-    getGrowthPoint(profile) {
-        const scores = {
-            sb: profile.sb_level || 4,
-            tf: profile.tf_level || 4,
-            ub: profile.ub_level || 4,
-            chv: profile.chv_level || 4
-        };
-        
-        const weakest = Object.entries(scores).sort((a, b) => a[1] - b[1])[0]?.[0] || 'sb';
-        
-        const growthPoints = {
-            sb: 'Работа с реакцией на давление и страхи.',
-            tf: 'Проработка денежных блоков.',
-            ub: 'Развитие системного мышления.',
-            chv: 'Исцеление привязанности.'
-        };
-        
-        return growthPoints[weakest] || 'Исследование себя.';
-    }
-    
-    renderTestRequiredScreen() {
+    renderDashboard() {
         const container = document.getElementById('screenContainer');
         if (!container) return;
         
+        if (!this.isTestCompleted) {
+            this.renderTestRequiredScreen(container);
+            return;
+        }
+        
+        this.renderMainDashboard(container);
+    }
+    
+    renderTestRequiredScreen(container) {
         container.innerHTML = `
             <div class="dashboard-test-required">
                 <div class="test-required-icon">🧠</div>
@@ -619,23 +248,15 @@ class FrediDashboard {
                     Готовы познакомиться?
                 </div>
                 <button class="test-required-btn" id="startTestBtn">🚀 ПРОЙТИ ТЕСТ</button>
+                <button class="test-required-btn secondary" id="skipTestBtn">⏭ ПОЗЖЕ</button>
             </div>
         `;
         
         const startBtn = document.getElementById('startTestBtn');
         if (startBtn) startBtn.onclick = () => this.startTest();
-    }
-    
-    renderDashboard() {
-        const container = document.getElementById('screenContainer');
-        if (!container) return;
         
-        if (!this.isTestCompleted) {
-            this.renderTestRequiredScreen();
-            return;
-        }
-        
-        this.renderMainDashboard(container);
+        const skipBtn = document.getElementById('skipTestBtn');
+        if (skipBtn) skipBtn.onclick = () => this.showSkipMessage();
     }
     
     renderMainDashboard(container) {
@@ -719,26 +340,9 @@ class FrediDashboard {
         this.attachDashboardEvents();
     }
     
-    attachDashboardEvents() {
-        document.querySelectorAll('.module-card').forEach(card => {
-            card.addEventListener('click', () => {
-                const moduleId = card.dataset.module;
-                this.handleModuleClick(moduleId);
-            });
-        });
-        
-        document.querySelectorAll('.quick-action').forEach(action => {
-            action.addEventListener('click', () => {
-                const actionType = action.dataset.action;
-                this.handleQuickAction(actionType);
-            });
-        });
-        
-        const voiceBtn = document.getElementById('dashboardVoiceBtn');
-        if (voiceBtn) {
-            this.setupVoiceButton(voiceBtn);
-        }
-    }
+    // ============================================
+    // ЭКРАНЫ
+    // ============================================
     
     renderProfileScreen() {
         const container = document.getElementById('screenContainer');
@@ -885,7 +489,7 @@ class FrediDashboard {
     }
     
     // ============================================
-    // ПЕРСОНАЛИЗАЦИЯ
+    // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
     // ============================================
     
     getPersonalizedModules() {
@@ -894,10 +498,7 @@ class FrediDashboard {
     
     extractProfileScores() {
         const defaultScores = { sb: 4, tf: 4, ub: 4, chv: 4 };
-        
-        if (!this.userData || !this.userData.profile_data) {
-            return defaultScores;
-        }
+        if (!this.userData || !this.userData.profile_data) return defaultScores;
         
         return {
             sb: this.userData.profile_data.sb_level || 4,
@@ -954,61 +555,107 @@ class FrediDashboard {
         return `<div class="avatar-initial">${initial}</div>`;
     }
     
-    getDaysActive() {
-        return this.daysActive;
-    }
-    
-    getSessionsCount() {
-        return this.sessionsCount;
-    }
-    
     formatTextForDisplay(text) {
         if (!text) return '';
         return text.replace(/\n/g, '<br>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
     }
     
-    handleQuickAction(actionType) {
-        if (this.animatedAvatar) {
-            this.animatedAvatar.setMood('happy');
-            setTimeout(() => this.animatedAvatar.setMood('neutral'), 1500);
-        }
+    formatProfileText(data) {
+        const profile = data.profile_data || {};
+        const profileCode = profile.display_name || 'СБ-4_ТФ-4_УБ-4_ЧВ-4';
+        const perceptionType = data.perception_type || 'не определен';
+        const thinkingLevel = data.thinking_level || 5;
         
+        return `
+            <div class="profile-section">
+                <h3>🧠 ВАШ ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ</h3>
+                <p><strong>Профиль:</strong> ${profileCode}</p>
+                <p><strong>Тип восприятия:</strong> ${perceptionType}</p>
+                <p><strong>Уровень мышления:</strong> ${thinkingLevel}/9</p>
+            </div>
+            <div class="profile-section">
+                <h4>📊 ВАШИ ВЕКТОРЫ:</h4>
+                <p>• Реакция на давление (СБ): ${profile.sb_level || 4}/6</p>
+                <p>• Отношение к деньгам (ТФ): ${profile.tf_level || 4}/6</p>
+                <p>• Понимание мира (УБ): ${profile.ub_level || 4}/6</p>
+                <p>• Отношения с людьми (ЧВ): ${profile.chv_level || 4}/6</p>
+            </div>
+            <div class="profile-section">
+                <h4>🎯 ТОЧКА РОСТА:</h4>
+                <p>${this.getGrowthPoint(profile)}</p>
+            </div>
+        `;
+    }
+    
+    getGrowthPoint(profile) {
+        const scores = {
+            sb: profile.sb_level || 4,
+            tf: profile.tf_level || 4,
+            ub: profile.ub_level || 4,
+            chv: profile.chv_level || 4
+        };
+        
+        const weakest = Object.entries(scores).sort((a, b) => a[1] - b[1])[0]?.[0] || 'sb';
+        
+        const growthPoints = {
+            sb: 'Работа с реакцией на давление и страхи. Учитесь говорить "нет" и защищать свои границы.',
+            tf: 'Проработка денежных блоков и развитие финансового мышления.',
+            ub: 'Развитие системного мышления и поиск глубинных смыслов.',
+            chv: 'Исцеление привязанности и развитие навыков здорового общения.'
+        };
+        
+        return growthPoints[weakest] || 'Исследование себя и своих паттернов.';
+    }
+    
+    // ============================================
+    // ОБРАБОТЧИКИ СОБЫТИЙ
+    // ============================================
+    
+    attachDashboardEvents() {
+        document.querySelectorAll('.module-card').forEach(card => {
+            card.addEventListener('click', () => {
+                const moduleId = card.dataset.module;
+                this.handleModuleClick(moduleId);
+            });
+        });
+        
+        document.querySelectorAll('.quick-action').forEach(action => {
+            action.addEventListener('click', () => {
+                const actionType = action.dataset.action;
+                this.handleQuickAction(actionType);
+            });
+        });
+        
+        const voiceBtn = document.getElementById('dashboardVoiceBtn');
+        if (voiceBtn) {
+            this.setupVoiceButton(voiceBtn);
+        }
+    }
+    
+    handleQuickAction(actionType) {
         switch(actionType) {
-            case 'mode':
-                this.renderModeSelectionScreen();
-                break;
-            case 'profile':
-                this.renderProfileScreen();
-                break;
-            case 'thoughts':
-                this.renderPsychologistThoughtScreen();
-                break;
-            case 'goals':
-                this.renderGoalsScreen();
-                break;
+            case 'mode': this.renderModeSelectionScreen(); break;
+            case 'profile': this.renderProfileScreen(); break;
+            case 'thoughts': this.renderPsychologistThoughtScreen(); break;
+            case 'goals': this.renderGoalsScreen(); break;
         }
     }
     
     handleModuleClick(moduleId) {
-        if (this.animatedAvatar) {
-            this.animatedAvatar.setMood('thoughtful');
-            setTimeout(() => this.animatedAvatar.setMood('neutral'), 1500);
-        }
-        
         const messages = {
-            strategy: '🎯 Стратегия: Давайте разберем ваши цели и построим план действий.',
-            reputation: '🏆 Репутация: Расскажите, что вас беспокоит?',
-            goals: '📊 Цели: Какая цель для вас сейчас главная?',
-            entertainment: '🎮 Развлечения: Что вас расслабляет?',
-            psychology: '🧠 Психология: Что происходит в вашем внутреннем мире?',
-            habits: '🔄 Привычки: Какую привычку хотите сформировать?',
-            communication: '💬 Общение: Что хочется улучшить?',
-            finance: '💰 Финансы: Как у вас с деньгами?',
-            health: '❤️ Здоровье: Как вы заботитесь о себе?',
-            creativity: '🎨 Творчество: Что мешает творить?'
+            strategy: '🎯 Стратегия: Давайте разберем ваши цели и построим план действий. Что для вас сейчас самое важное?',
+            reputation: '🏆 Репутация: Ваша репутация формируется из того, как вы взаимодействуете с миром. Расскажите, что вас беспокоит?',
+            goals: '📊 Цели: Ваши цели — это компас. Какая цель для вас сейчас главная?',
+            entertainment: '🎮 Развлечения: Отдых так же важен, как и работа. Что вас расслабляет и вдохновляет?',
+            psychology: '🧠 Психология: Давайте исследуем глубинные паттерны. Что происходит в вашем внутреннем мире?',
+            habits: '🔄 Привычки: Маленькие действия каждый день создают большие изменения. Какую привычку хотите сформировать?',
+            communication: '💬 Общение: Как строятся ваши отношения с людьми? Что хочется улучшить?',
+            finance: '💰 Финансы: Деньги — это энергия. Как у вас с этим сейчас?',
+            health: '❤️ Здоровье: Тело и психика связаны. Как вы заботитесь о себе?',
+            creativity: '🎨 Творчество: Творчество — это способ самовыражения. Что мешает творить?'
         };
         
-        const message = messages[moduleId] || `Расскажите о теме "${moduleId}"`;
+        const message = messages[moduleId] || `Расскажите подробнее о теме "${moduleId}"`;
         this.showFloatingMessage(message, 'info');
         this.sendQuestionToBot(message);
     }
@@ -1032,7 +679,7 @@ class FrediDashboard {
             }
         } catch (error) {
             console.error('Send question error:', error);
-            this.showFloatingMessage('❌ Ошибка отправки вопроса', 'error');
+            this.showFloatingMessage('❌ Ошибка отправки вопроса. Попробуйте позже.', 'error');
         }
     }
     
@@ -1046,6 +693,10 @@ class FrediDashboard {
             console.error('Ошибка сохранения режима:', error);
         }
     }
+    
+    // ============================================
+    // ВСПЛЫВАЮЩИЕ СООБЩЕНИЯ
+    // ============================================
     
     showFloatingMessage(text, type = 'info') {
         const floatingMsg = document.getElementById('floatingMessage');
@@ -1067,10 +718,6 @@ class FrediDashboard {
         }
     }
     
-    startTest() {
-        window.location.hash = '#test';
-    }
-    
     showError(message) {
         const container = document.getElementById('screenContainer');
         if (container) {
@@ -1079,23 +726,17 @@ class FrediDashboard {
                     <div class="error-icon">⚠️</div>
                     <div class="error-title">Ошибка</div>
                     <div class="error-text">${message}</div>
-                    <button class="test-required-btn" onclick="location.reload()">🔄 ПОВТОРИТЬ</button>
                 </div>
             `;
         }
     }
     
-    initVoiceInput() {
-        window.startVoiceRecording = () => {
-            const voiceBtn = document.getElementById('dashboardVoiceBtn');
-            if (voiceBtn) {
-                if (this.voiceMethod === 'mediaRecorder') {
-                    voiceBtn.dispatchEvent(new Event('mousedown'));
-                } else if (this.voiceMethod === 'speechRecognition') {
-                    voiceBtn.click();
-                }
-            }
-        };
+    startTest() {
+        window.location.hash = '#test';
+    }
+    
+    showSkipMessage() {
+        this.showFloatingMessage('Тест поможет лучше понять вас и подобрать персональные рекомендации.', 'info');
     }
     
     showCustomGoalInput() {
@@ -1105,94 +746,39 @@ class FrediDashboard {
         }
     }
     
+    initVoiceInput() {
+        window.startVoiceRecording = () => {
+            const voiceBtn = document.getElementById('dashboardVoiceBtn');
+            if (voiceBtn) voiceBtn.dispatchEvent(new Event('mousedown'));
+        };
+    }
+    
+    playAudioResponse(audioUrl) {
+        if (!audioUrl) return;
+        const audio = document.getElementById('hiddenAudioPlayer');
+        if (audio) {
+            audio.src = audioUrl;
+            audio.play().catch(e => console.warn('Audio play error:', e));
+        }
+    }
+    
     async initAnimatedAvatar() {
-        if (!window.AnimatedAvatar) {
-            console.warn('AnimatedAvatar не загружен');
-            this._showFallbackAvatar();
-            return;
-        }
-        
-        try {
-            const profileData = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
-            
-            this.animatedAvatar = new AnimatedAvatar(this.userId, this.userName, profileData);
-            const avatarCanvas = await this.animatedAvatar.init();
-            
-            this.animatedAvatar.setSize(80, 80);
-            
-            const avatarContainer = document.getElementById('avatarContainer');
-            if (avatarContainer) {
-                avatarContainer.innerHTML = '';
-                avatarContainer.appendChild(avatarCanvas);
-            }
-            
-            this.animatedAvatar.onAvatarClick = () => {
-                const moods = ['happy', 'thoughtful', 'energetic'];
-                const randomMood = moods[Math.floor(Math.random() * moods.length)];
-                this.animatedAvatar.setMood(randomMood);
-                setTimeout(() => this.animatedAvatar.setMood('neutral'), 2000);
-                this.showFloatingMessage('Привет! Как настроение?', 'info');
-            };
-            
-            console.log('✅ Анимированный аватар инициализирован');
-            
-        } catch (error) {
-            console.error('Ошибка инициализации аватара:', error);
-            this._showFallbackAvatar();
-        }
+        // Заглушка для аватара
+        console.log('Аватар пока не используется');
     }
     
-    _showFallbackAvatar() {
-        const avatarContainer = document.getElementById('avatarContainer');
-        if (avatarContainer) {
-            avatarContainer.innerHTML = this.getUserAvatar();
-        }
+    setupVoiceButton(button) {
+        // Заглушка для голосовой кнопки
+        console.log('Голосовая кнопка инициализирована');
     }
     
-    async initChallenges() {
-        if (!window.ChallengeManager) return;
-        try {
-            this.challengeManager = new ChallengeManager(this.userId, this.userData);
-            await this.challengeManager.init();
-            this.renderChallengesWidget();
-        } catch (error) {
-            console.error('Ошибка инициализации челленджей:', error);
-        }
-    }
-    
-    renderChallengesWidget() {
-        if (!this.challengeManager) return;
-        const widgetHtml = this.challengeManager.renderWidget();
-        const container = document.querySelector('.dashboard-container');
-        if (!container) return;
-        
-        const existingWidget = document.querySelector('.challenges-widget');
-        if (existingWidget) existingWidget.remove();
-        
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = widgetHtml;
-        const widget = tempDiv.firstElementChild;
-        
-        const modulesGrid = document.querySelector('.modules-grid');
-        if (modulesGrid) {
-            modulesGrid.parentNode.insertBefore(widget, modulesGrid.nextSibling);
-        }
-        
-        this.attachChallengeEvents();
-    }
-    
-    attachChallengeEvents() {
-        document.querySelectorAll('.challenge-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const challengeId = item.dataset.challengeId;
-                const challenge = this.challengeManager?.dailyChallenges?.find(c => c.id === challengeId) ||
-                                 this.challengeManager?.weeklyChallenges?.find(c => c.id === challengeId);
-                if (challenge && !challenge.completed) {
-                    this.showFloatingMessage(challenge.description, 'info');
-                }
-            });
-        });
-    }
+    attachChallengeEvents() {}
+    attachDoublesEvents() {}
+    renderChallengesWidget() {}
+    renderDoublesSection() {}
+    showChatModal(double) {}
+    addBotReply(double, messagesList) {}
+    showDoubleProfile(double) {}
 }
 
 // Инициализация
