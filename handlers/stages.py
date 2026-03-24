@@ -1441,22 +1441,25 @@ def finish_stage_5(message, user_id: int, state_data: dict):
     user_data[user_id]["test_completed"] = True
     user_data[user_id]["test_completed_at"] = time.time()
     
-    # ✅ ИСПРАВЛЕНО: синхронное сохранение в фоне
+    # ✅ ИСПРАВЛЕНО: правильный вызов save_test_result
     profile_code = None
     if user_data[user_id].get("profile_data"):
         profile_code = user_data[user_id]["profile_data"].get("display_name")
     
-    run_sync_in_background(save_test_result,
-    user_id=user_id,
-    test_type='full_profile',
-    results=user_data[user_id],
-    profile_code=profile_code,
-    perception_type=user_data[user_id].get("perception_type"),
-    thinking_level=user_data[user_id].get("thinking_level"),
-    vectors=user_data[user_id].get("behavioral_levels"),
-    deep_patterns=deep_patterns
-)
+    # ✅ Сохраняем результат теста
+    run_sync_in_background(
+        save_test_result,
+        user_id,
+        'full_profile',
+        user_data[user_id],
+        profile_code,
+        user_data[user_id].get("perception_type"),
+        user_data[user_id].get("thinking_level"),
+        user_data[user_id].get("behavioral_levels"),
+        deep_patterns
+    )
     
+    # ✅ Сохраняем пользователя и данные
     run_sync_in_background(save_user, user_id, user_data[user_id].get('first_name'), None)
     run_sync_in_background(save_user_data, user_id, user_data[user_id])
     run_sync_in_background(log_event, user_id, 'test_completed', {'profile_code': profile_code})
@@ -1465,9 +1468,14 @@ def finish_stage_5(message, user_id: int, state_data: dict):
     all_answers = state_data.get("all_answers", [])
     if all_answers:
         for answer in all_answers:
-            run_sync_in_background(save_test_answer, user_id, None, answer.get('stage', 0),
-                answer.get('question_index', 0), answer.get('question', ''),
-                answer.get('answer', ''), answer.get('option', ''))
+            run_sync_in_background(
+                save_test_answer, user_id, None,
+                answer.get('stage', 0),
+                answer.get('question_index', 0),
+                answer.get('question', ''),
+                answer.get('answer', ''),
+                answer.get('option', '')
+            )
     
     try:
         from handlers.profile import show_final_profile
