@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики профиля пользователя для MAX
-Версия 2.9 - ИСПРАВЛЕНО: замена sync_db на прямые вызовы db_instance
+Версия 2.10 - ИСПРАВЛЕНО: удален confinement_model, добавлен save_test_answer
 """
 
 import logging
@@ -31,6 +31,7 @@ from db_instance import (
     save_user_data,
     save_context,
     save_test_result,
+    save_test_answer,
     log_event,
     add_reminder,
     get_user_reminders,
@@ -94,7 +95,7 @@ def split_long_message(text: str, max_length: int = 3500) -> List[str]:
         
         # Добавляем часть (убираем лишние пробелы)
         part = remaining[:split_point].strip()
-        if part:  # Только если часть не пустая
+        if part:
             parts.append(part)
         remaining = remaining[split_point:].strip()
     
@@ -110,17 +111,14 @@ def optimize_message_parts(parts: List[str]) -> List[str]:
         return []
     
     optimized = []
-    min_length = 50  # Минимальная длина содержательной части
+    min_length = 50
     
     for part in parts:
-        # Очищаем от пробелов
         cleaned = ensure_full_width(part).strip()
         
-        # Проверяем, что часть не пустая и достаточно длинная
         if cleaned and len(cleaned) >= min_length:
             optimized.append(cleaned)
         elif cleaned and len(cleaned) < min_length:
-            # Если часть слишком короткая, присоединяем к предыдущей
             if optimized:
                 optimized[-1] = optimized[-1] + "\n\n" + cleaned
             else:
@@ -313,7 +311,6 @@ def calculate_profile_confidence(profile: dict) -> float:
         stages_done += 1
     
     confidence += stages_done * 0.1
-    
     clarification_count = profile.get("clarification_iteration", 0)
     confidence += clarification_count * 0.05
     
@@ -321,7 +318,7 @@ def calculate_profile_confidence(profile: dict) -> float:
 
 
 # ============================================
-# НОВАЯ ФУНКЦИЯ: ПОКАЗ ПРЕДВАРИТЕЛЬНОГО ПРОФИЛЯ
+# ПРЕДВАРИТЕЛЬНЫЙ ПРОФИЛЬ
 # ============================================
 
 def show_preliminary_profile(message: Message, user_id: int):
@@ -385,13 +382,38 @@ def show_preliminary_profile(message: Message, user_id: int):
         delete_previous=True
     )
     
-    # Устанавливаем состояние подтверждения профиля
     set_state(user_id, TestStates.profile_confirmation)
 
 
 # ============================================
-# ✅ ИСПРАВЛЕНО: СИНХРОННАЯ ФУНКЦИЯ СОХРАНЕНИЯ ПРОФИЛЯ В БД
+# СОХРАНЕНИЕ ПРОФИЛЯ В БД
 # ============================================
+
+def save_test_answer_sync(user_id: int, test_result_id: int, stage: int, question_index: int,
+                          question_text: str, answer_text: str, answer_value: str,
+                          scores: dict = None, measures: str = None, strategy: str = None,
+                          dilts: str = None, pattern: str = None, target: str = None) -> bool:
+    """Синхронное сохранение ответа на тест"""
+    try:
+        return save_test_answer(
+            user_id=user_id,
+            test_result_id=test_result_id,
+            stage=stage,
+            question_index=question_index,
+            question_text=question_text,
+            answer_text=answer_text,
+            answer_value=answer_value,
+            scores=scores,
+            measures=measures,
+            strategy=strategy,
+            dilts=dilts,
+            pattern=pattern,
+            target=target
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения ответа: {e}")
+        return False
+
 
 def save_profile_to_db_sync(user_id: int):
     """Синхронное сохранение профиля пользователя в БД"""
@@ -411,7 +433,7 @@ def save_profile_to_db_sync(user_id: int):
             if match:
                 profile_code = match.group(0)
         
-        # ✅ ИСПРАВЛЕНО: используем save_test_result из db_instance
+        # ✅ ИСПРАВЛЕНО: убираем confinement_model
         test_id = save_test_result(
             user_id=user_id,
             test_type='full_profile',
@@ -420,11 +442,10 @@ def save_profile_to_db_sync(user_id: int):
             perception_type=data.get("perception_type"),
             thinking_level=data.get("thinking_level"),
             vectors=data.get("behavioral_levels"),
-            deep_patterns=data.get("deep_patterns"),
-            confinement_model=data.get("confinement_model")
+            deep_patterns=data.get("deep_patterns")
         )
         
-        # Сохраняем все ответы, если есть (синхронно)
+        # Сохраняем все ответы
         all_answers = data.get("all_answers", [])
         if all_answers and test_id:
             for answer in all_answers:
@@ -453,20 +474,6 @@ def save_profile_to_db_sync(user_id: int):
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения профиля {user_id} в БД: {e}")
         traceback.print_exc()
-        return False
-
-
-def save_test_answer_sync(user_id: int, test_result_id: int, stage: int, question_index: int,
-                          question_text: str, answer_text: str, answer_value: str,
-                          scores: dict = None, measures: str = None, strategy: str = None,
-                          dilts: str = None, pattern: str = None, target: str = None) -> bool:
-    """Синхронное сохранение ответа на тест (если нужна эта функция)"""
-    try:
-        # Здесь нужно использовать прямые SQL запросы или функцию из db_instance
-        # Пока пропускаем, так как основное сохранение уже есть
-        return True
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения ответа: {e}")
         return False
 
 
@@ -500,8 +507,6 @@ async def show_ai_profile_async(message: Message, user_id: int):
                 if user_id not in user_data:
                     user_data[user_id] = {}
                 user_data[user_id]["ai_generated_profile"] = ai_profile
-                
-                # ✅ ИСПРАВЛЕНО: синхронное сохранение
                 save_profile_to_db_sync(user_id)
         
         if status_msg:
@@ -511,25 +516,17 @@ async def show_ai_profile_async(message: Message, user_id: int):
                 pass
         
         if ai_profile:
-            # Форматируем текст
             formatted_text = format_profile_text(ai_profile)
             
-            # Добавляем обращение по имени в начало
             if user_name and "обращаюсь" not in formatted_text[:50].lower():
                 formatted_text = f"{user_name}, " + formatted_text[0].lower() + formatted_text[1:]
             
-            # Разбиваем на части
             if len(formatted_text) > 3500:
-                logger.info(f"📏 AI профиль слишком длинный: {len(formatted_text)} > 3500. Разбиваем на части.")
                 profile_parts = split_long_message(formatted_text)
-                logger.info(f"✂️ Разбито на {len(profile_parts)} частей")
-                
-                # Оптимизируем части (убираем слишком короткие)
                 profile_parts = optimize_message_parts(profile_parts)
             else:
                 profile_parts = [formatted_text]
             
-            # Создаем клавиатуру
             keyboard = InlineKeyboardMarkup()
             keyboard.row(InlineKeyboardButton("🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"))
             keyboard.row(
@@ -538,10 +535,8 @@ async def show_ai_profile_async(message: Message, user_id: int):
             )
             keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
             
-            # Сохраняем chat_id для последующих частей
             chat_id = message.chat.id
             
-            # Отправляем все части, объединяя короткие
             merged_parts = []
             current = ""
             
@@ -559,11 +554,9 @@ async def show_ai_profile_async(message: Message, user_id: int):
             if current:
                 merged_parts.append(current)
             
-            # Отправляем финальные части
             for i, part in enumerate(merged_parts):
                 try:
                     if i == len(merged_parts) - 1:
-                        # Последняя часть с кнопками
                         safe_send_message(
                             message if i == 0 else None,
                             part,
@@ -574,7 +567,6 @@ async def show_ai_profile_async(message: Message, user_id: int):
                         )
                         logger.info(f"✅ Отправлена последняя часть {i+1} с кнопками")
                     else:
-                        # Промежуточные части без кнопок
                         safe_send_message(
                             None,
                             part,
@@ -584,7 +576,7 @@ async def show_ai_profile_async(message: Message, user_id: int):
                         )
                         logger.info(f"✅ Отправлена часть {i+1}/{len(merged_parts)}")
                     
-                    await asyncio.sleep(1)  # пауза между сообщениями
+                    await asyncio.sleep(1)
                     
                 except Exception as e:
                     logger.error(f"❌ Ошибка при отправке части {i+1}: {e}")
@@ -592,12 +584,11 @@ async def show_ai_profile_async(message: Message, user_id: int):
             
             logger.info(f"🎉 Все {len(merged_parts)} частей профиля успешно отправлены")
             
-            # ===== ПЛАНИРОВАНИЕ УТРЕННИХ СООБЩЕНИЙ =====
+            # Планирование утренних сообщений
             try:
                 if morning_manager is None:
                     logger.warning(f"⚠️ morning_manager не инициализирован для пользователя {user_id}")
                 else:
-                    # Получаем scores из данных
                     scores = {}
                     for k in VECTORS:
                         levels = data.get("behavioral_levels", {}).get(k, [])
@@ -608,7 +599,6 @@ async def show_ai_profile_async(message: Message, user_id: int):
                     
                     def schedule_in_background():
                         try:
-                            # Создаем новый event loop для этого потока
                             loop = asyncio.new_event_loop()
                             asyncio.set_event_loop(loop)
                             try:
@@ -625,17 +615,11 @@ async def show_ai_profile_async(message: Message, user_id: int):
                                 loop.close()
                         except Exception as e:
                             logger.error(f"❌ Ошибка в фоне при планировании: {e}")
-                            import traceback
-                            traceback.print_exc()
                     
-                    # Запускаем в отдельном потоке
                     threading.Thread(target=schedule_in_background, daemon=True).start()
                     
             except Exception as e:
                 logger.error(f"❌ Ошибка при планировании утренних сообщений: {e}")
-                import traceback
-                traceback.print_exc()
-            # ===== КОНЕЦ БЛОКА =====
             
             return
             
@@ -718,10 +702,7 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
         try:
             thought = await generate_psychologist_thought(user_id, data)
         except Exception as e:
-            if str(e):
-                logger.error(f"❌ Ошибка при вызове generate_psychologist_thought: {e}")
-            else:
-                logger.info("⚠️ Пустая ошибка при генерации мысли психолога")
+            logger.error(f"❌ Ошибка при вызове generate_psychologist_thought: {e}")
             thought = None
         
         if status_msg:
@@ -731,19 +712,11 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                 pass
         
         if thought:
-            # Форматируем текст
             formatted_text = format_psychologist_text(thought, user_name)
-            
-            # Добавляем заголовок
             full_text = f"🧠 {bold('МЫСЛИ ПСИХОЛОГА')}\n\n{formatted_text}"
             
-            # Разбиваем на части
             if len(full_text) > 3500:
-                logger.info(f"📏 Мысли психолога слишком длинные: {len(full_text)} > 3500. Разбиваем на части.")
                 thought_parts = split_long_message(full_text)
-                logger.info(f"✂️ Разбито на {len(thought_parts)} частей")
-                
-                # Оптимизируем части
                 thought_parts = optimize_message_parts(thought_parts)
             else:
                 thought_parts = [full_text]
@@ -800,7 +773,6 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
                     logger.error(f"❌ Ошибка при отправке части мысли {i+1}: {e}")
                     continue
             
-            # ✅ ИСПРАВЛЕНО: синхронное сохранение
             if user_id not in user_data:
                 user_data[user_id] = {}
             user_data[user_id]["psychologist_thought"] = thought
@@ -912,8 +884,6 @@ async def show_final_profile_async(message: Message, user_id: int):
         if user_id not in user_data:
             user_data[user_id] = {}
         user_data[user_id]["ai_generated_profile"] = ai_profile
-        
-        # ✅ ИСПРАВЛЕНО: синхронное сохранение
         save_profile_to_db_sync(user_id)
         
         if status_msg:
@@ -945,19 +915,16 @@ def show_profile(message: Message, user_id: int):
         )
         return
     
-    # ✅ 1. ПРОВЕРЯЕМ НАЛИЧИЕ AI ПРОФИЛЯ
     if data.get("ai_generated_profile"):
         logger.info(f"✅ Найден AI профиль для пользователя {user_id}, показываем его")
         show_ai_profile(message, user_id)
         return
     
-    # ✅ 2. ПРОВЕРЯЕМ НАЛИЧИЕ ФИНАЛЬНОГО ПРОФИЛЯ
     if data.get("profile_data"):
         logger.info(f"✅ Найден profile_data для пользователя {user_id}, показываем финальный профиль")
         show_final_profile(message, user_id)
         return
     
-    # ✅ 3. ЕСЛИ НЕТ НИЧЕГО, ПОКАЗЫВАЕМ СТАНДАРТНЫЙ
     logger.info(f"📊 Нет AI профиля для пользователя {user_id}, показываем стандартный")
     
     scores = {}
