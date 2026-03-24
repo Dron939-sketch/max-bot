@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики сбора контекста (город, возраст, пол) для MAX
-ВЕРСИЯ 2.1 - ИСПРАВЛЕНО: используется sync_db вместо создания новых циклов
+ВЕРСИЯ 2.2 - ИСПРАВЛЕНО: используется db_instance вместо db_sync
 """
 
 import logging
@@ -29,8 +29,15 @@ from state import (
     get_state, set_state, get_state_data, update_state_data, clear_state, TestStates
 )
 
-# ✅ ИСПРАВЛЕНО: используем sync_db вместо прямых вызовов
-from db_sync import sync_db
+# ✅ ИСПРАВЛЕНО: используем db_instance вместо db_sync
+from db_instance import (
+    save_user,
+    save_context,
+    save_user_data,
+    log_event,
+    load_user_data,
+    load_user_context
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,16 +78,57 @@ def get_user_context_dict() -> Dict[int, UserContext]:
     """Возвращает словарь контекстов пользователей"""
     return user_contexts
 
+# ============================================
+# ✅ ИСПРАВЛЕНО: СОХРАНЕНИЕ КОНТЕКСТА В БД (синхронно)
+# ============================================
+
 def save_context_to_db(user_id: int):
     """СИНХРОННО сохраняет контекст пользователя в БД"""
     context = get_user_context(user_id)
     if context:
         try:
-            # Сохраняем пользователя целиком через sync_db
-            sync_db.save_user_to_db(user_id)
+            # Сохраняем пользователя
+            save_user(user_id, user_names.get(user_id), None)
+            
+            # Сохраняем контекст
+            save_context(
+                user_id,
+                name=context.name,
+                age=context.age,
+                gender=context.gender,
+                city=context.city,
+                mode=context.communication_mode,
+                data={
+                    'weather_cache': context.weather_cache,
+                    'life_context_complete': context.life_context_complete,
+                    'family_status': getattr(context, 'family_status', None),
+                    'has_children': getattr(context, 'has_children', None),
+                    'children_ages': getattr(context, 'children_ages', None),
+                    'work_schedule': getattr(context, 'work_schedule', None),
+                    'job_title': getattr(context, 'job_title', None),
+                    'commute_time': getattr(context, 'commute_time', None),
+                    'housing_type': getattr(context, 'housing_type', None),
+                    'has_private_space': getattr(context, 'has_private_space', None),
+                    'has_car': getattr(context, 'has_car', None),
+                    'support_people': getattr(context, 'support_people', None),
+                    'resistance_people': getattr(context, 'resistance_people', None),
+                    'energy_level': getattr(context, 'energy_level', None)
+                }
+            )
             logger.debug(f"💾 Контекст пользователя {user_id} сохранен в БД")
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения контекста {user_id}: {e}")
+    else:
+        logger.warning(f"⚠️ Нет контекста для сохранения user_id={user_id}")
+
+def run_sync_in_background(func, *args, **kwargs):
+    """Запускает синхронную функцию в фоновом потоке"""
+    def _wrapper():
+        try:
+            func(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в фоновой задаче: {e}")
+    threading.Thread(target=_wrapper, daemon=True).start()
 
 # ============================================
 # НАЧАЛО СБОРА КОНТЕКСТА
@@ -194,8 +242,8 @@ def handle_context_callback(call: CallbackQuery):
         context.gender = "male"
         context.awaiting_context = None
         
-        # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
-        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
+        # ✅ Сохраняем в БД
+        run_sync_in_background(save_context_to_db, user_id)
         
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
@@ -220,8 +268,8 @@ def handle_context_callback(call: CallbackQuery):
         context.gender = "female"
         context.awaiting_context = None
         
-        # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
-        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
+        # ✅ Сохраняем в БД
+        run_sync_in_background(save_context_to_db, user_id)
         
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
@@ -246,8 +294,8 @@ def handle_context_callback(call: CallbackQuery):
         context.gender = "other"
         context.awaiting_context = None
         
-        # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
-        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
+        # ✅ Сохраняем в БД
+        run_sync_in_background(save_context_to_db, user_id)
         
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
@@ -272,8 +320,8 @@ def handle_context_callback(call: CallbackQuery):
         logger.info(f"⏭️ Пропускаем сбор контекста")
         context.awaiting_context = None
         
-        # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
-        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
+        # ✅ Сохраняем в БД
+        run_sync_in_background(save_context_to_db, user_id)
         
         safe_send_message(
             call.message,
@@ -366,8 +414,8 @@ def handle_context_message(message: Message) -> bool:
                 context.detect_timezone_from_city()
                 logger.info(f"✅ Часовой пояс определен")
                 
-                # Сохраняем в БД синхронно
-                save_context_to_db(user_id)
+                # Сохраняем в БД
+                run_sync_in_background(save_context_to_db, user_id)
                 
                 # Получаем следующий вопрос
                 question, keyboard = context.ask_for_context()
@@ -430,7 +478,7 @@ def handle_context_message(message: Message) -> bool:
                 
                 # Сохраняем в БД
                 logger.info(f"💾 [AGE] Сохраняем в БД...")
-                threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
+                run_sync_in_background(save_context_to_db, user_id)
                 logger.info(f"✅ [AGE] Задача сохранения запущена")
                 
                 # Получаем следующий вопрос
@@ -451,7 +499,6 @@ def handle_context_message(message: Message) -> bool:
                 else:
                     logger.info(f"🎉 [AGE] Вопросов больше нет, вызываем show_context_complete")
                     
-                    # Запускаем show_context_complete в отдельном потоке
                     def call_show_complete():
                         try:
                             show_context_complete(message, context)
@@ -495,8 +542,8 @@ def handle_context_message(message: Message) -> bool:
         
         context.awaiting_context = None
         
-        # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
-        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
+        # ✅ Сохраняем в БД
+        run_sync_in_background(save_context_to_db, user_id)
         
         # Получаем следующий вопрос
         logger.info(f"❓ Получаем следующий вопрос после пола...")
@@ -538,8 +585,8 @@ def show_context_complete(message: Message, context: UserContext):
         context.update_weather()
         logger.info(f"✅ Погода обновлена")
         
-        # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
-        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
+        # ✅ Сохраняем в БД
+        run_sync_in_background(save_context_to_db, user_id)
         logger.info(f"✅ Задача сохранения в БД запущена")
         
         # Формируем сводку
@@ -610,8 +657,8 @@ def cmd_context(message: Message):
     context.weather_cache = {}
     context.life_context_complete = False
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем сброс в БД синхронно
-    threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
+    # ✅ Сохраняем сброс в БД
+    run_sync_in_background(save_context_to_db, user_id)
     
     safe_send_message(
         message,
@@ -763,8 +810,8 @@ def save_life_context(user_id: int, answers: dict):
     context.energy_level = answers.get('energy_level')
     context.life_context_complete = True
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД синхронно
-    threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
+    # ✅ Сохраняем в БД
+    run_sync_in_background(save_context_to_db, user_id)
 
 def parse_life_context_from_text(text: str) -> dict:
     """
@@ -790,7 +837,6 @@ def parse_life_context_from_text(text: str) -> dict:
         
         # Работа и график
         elif i == 2:
-            # Пробуем извлечь профессию и график
             answers['job_title'] = clean
             if '5/2' in clean:
                 answers['work_schedule'] = '5/2'
@@ -851,5 +897,7 @@ __all__ = [
     'ensure_context',
     'show_current_context',
     'save_life_context',
-    'parse_life_context_from_text'
+    'parse_life_context_from_text',
+    'save_context_to_db',
+    'run_sync_in_background'
 ]
