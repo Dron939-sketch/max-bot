@@ -466,7 +466,7 @@ def save_profile_to_db_sync(user_id: int):
                 )
         
         # Сохраняем пользователя
-        save_user(user_id, user_names.get(user_id), None)
+        save_user(user_id, get_user_name(user_id), None)
         
         logger.info(f"💾 Профиль пользователя {user_id} сохранен в БД (test_id: {test_id})")
         return True
@@ -776,7 +776,7 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
             if user_id not in user_data:
                 user_data[user_id] = {}
             user_data[user_id]["psychologist_thought"] = thought
-            save_user(user_id, user_names.get(user_id), None)
+            save_user(user_id, get_user_name(user_id), None)
             save_user_data(user_id, user_data[user_id])
             
             logger.info(f"🎉 Все {len(merged_parts)} частей мысли успешно отправлены")
