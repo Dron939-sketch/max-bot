@@ -250,77 +250,83 @@ class FrediDashboard {
     // ============================================
     
     async loadUserData() {
-        try {
-            // Запрос статуса
-            const status = await window.api.request(`/api/user-status?user_id=${this.userId}`);
+    try {
+        console.log('🔍 Загрузка данных для user_id:', this.userId);
+        
+        // Запрос статуса
+        const status = await window.api.request(`/api/user-status?user_id=${this.userId}`);
+        console.log('📊 Статус пользователя:', status);
+        
+        // ✅ КЛЮЧЕВОЕ: устанавливаем isTestCompleted на основе данных из API
+        this.isTestCompleted = status.test_completed === true || 
+                               status.has_profile === true || 
+                               status.has_interpretation === true ||
+                               (status.profile_code && status.profile_code !== '');
+        
+        this.profileCode = status.profile_code;
+        
+        console.log('📌 isTestCompleted:', this.isTestCompleted);
+        console.log('📌 profileCode:', this.profileCode);
+        
+        // Если профиля нет в памяти — загружаем из БД
+        if (!status.has_profile && !status.test_completed && !status.has_interpretation) {
+            console.log('🔄 Профиль не найден в памяти, загружаем из БД...');
             
-            // Если профиля нет в памяти — загружаем из БД
-            if (!status.has_profile && !status.test_completed) {
-                console.log('🔄 Профиль не найден в памяти, загружаем из БД...');
-                
-                const loadResult = await window.api.request('/api/force-load-user', {
-                    method: 'POST',
-                    body: JSON.stringify({ user_id: this.userId })
-                });
-                
-                if (loadResult.success && loadResult.has_profile) {
-                    console.log('✅ Профиль загружен из БД!');
-                    const newStatus = await window.api.request(`/api/user-status?user_id=${this.userId}`);
-                    this.isTestCompleted = newStatus.test_completed || newStatus.has_profile;
-                    this.profileCode = newStatus.profile_code;
-                } else {
-                    this.isTestCompleted = false;
-                    console.log('❌ Профиль не найден в БД');
-                }
-            } else {
-                this.isTestCompleted = status.test_completed || status.has_profile;
-                this.profileCode = status.profile_code;
-            }
-            
-            // Загружаем имя пользователя
-            try {
-                const userData = await window.api.request(`/api/user-data?user_id=${this.userId}`);
-                if (userData && userData.user_name) {
-                    this.userName = userData.user_name;
-                    console.log('👤 Имя пользователя загружено из БД:', this.userName);
-                }
-            } catch (nameError) {
-                console.warn('Не удалось загрузить имя из БД:', nameError);
-            }
-            
-            // Если имя не загрузилось, пробуем из MAX.WebApp
-            if (this.userName === 'Друг' && window.MAX?.WebApp?.initDataUnsafe?.user?.first_name) {
-                this.userName = window.MAX.WebApp.initDataUnsafe.user.first_name;
-                console.log('👤 Имя получено из MAX.WebApp:', this.userName);
-            }
-            
-            // Если тест пройден, загружаем полный профиль
-            if (this.isTestCompleted) {
-                const profile = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
-                this.userData = profile;
-            }
-            
-            // Загружаем статистику
-            try {
-                const stats = await window.api.request(`/api/user-full-status?user_id=${this.userId}`);
-                if (stats.days_active) this.daysActive = stats.days_active;
-                if (stats.sessions_count) this.sessionsCount = stats.sessions_count;
-            } catch (statsError) {
-                console.warn('Не удалось загрузить статистику:', statsError);
-            }
-            
-            console.log('📊 Данные пользователя:', { 
-                userId: this.userId, 
-                userName: this.userName,
-                testCompleted: this.isTestCompleted,
-                profileCode: this.profileCode
+            const loadResult = await window.api.request('/api/force-load-user', {
+                method: 'POST',
+                body: JSON.stringify({ user_id: this.userId })
             });
             
-        } catch (error) {
-            console.error('Ошибка загрузки данных:', error);
-            this.isTestCompleted = false;
+            console.log('📦 Результат force-load:', loadResult);
+            
+            if (loadResult.success && loadResult.has_profile) {
+                console.log('✅ Профиль загружен из БД!');
+                this.isTestCompleted = true;
+                this.profileCode = loadResult.profile_code;
+            }
         }
+        
+        // Если всё ещё нет профиля — показываем фолбэк
+        if (!this.isTestCompleted) {
+            console.log('⚠️ Профиль не найден, показываем демо-режим');
+            this.showDemoMode();
+            return;
+        }
+        
+        // Загружаем имя пользователя
+        try {
+            const userData = await window.api.request(`/api/user-data?user_id=${this.userId}`);
+            if (userData && userData.user_name) {
+                this.userName = userData.user_name;
+                console.log('👤 Имя пользователя:', this.userName);
+            }
+        } catch (nameError) {
+            console.warn('Не удалось загрузить имя из БД:', nameError);
+        }
+        
+        // Если тест пройден, загружаем полный профиль
+        if (this.isTestCompleted) {
+            const profile = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
+            this.userData = profile;
+            console.log('📊 Профиль загружен:', this.userData);
+        }
+        
+        console.log('✅ loadUserData завершён, isTestCompleted:', this.isTestCompleted);
+        
+    } catch (error) {
+        console.error('Ошибка загрузки данных:', error);
+        this.isTestCompleted = false;
+        this.showDemoMode();
     }
+}
+
+showDemoMode() {
+    console.log('🎮 Включаем демо-режим');
+    this.isTestCompleted = true;  // Временно включаем для демо
+    this.profileCode = "ДЕМО-ПРОФИЛЬ";
+    this.userName = this.userName || "Гость";
+    this.renderDashboard();
+}
     
     // ============================================
     // ЗАГРУЗКА ПРОФИЛЯ
