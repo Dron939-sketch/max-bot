@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики выбора и подтверждения режима для MAX
-Версия 2.6 - ИСПРАВЛЕНО: замена sync_db на прямые вызовы db_instance
+Версия 2.5 - ИСПРАВЛЕНО: имя пользователя из get_user_name
 """
 import logging
 import time
@@ -34,24 +34,10 @@ from state import (
     TestStates
 )
 
-# ✅ ИСПРАВЛЕНО: используем db_instance вместо db_sync
-from db_instance import (
-    save_user,
-    save_user_data,
-    save_context,
-    save_test_result,
-    log_event,
-    add_reminder,
-    get_user_reminders,
-    complete_reminder,
-    load_user_data,
-    load_user_context,
-    load_all_users,
-    get_stats
-)
+# ✅ ИСПРАВЛЕНО: используем sync_db вместо прямых вызовов
+from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
-
 
 # ============================================
 # ФУНКЦИИ ДЛЯ РАБОТЫ С БД
@@ -60,8 +46,8 @@ logger = logging.getLogger(__name__)
 def save_mode_to_db(user_id: int, mode: str):
     """Сохраняет выбранный режим в БД (синхронная версия)"""
     try:
-        # Логируем событие через log_event
-        log_event(
+        # Логируем событие через sync_db
+        sync_db.log_event(
             user_id,
             'mode_selected',
             {
@@ -71,36 +57,12 @@ def save_mode_to_db(user_id: int, mode: str):
             }
         )
         
-        # Сохраняем пользователя
-        save_user(user_id, get_user_name(user_id), None)
-        
-        # Сохраняем контекст
-        context = get_user_context(user_id)
-        if context:
-            save_context(
-                user_id,
-                name=getattr(context, 'name', None),
-                age=getattr(context, 'age', None),
-                gender=getattr(context, 'gender', None),
-                city=getattr(context, 'city', None),
-                mode=mode,
-                data={'communication_mode': mode}
-            )
-        
+        # Сохраняем пользователя целиком
+        sync_db.save_user_to_db(user_id)
         logger.debug(f"💾 Режим {mode} для пользователя {user_id} сохранен в БД")
         
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения режима для {user_id}: {e}")
-
-def run_sync_in_background(func, *args, **kwargs):
-    """Запускает синхронную функцию в отдельном потоке"""
-    def _wrapper():
-        try:
-            func(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в фоновой задаче: {e}")
-    threading.Thread(target=_wrapper, daemon=True).start()
-
 
 # ============================================
 # ОБРАБОТЧИКИ КОМАНД
@@ -281,7 +243,7 @@ def callback_back_to_main(call: types.CallbackQuery):
     if context:
         show_main_menu(call.message, context)
     else:
-        # Si нет контекста, создаем новый
+        # Если нет контекста, создаем новый
         context = UserContext(user_id)
         contexts_dict = get_user_context_dict()
         contexts_dict[user_id] = context
@@ -308,8 +270,8 @@ def set_mode_coach(call: types.CallbackQuery):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через синхронную функцию в фоне
-    run_sync_in_background(save_mode_to_db, user_id, "coach")
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через sync_db
+    save_mode_to_db(user_id, "coach")
     
     # Показываем подтверждение
     show_mode_selected(call.message, "coach")
@@ -337,8 +299,8 @@ def set_mode_psychologist(call: types.CallbackQuery):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через синхронную функцию в фоне
-    run_sync_in_background(save_mode_to_db, user_id, "psychologist")
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через sync_db
+    save_mode_to_db(user_id, "psychologist")
     
     # Показываем подтверждение
     show_mode_selected(call.message, "psychologist")
@@ -366,8 +328,8 @@ def set_mode_trainer(call: types.CallbackQuery):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через синхронную функцию в фоне
-    run_sync_in_background(save_mode_to_db, user_id, "trainer")
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через sync_db
+    save_mode_to_db(user_id, "trainer")
     
     # Показываем подтверждение
     show_mode_selected(call.message, "trainer")
@@ -405,8 +367,8 @@ def choose_mode(call: types.CallbackQuery, mode: str):
     contexts_dict = get_user_context_dict()
     contexts_dict[user_id] = context
     
-    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через синхронную функцию в фоне
-    run_sync_in_background(save_mode_to_db, user_id, new_mode)
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через sync_db
+    save_mode_to_db(user_id, new_mode)
     
     mode_info = COMMUNICATION_MODES.get(new_mode, COMMUNICATION_MODES["coach"])
     
