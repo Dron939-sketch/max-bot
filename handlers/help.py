@@ -1,1037 +1,566 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Обработчики профиля пользователя для MAX
-Версия 2.8 - ИСПРАВЛЕНО: синхронные вызовы БД через sync_db, добавлен импорт asyncio
+Обработчики помощи для MAX
+ВЕРСИЯ 2.4 - ДОБАВЛЕНЫ АСИНХРОННЫЕ ВЕРСИИ ДЛЯ СОВМЕСТИМОСТИ
 """
 
 import logging
-import asyncio
+import random
 import time
-import traceback
 import threading
-from typing import Optional, List, Dict, Any
-
-from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from typing import Dict, Any, Optional
 
 from bot_instance import bot
-from message_utils import safe_send_message, safe_delete_message, send_with_status_cleanup
-from state import user_data, user_contexts, get_state, set_state, TestStates, get_user_name
-from services import generate_ai_profile, generate_psychologist_thought
-from profiles import VECTORS, DILTS_LEVELS, LEVEL_PROFILES
-from formatters import (
-    bold, italic, format_profile_text, format_psychologist_text,
-    clean_text_for_safe_display, ensure_full_width
+from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
+
+# Наши модули
+from config import COMMUNICATION_MODES
+from message_utils import safe_send_message, safe_edit_message
+from keyboards import get_back_keyboard
+from formatters import bold
+
+# Импорты из state
+from state import (
+    user_data, user_state_data, user_contexts, user_names, user_states,
+    get_state, set_state, get_state_data, update_state_data, clear_state
 )
 
-# ✅ ИСПРАВЛЕНО: импорт из db_sync
+# ✅ ИСПРАВЛЕНО: используем sync_db
 from db_sync import sync_db
 
-# Убираем прямой импорт из main, создаем глобальную переменную
-morning_manager = None
-
-def set_morning_manager(manager):
-    """Устанавливает экземпляр morning_manager (вызывается из main)"""
-    global morning_manager
-    morning_manager = manager
-    logger.info("✅ morning_manager установлен в profile.py")
-
 logger = logging.getLogger(__name__)
-
-# Флаг для предотвращения одновременной генерации для одного пользователя
-_profile_generation_in_progress = {}
-
-
-# ============================================
-# ФУНКЦИЯ ДЛЯ РАЗБИВКИ ДЛИННЫХ СООБЩЕНИЙ
-# ============================================
-
-def split_long_message(text: str, max_length: int = 3500) -> List[str]:
-    """
-    Разбивает длинное сообщение на части по границам предложений
-    """
-    if not text or len(text) <= max_length:
-        return [text]
-    
-    parts = []
-    remaining = text
-    
-    while remaining:
-        if len(remaining) <= max_length:
-            parts.append(remaining)
-            break
-        
-        # Ищем место для разрыва
-        split_point = -1
-        
-        # 1. Пробуем найти конец предложения
-        for separator in ['. ', '! ', '? ', '.\n', '!\n', '?\n', '\n\n']:
-            pos = remaining.rfind(separator, 0, max_length)
-            if pos > split_point:
-                split_point = pos + len(separator)
-        
-        # 2. Если нет конца предложения, ищем пробел
-        if split_point == -1 or split_point <= max_length // 2:
-            split_point = remaining.rfind(' ', 0, max_length)
-        
-        # 3. Если нет пробела, режем жестко
-        if split_point == -1:
-            split_point = max_length
-        
-        # Добавляем часть (убираем лишние пробелы)
-        part = remaining[:split_point].strip()
-        if part:  # Только если часть не пустая
-            parts.append(part)
-        remaining = remaining[split_point:].strip()
-    
-    logger.info(f"✂️ Сообщение разбито на {len(parts)} частей (было {len(text)} символов)")
-    return parts
-
-
-def optimize_message_parts(parts: List[str]) -> List[str]:
-    """
-    Оптимизирует части сообщения - убирает пустые и слишком короткие
-    """
-    if not parts:
-        return []
-    
-    optimized = []
-    min_length = 50  # Минимальная длина содержательной части
-    
-    for part in parts:
-        # Очищаем от пробелов
-        cleaned = ensure_full_width(part).strip()
-        
-        # Проверяем, что часть не пустая и достаточно длинная
-        if cleaned and len(cleaned) >= min_length:
-            optimized.append(cleaned)
-        elif cleaned and len(cleaned) < min_length:
-            # Если часть слишком короткая, присоединяем к предыдущей
-            if optimized:
-                optimized[-1] = optimized[-1] + "\n\n" + cleaned
-            else:
-                optimized.append(cleaned)
-    
-    return optimized
-
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================
 
-def determine_dominant_dilts(dilts_counts: dict) -> str:
-    """Определяет доминирующий уровень Дилтса"""
-    if not dilts_counts:
-        return "BEHAVIOR"
-    dominant = max(dilts_counts.items(), key=lambda x: x[1])
-    return dominant[0]
+def get_user_data_dict(user_id: int) -> Dict[str, Any]:
+    """Получает данные пользователя"""
+    if user_id not in user_data:
+        user_data[user_id] = {}
+    return user_data[user_id]
 
-def safe_get_profile_info(vector: str, level_num: int, key: str, default: str = "Информация уточняется") -> str:
-    """Безопасно получает информацию из профиля"""
+def get_user_state_data_dict(user_id: int) -> Dict[str, Any]:
+    """Получает данные состояния пользователя"""
+    if user_id not in user_state_data:
+        user_state_data[user_id] = {}
+    return user_state_data[user_id]
+
+def get_user_context_obj(user_id: int):
+    """Получает контекст пользователя"""
+    return user_contexts.get(user_id)
+
+def get_user_name(user_id: int) -> str:
+    """Получает имя пользователя"""
+    return user_names.get(user_id, "друг")
+
+def is_test_completed_check(user_data_dict: dict) -> bool:
+    """Проверяет, завершен ли тест"""
+    if user_data_dict.get("profile_data"):
+        return True
+    if user_data_dict.get("ai_generated_profile"):
+        return True
+    required_minimal = ["perception_type", "thinking_level", "behavioral_levels"]
+    if all(field in user_data_dict for field in required_minimal):
+        return True
+    return False
+
+# ============================================
+# ФУНКЦИИ ДЛЯ РАБОТЫ С БД (СИНХРОННЫЕ)
+# ============================================
+
+def log_help_event(user_id: int, action: str, category: str = None):
+    """Синхронно логирует события помощи в БД"""
     try:
-        profile = LEVEL_PROFILES.get(vector, {}).get(level_num, {})
-        if isinstance(profile, dict):
-            if key == 'quote':
-                return profile.get('quote') or profile.get('description') or profile.get('block1') or default
-            elif key == 'pain_origin':
-                return profile.get('pain_origin') or profile.get('origin') or profile.get('block2') or default
-            elif key == 'pain_costs':
-                costs = profile.get('pain_costs') or profile.get('costs') or []
-                if costs:
-                    return costs
-                return ["Энергией", "Временем", "Возможностями"]
-        else:
-            if key == 'quote':
-                return str(profile)
-            elif key == 'pain_origin':
-                return "Из вашего опыта"
-            elif key == 'pain_costs':
-                return ["Энергией", "Временем", "Возможностями"]
+        sync_db.log_event(
+            user_id,
+            f'help_{action}',
+            {
+                'category': category,
+                'timestamp': time.time()
+            }
+        )
+        logger.debug(f"💾 Событие помощи {action} для {user_id} сохранено в БД")
     except Exception as e:
-        logger.error(f"Ошибка при получении информации из профиля: {e}")
-    return default
+        logger.error(f"❌ Ошибка логирования события помощи для {user_id}: {e}")
 
-def get_human_readable_profile(scores: dict, model=None, perception_type="не определен", 
-                                thinking_level=5, dominant_dilts="BEHAVIOR") -> str:
-    """Возвращает портрет пользователя понятным языком"""
-    lines = []
-    
-    if scores:
-        min_vector = min(scores.items(), key=lambda x: x[1])
-        vector, score = min_vector
-        lvl = int(score)
-        
-        quote = safe_get_profile_info(vector, lvl, 'quote', 'Пока не определено')
-        pain_origin = safe_get_profile_info(vector, lvl, 'pain_origin', 'Из вашего опыта')
-        costs = safe_get_profile_info(vector, lvl, 'pain_costs', ["Энергией", "Временем", "Возможностями"])
-    else:
-        vector = "СБ"
-        quote = "Пока не определено"
-        pain_origin = "Из вашего опыта"
-        costs = ["Энергией", "Временем", "Возможностями"]
-    
-    lines.append(f"🧠 {bold('ВАШ ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ')}")
-    lines.append("")
-    lines.append(f"🔍 {bold('Тип восприятия:')} {perception_type}")
-    lines.append(f"🧠 {bold('Уровень мышления:')} {thinking_level}/9")
-    lines.append("")
-    lines.append(f"🔑 {bold('КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА')}")
-    lines.append(quote)
-    lines.append("")
-    lines.append(f"💪 {bold('СИЛЬНЫЕ СТОРОНЫ')}")
-    lines.append("• Высокоразвитые социальные навыки и умение выстраивать надежные, доверительные отношения.")
-    lines.append("• Системное мышление, позволяющее видеть связи, управлять сложными процессами и достигать целей.")
-    lines.append("• Исключительная устойчивость к стрессу и угрозам, способность действовать хладнокровно в кризисах.")
-    lines.append("• Прагматизм и высокая компетентность в вопросах финансов, карьеры и социального взаимодействия.")
-    lines.append("")
-    lines.append(f"🎯 {bold('ЗОНЫ РОСТА')}")
-    lines.append(f"• {pain_origin}")
-    if isinstance(costs, list):
-        for cost in costs[:3]:
-            lines.append(f"• {cost}")
-    lines.append("")
-    lines.append(f"⚠️ {bold('ГЛАВНАЯ ЛОВУШКА')}")
-    dilts_desc = DILTS_LEVELS.get(dominant_dilts, "⚡ Поведение")
-    lines.append(f"• {dilts_desc}")
-    
-    return "\n".join(lines)
+def log_benefits_view(user_id: int):
+    """Синхронно логирует просмотр преимуществ теста"""
+    try:
+        sync_db.log_event(
+            user_id,
+            'benefits_viewed',
+            {'timestamp': time.time()}
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка логирования просмотра преимуществ для {user_id}: {e}")
 
-def convert_to_simple_language(scores: dict, perception_type: str, thinking_level: int, deep_patterns: dict = None) -> dict:
-    """Конвертирует технические данные в простые описания"""
-    
-    result = {}
-    
-    # 1. Внимание (куда смотрит)
-    if perception_type in ["СОЦИАЛЬНО-ОРИЕНТИРОВАННЫЙ", "СТАТУСНО-ОРИЕНТИРОВАННЫЙ"]:
-        result['attention'] = "ВЫ ОРИЕНТИРУЕТЕСЬ НА ЛЮДЕЙ"
-        result['attention_desc'] = "Для вас важно, что думают другие, вы чутко считываете настроение и ожидания окружающих."
-    else:
-        result['attention'] = "ВЫ ОРИЕНТИРУЕТЕСЬ НА СЕБЯ"
-        result['attention_desc'] = "Для вас важнее ваши внутренние ощущения и чувства, чем мнение других."
-    
-    # 2. Мышление
-    if thinking_level <= 3:
-        result['thinking'] = "ВЫ МЫСЛИТЕ КОНКРЕТНО"
-        result['thinking_desc'] = "Вы хорошо видите отдельные ситуации, но не всегда замечаете общие закономерности."
-    elif thinking_level <= 6:
-        result['thinking'] = "ВЫ МЫСЛИТЕ СИСТЕМНО"
-        result['thinking_desc'] = "Вы замечаете закономерности, но не всегда видите, к чему они приведут в будущем."
-    else:
-        result['thinking'] = "ВЫ МЫСЛИТЕ ГЛУБОКО"
-        result['thinking_desc'] = "Вы видите общие законы и можете предсказывать развитие ситуаций."
-    
-    # 3. СБ (реакция на угрозу)
-    sb_level = int(scores.get("СБ", 3))
-    sb_profiles = {
-        1: "Под давлением вы замираете и не можете слова сказать.",
-        2: "Вы избегаете конфликтов — уходите, прячетесь, уворачиваетесь.",
-        3: "Вы соглашаетесь внешне, но внутри всё кипит.",
-        4: "Вы внешне спокойны, но внутри держите всё в себе.",
-        5: "Вы пытаетесь сгладить конфликт, перевести в шутку.",
-        6: "Вы умеете защищать себя, но можете и атаковать в ответ."
-    }
-    result['sb_desc'] = sb_profiles.get(sb_level, "Вы по-разному реагируете на давление.")
-    
-    # 4. ТФ (деньги)
-    tf_level = int(scores.get("ТФ", 3))
-    tf_profiles = {
-        1: "Деньги приходят и уходят — как повезёт.",
-        2: "Вы ищете возможности, но каждый раз как с нуля.",
-        3: "Вы умеете зарабатывать своим трудом.",
-        4: "Вы хорошо зарабатываете и можете копить.",
-        5: "Вы создаёте системы дохода и управляете финансами.",
-        6: "Вы управляете капиталом и создаёте финансовые структуры."
-    }
-    result['tf_desc'] = tf_profiles.get(tf_level, "У вас свои отношения с деньгами.")
-    result['tf_strong'] = tf_level >= 5
-    
-    # 5. УБ (понимание мира)
-    ub_level = int(scores.get("УБ", 3))
-    ub_profiles = {
-        1: "Вы стараетесь не думать о сложном — само как-то решится.",
-        2: "Вы верите в знаки, судьбу, высшие силы.",
-        3: "Вы доверяете экспертам и авторитетам.",
-        4: "Вы ищете скрытые смыслы и заговоры.",
-        5: "Вы анализируете факты и делаете выводы сами.",
-        6: "Вы строите теории и ищете закономерности."
-    }
-    result['ub_desc'] = ub_profiles.get(ub_level, "Вы по-своему понимаете мир.")
-    result['ub_weak'] = ub_level <= 2
-    
-    # 6. ЧВ (отношения)
-    chv_level = int(scores.get("ЧВ", 3))
-    chv_profiles = {
-        1: "Вы сильно привязываетесь к людям, тяжело без них.",
-        2: "Вы подстраиваетесь под других, теряя себя.",
-        3: "Вы хотите нравиться, показываете себя с лучшей стороны.",
-        4: "Вы умеете влиять на людей, добиваться своего.",
-        5: "Вы строите равные партнёрские отношения.",
-        6: "Вы создаёте сообщества и сети контактов."
-    }
-    result['chv_desc'] = chv_profiles.get(chv_level, "У вас свои паттерны в отношениях.")
-    
-    # 7. Точка роста
-    growth_map = {
-        "ENVIRONMENT": "Посмотрите вокруг — может, дело в обстоятельствах?",
-        "BEHAVIOR": "Попробуйте делать хоть что-то по-другому — маленькие шаги многое меняют.",
-        "CAPABILITIES": "Развивайте новые навыки — они откроют новые возможности.",
-        "VALUES": "Поймите, что для вас действительно важно — это изменит всё.",
-        "IDENTITY": "Ответьте себе на вопрос «кто я?» — в этом ключ к изменениям."
-    }
-    result['growth_point'] = growth_map.get(perception_type, "Начните с малого — и увидите, куда приведёт.")
-    
-    return result
-
-def calculate_profile_confidence(profile: dict) -> float:
-    """Рассчитывает уверенность в профиле"""
-    confidence = 0.5
-    
-    stages_done = 0
-    if profile.get("perception_type"):
-        stages_done += 1
-    if profile.get("thinking_level"):
-        stages_done += 1
-    if profile.get("behavioral_levels"):
-        stages_done += 1
-    if profile.get("dilts_counts"):
-        stages_done += 1
-    if profile.get("deep_patterns"):
-        stages_done += 1
-    
-    confidence += stages_done * 0.1
-    
-    clarification_count = profile.get("clarification_iteration", 0)
-    confidence += clarification_count * 0.05
-    
-    return min(1.0, confidence)
-
+def log_weekend_ideas_view(user_id: int, idea_type: str = None):
+    """Синхронно логирует просмотр идей на выходные"""
+    try:
+        sync_db.log_event(
+            user_id,
+            'weekend_ideas_viewed',
+            {
+                'idea_type': idea_type,
+                'timestamp': time.time()
+            }
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка логирования просмотра идей для {user_id}: {e}")
 
 # ============================================
-# НОВАЯ ФУНКЦИЯ: ПОКАЗ ПРЕДВАРИТЕЛЬНОГО ПРОФИЛЯ
+# КЛАВИАТУРА ДЛЯ ПОМОЩИ
 # ============================================
 
-def show_preliminary_profile(message: Message, user_id: int):
+def get_help_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура с категориями помощи"""
+    keyboard = InlineKeyboardMarkup()
+    
+    keyboard.row(
+        InlineKeyboardButton("🗣 Отношения", callback_data="help_cat_relations"),
+        InlineKeyboardButton("💰 Деньги", callback_data="help_cat_money")
+    )
+    keyboard.row(
+        InlineKeyboardButton("🧠 Самоощущение", callback_data="help_cat_self"),
+        InlineKeyboardButton("📚 Знания", callback_data="help_cat_knowledge")
+    )
+    keyboard.row(
+        InlineKeyboardButton("💪 Поддержка", callback_data="help_cat_support"),
+        InlineKeyboardButton("🎨 Муза", callback_data="help_cat_muse")
+    )
+    keyboard.row(
+        InlineKeyboardButton("🍏 Забота о себе", callback_data="help_cat_care")
+    )
+    keyboard.row(
+        InlineKeyboardButton("✏️ Написать самому", callback_data="ask_question")
+    )
+    keyboard.row(
+        InlineKeyboardButton("◀️ НАЗАД", callback_data="show_results")
+    )
+    
+    return keyboard
+
+# ============================================
+# ПОКАЗ МЕНЮ ПОМОЩИ
+# ============================================
+
+def show_help(call: CallbackQuery):
     """
-    Показывает предварительный портрет простым языком после 4 этапа
+    Показывает меню помощи с категориями
     """
-    data = user_data.get(user_id, {})
-    context = user_contexts.get(user_id)
-    user_name = context.name if context and context.name else "друг"
+    user_id = call.from_user.id
+    context = get_user_context_obj(user_id)
     
-    scores = {}
-    for k in VECTORS:
-        levels = data.get("behavioral_levels", {}).get(k, [])
-        scores[k] = sum(levels) / len(levels) if levels else 3.0
+    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    threading.Thread(target=log_help_event, args=(user_id, 'menu_opened'), daemon=True).start()
     
-    perception_type = data.get("perception_type", "не определен")
-    thinking_level = data.get("thinking_level", 5)
-    
-    simple_profile = convert_to_simple_language(scores, perception_type, thinking_level)
-    
-    confidence = calculate_profile_confidence(data)
-    confidence_bar = "█" * int(confidence * 10) + "░" * (10 - int(confidence * 10))
+    # Проверяем, есть ли контекст для персонализации
+    greeting = ""
+    if context and context.name:
+        greeting = f"{context.name}, "
     
     text = f"""
-🧠 {bold('ПРЕДВАРИТЕЛЬНЫЙ ПОРТРЕТ')}
+🧠 <b>{greeting}ЧЕМ Я МОГУ БЫТЬ ПОЛЕЗЕН?</b>
 
-{user_name}, вот что я вижу в тебе прямо сейчас:
+🗣 <b>Отношения</b> — сложности с близкими, друзьями, коллегами
+💰 <b>Деньги и ресурсы</b> — финансовые вопросы, карьера
+🧠 <b>Самоощущение</b> — тревога, апатия, поиск себя
+📚 <b>Знания и развитие</b> — обучение, навыки, рост
+💪 <b>Поддержка</b> — просто выговориться, получить опору
+🎨 <b>Муза и творчество</b> — вдохновение, креативность
+🍏 <b>Забота о себе</b> — отдых, здоровье, энергия
 
-{simple_profile['attention_desc']}
+✏️ <b>Написать самому</b> — свой вопрос
 
-{simple_profile['thinking_desc']}
+👇 <b>Выбери категорию:</b>
+"""
+    
+    keyboard = get_help_keyboard()
+    
+    safe_send_message(
+        call.message,
+        text,
+        reply_markup=keyboard,
+        parse_mode='HTML',
+        delete_previous=True
+    )
 
-📊 {bold('ТВОИ ВЕКТОРЫ:')}
-• {bold('Реакция на давление:')} {simple_profile['sb_desc']}
-• {bold('Отношение к деньгам:')} {simple_profile['tf_desc']}
-• {bold('Понимание мира:')} {simple_profile['ub_desc']}
-• {bold('Отношения с людьми:')} {simple_profile['chv_desc']}
+# ============================================
+# ОБРАБОТКА КАТЕГОРИЙ ПОМОЩИ
+# ============================================
 
-🎯 {bold('Точка роста:')} {simple_profile['growth_point']}
+def handle_help_category(call: CallbackQuery, category: str):
+    """
+    Обрабатывает выбор категории помощи
+    """
+    user_id = call.from_user.id
+    context = get_user_context_obj(user_id)
+    
+    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    threading.Thread(target=log_help_event, args=(user_id, 'category_selected', category), daemon=True).start()
+    
+    # Тексты для разных категорий
+    category_texts = {
+        "relations": """
+🗣 <b>Отношения</b>
 
-📊 {bold('Уверенность в профиле:')} {confidence_bar} {int(confidence*100)}%
+Расскажите, что происходит в ваших отношениях. Я помогу разобраться в чувствах и найти новые перспективы.
 
-⚠️ {bold('ВАЖНО:')} Это предварительный анализ на основе первых 4 этапов.
-5-й этап добавит глубинные паттерны и сделает портрет точнее.
+Возможные темы:
+• Конфликты с близкими
+• Трудности в общении
+• Поиск партнёра
+• Границы в отношениях
+• Доверие и близость
+""",
+        "money": """
+💰 <b>Деньги и ресурсы</b>
 
-👇 {bold('ЭТО ПОХОЖЕ НА ТЕБЯ?')}
+Что беспокоит в финансовой сфере? Вместе исследуем ваши паттерны и найдём пути к изобилию.
+
+Возможные темы:
+• Нехватка денег
+• Страхи, связанные с финансами
+• Карьерный рост
+• Поиск призвания
+• Инвестиции и накопления
+""",
+        "self": """
+🧠 <b>Самоощущение</b>
+
+Расскажите о том, что чувствуете. Я помогу разобраться в себе и найти внутреннюю опору.
+
+Возможные темы:
+• Тревога и беспокойство
+• Апатия и усталость
+• Поиск себя
+• Самооценка
+• Внутренние конфликты
+""",
+        "knowledge": """
+📚 <b>Знания и развитие</b>
+
+Что хотите понять или освоить? Вместе построим путь к новым знаниям.
+
+Возможные темы:
+• Выбор направления обучения
+• Преодоление учебных трудностей
+• Развитие навыков
+• Систематизация знаний
+• Менторство и наставничество
+""",
+        "support": """
+💪 <b>Поддержка</b>
+
+Нужно просто выговориться? Я здесь, чтобы выслушать и поддержать. Иногда само проговаривание уже помогает найти решение.
+
+Расскажите, что у вас на душе.
+""",
+        "muse": """
+🎨 <b>Муза и творчество</b>
+
+Творческий блок? Расскажите, что мешает творить. Вместе поищем вдохновение.
+
+Возможные темы:
+• Страх чистого листа
+• Поиск идей
+• Самовыражение
+• Преодоление перфекционизма
+• Творческие проекты
+""",
+        "care": """
+🍏 <b>Забота о себе</b>
+
+Как вы заботитесь о себе? Поделитесь, что получается, а что хотелось бы улучшить.
+
+Возможные темы:
+• Отдых и восстановление
+• Здоровье и тело
+• Энергия и ресурсы
+• Границы и баланс
+• Привычки и режим
+"""
+    }
+    
+    base_text = category_texts.get(category, "Чем я могу помочь?")
+    
+    # Добавляем погоду и приветствие, если есть контекст
+    if context:
+        if context.weather_cache:
+            weather = context.weather_cache
+            greeting = context.get_greeting(context.name)
+            base_text += f"\n\n{greeting}\n"
+            base_text += f"{weather['icon']} {weather['description']}, {weather['temp']}°C"
+    
+    base_text += f"\n\n👇 <b>Напишите своим текстом:</b>"
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(InlineKeyboardButton("◀️ Назад", callback_data="show_help"))
+    
+    safe_send_message(
+        call.message,
+        base_text,
+        reply_markup=keyboard,
+        parse_mode='HTML',
+        delete_previous=True
+    )
+    
+    # ✅ ИСПРАВЛЕНО: используем state
+    user_states[user_id] = "awaiting_question"
+    
+    if user_id not in user_state_data:
+        user_state_data[user_id] = {}
+    user_state_data[user_id]["question_context"] = category
+
+# ============================================
+# ПОКАЗ ПРЕИМУЩЕСТВ ТЕСТА
+# ============================================
+
+def show_benefits(call: CallbackQuery):
+    """
+    Показывает преимущества прохождения теста
+    """
+    user_id = call.from_user.id
+    
+    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    threading.Thread(target=log_benefits_view, args=(user_id,), daemon=True).start()
+    
+    text = f"""
+🔍 **ЧТО ВЫ УЗНАЕТЕ О СЕБЕ:**
+
+🧠 **ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ**
+Линза, через которую вы смотрите на мир.
+
+🧠 **ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ**
+Как вы обрабатываете информацию.
+
+🧠 **ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ**
+Ваши автоматические реакции.
+
+🧠 **ЭТАП 4: ТОЧКА РОСТА**
+Где находится рычаг изменений.
+
+🧠 **ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ**
+Тип привязанности, защитные механизмы, базовые убеждения.
+
+⚡ **ПОСЛЕ ТЕСТА ВЫ ПОЛУЧИТЕ:**
+
+✅ Полный психологический портрет
+✅ Глубинный анализ подсознательных паттернов
+✅ Выбор стиля общения: 🔮 КОУЧ | 🧠 ПСИХОЛОГ | ⚡ ТРЕНЕР
+✅ Индивидуальный навигатор по целям
+✅ Напоминания и поддержка на пути
+
+⏱ **Всего 15 минут**
+
+👇 **Начинаем прямо сейчас?**
 """
     
     keyboard = InlineKeyboardMarkup()
-    keyboard.row(
-        InlineKeyboardButton("✅ ДА", callback_data="profile_confirm"),
-        InlineKeyboardButton("❓ ЕСТЬ СОМНЕНИЯ", callback_data="profile_doubt")
-    )
-    keyboard.row(InlineKeyboardButton("🔄 НЕТ", callback_data="profile_reject"))
+    keyboard.row(InlineKeyboardButton("🚀 НАЧАТЬ ТЕСТ", callback_data="start_stage_1_direct"))
     
     safe_send_message(
-        message,
+        call.message,
         text,
         reply_markup=keyboard,
-        parse_mode=None,
+        parse_mode='Markdown', 
         delete_previous=True
     )
-    
-    # Устанавливаем состояние подтверждения профиля
-    set_state(user_id, TestStates.profile_confirmation)
-
 
 # ============================================
-# ✅ ИСПРАВЛЕНО: СИНХРОННАЯ ФУНКЦИЯ СОХРАНЕНИЯ ПРОФИЛЯ В БД
+# ИДЕИ НА ВЫХОДНЫЕ
 # ============================================
 
-def save_profile_to_db_sync(user_id: int):
-    """Синхронное сохранение профиля пользователя в БД"""
-    try:
-        data = user_data.get(user_id, {})
-        
-        if not data:
-            logger.warning(f"⚠️ Нет данных для пользователя {user_id} при сохранении профиля")
-            return False
-        
-        # Получаем profile_code
-        profile_code = None
-        if data.get("profile_data"):
-            profile_code = data["profile_data"].get("display_name")
-        elif data.get("ai_generated_profile"):
-            import re
-            match = re.search(r'СБ-\d+_ТФ-\d+_УБ-\d+_ЧВ-\d+', data.get("ai_generated_profile", ""))
-            if match:
-                profile_code = match.group(0)
-        
-        # Сохраняем результат теста
-        test_id = sync_db.save_test_result(
-            user_id=user_id,
-            test_type='full_profile',
-            results=data,
-            profile_code=profile_code,
-            perception_type=data.get("perception_type"),
-            thinking_level=data.get("thinking_level"),
-            vectors=data.get("behavioral_levels"),
-            deep_patterns=data.get("deep_patterns"),
-            confinement_model=data.get("confinement_model")
-        )
-        
-        # Сохраняем все ответы, если есть
-        all_answers = data.get("all_answers", [])
-        if all_answers and test_id:
-            for answer in all_answers:
-                sync_db.save_test_answer(
-                    user_id=user_id,
-                    test_result_id=test_id,
-                    stage=answer.get('stage', 0),
-                    question_index=answer.get('question_index', 0),
-                    question_text=answer.get('question', ''),
-                    answer_text=answer.get('answer', ''),
-                    answer_value=answer.get('option', ''),
-                    scores=answer.get('scores'),
-                    measures=answer.get('measures'),
-                    strategy=answer.get('strategy'),
-                    dilts=answer.get('dilts'),
-                    pattern=answer.get('pattern'),
-                    target=answer.get('target')
-                )
-        
-        # Сохраняем пользователя
-        sync_db.save_user_to_db(user_id)
-        
-        logger.info(f"💾 Профиль пользователя {user_id} сохранен в БД (test_id: {test_id})")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения профиля {user_id} в БД: {e}")
-        traceback.print_exc()
-        return False
-
-
-# ============================================
-# АСИНХРОННЫЕ ВЕРСИИ ФУНКЦИЙ
-# ============================================
-
-async def show_ai_profile_async(message: Message, user_id: int):
-    """Асинхронная версия показа профиля, сгенерированного ИИ"""
-    data = user_data.get(user_id, {})
-    context = user_contexts.get(user_id)
-    user_name = context.name if context and context.name else ""
+def show_weekend_ideas(call: CallbackQuery):
+    """
+    Показывает идеи на выходные
+    """
+    user_id = call.from_user.id
+    user_name = get_user_name(user_id)
+    user_data_dict = get_user_data_dict(user_id)
     
-    status_msg = safe_send_message(
-        message,
-        "🧠 Анализирую данные и генерирую ваш психологический портрет...\n\nЭто займёт несколько секунд.",
-        delete_previous=True
-    )
+    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    threading.Thread(target=log_weekend_ideas_view, args=(user_id,), daemon=True).start()
     
-    try:
-        ai_profile = data.get("ai_generated_profile")
-        
-        if not ai_profile:
-            try:
-                ai_profile = await generate_ai_profile(user_id, data)
-            except Exception as e:
-                logger.error(f"❌ Ошибка при вызове generate_ai_profile: {e}")
-                ai_profile = None
-            
-            if ai_profile:
-                if user_id not in user_data:
-                    user_data[user_id] = {}
-                user_data[user_id]["ai_generated_profile"] = ai_profile
-                
-                # ✅ ИСПРАВЛЕНО: синхронное сохранение
-                save_profile_to_db_sync(user_id)
-        
-        if status_msg:
-            try:
-                await safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
-                pass
-        
-        if ai_profile:
-            # Форматируем текст
-            formatted_text = format_profile_text(ai_profile)
-            
-            # Добавляем обращение по имени в начало
-            if user_name and "обращаюсь" not in formatted_text[:50].lower():
-                formatted_text = f"{user_name}, " + formatted_text[0].lower() + formatted_text[1:]
-            
-            # Разбиваем на части
-            if len(formatted_text) > 3500:
-                logger.info(f"📏 AI профиль слишком длинный: {len(formatted_text)} > 3500. Разбиваем на части.")
-                profile_parts = split_long_message(formatted_text)
-                logger.info(f"✂️ Разбито на {len(profile_parts)} частей")
-                
-                # Оптимизируем части (убираем слишком короткие)
-                profile_parts = optimize_message_parts(profile_parts)
-            else:
-                profile_parts = [formatted_text]
-            
-            # Создаем клавиатуру
-            keyboard = InlineKeyboardMarkup()
-            keyboard.row(InlineKeyboardButton("🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"))
-            keyboard.row(
-                InlineKeyboardButton("🎤 ЗАДАТЬ ВОПРОС", callback_data="ask_question"),
-                InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations")
-            )
-            keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
-            
-            # Сохраняем chat_id для последующих частей
-            chat_id = message.chat.id
-            
-            # Отправляем все части, объединяя короткие
-            merged_parts = []
-            current = ""
-            
-            for part in profile_parts:
-                if len(current) + len(part) + 2 <= 3500:
-                    if current:
-                        current += "\n\n" + part
-                    else:
-                        current = part
-                else:
-                    if current:
-                        merged_parts.append(current)
-                    current = part
-            
-            if current:
-                merged_parts.append(current)
-            
-            # Отправляем финальные части
-            for i, part in enumerate(merged_parts):
-                try:
-                    if i == len(merged_parts) - 1:
-                        # Последняя часть с кнопками
-                        safe_send_message(
-                            message if i == 0 else None,
-                            part,
-                            reply_markup=keyboard,
-                            parse_mode=None,
-                            delete_previous=(i == 0),
-                            chat_id=chat_id if i > 0 else None
-                        )
-                        logger.info(f"✅ Отправлена последняя часть {i+1} с кнопками")
-                    else:
-                        # Промежуточные части без кнопок
-                        safe_send_message(
-                            None,
-                            part,
-                            parse_mode=None,
-                            delete_previous=False,
-                            chat_id=chat_id
-                        )
-                        logger.info(f"✅ Отправлена часть {i+1}/{len(merged_parts)}")
-                    
-                    await asyncio.sleep(1)  # пауза между сообщениями
-                    
-                except Exception as e:
-                    logger.error(f"❌ Ошибка при отправке части {i+1}: {e}")
-                    continue
-            
-            logger.info(f"🎉 Все {len(merged_parts)} частей профиля успешно отправлены")
-            
-            # ===== ПЛАНИРОВАНИЕ УТРЕННИХ СООБЩЕНИЙ =====
-            try:
-                if morning_manager is None:
-                    logger.warning(f"⚠️ morning_manager не инициализирован для пользователя {user_id}")
-                else:
-                    # Получаем scores из данных
-                    scores = {}
-                    for k in VECTORS:
-                        levels = data.get("behavioral_levels", {}).get(k, [])
-                        scores[k] = sum(levels) / len(levels) if levels else 3.0
-                    
-                    profile_data = data.get("profile_data", {})
-                    user_name_for_morning = get_user_name(user_id) or "друг"
-                    
-                    def schedule_in_background():
-                        try:
-                            # Создаем новый event loop для этого потока
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            try:
-                                loop.run_until_complete(
-                                    morning_manager.schedule_morning_message(
-                                        user_id=user_id,
-                                        user_name=user_name_for_morning,
-                                        scores=scores,
-                                        profile_data=profile_data
-                                    )
-                                )
-                                logger.info(f"📅 Утренние сообщения запланированы для пользователя {user_id}")
-                            finally:
-                                loop.close()
-                        except Exception as e:
-                            logger.error(f"❌ Ошибка в фоне при планировании: {e}")
-                            import traceback
-                            traceback.print_exc()
-                    
-                    # Запускаем в отдельном потоке
-                    threading.Thread(target=schedule_in_background, daemon=True).start()
-                    
-            except Exception as e:
-                logger.error(f"❌ Ошибка при планировании утренних сообщений: {e}")
-                import traceback
-                traceback.print_exc()
-            # ===== КОНЕЦ БЛОКА =====
-            
-            return
-            
-        else:
-            scores = {}
-            for k in VECTORS:
-                levels = data.get("behavioral_levels", {}).get(k, [])
-                scores[k] = sum(levels) / len(levels) if levels else 3.0
-            
-            perception_type = data.get("perception_type", "не определен")
-            thinking_level = data.get("thinking_level", 5)
-            dilts_counts = data.get("dilts_counts", {})
-            dominant_dilts = determine_dominant_dilts(dilts_counts)
-            
-            profile_text = get_human_readable_profile(
-                scores, model=None,
-                perception_type=perception_type,
-                thinking_level=thinking_level,
-                dominant_dilts=dominant_dilts
-            )
-            
-            text = f"""
-⚠️ Не удалось сгенерировать расширенный профиль. Показываю стандартный:
-
-{profile_text}
-
-👇 {bold('Что дальше?')}
-"""
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка при генерации AI профиля: {e}")
-        traceback.print_exc()
-        
-        if status_msg:
-            try:
-                await safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
-                pass
-        
-        text = f"""
-⚠️ Ошибка генерации профиля
-
-Не удалось создать расширенный психологический портрет.
-Пожалуйста, попробуйте позже или используйте стандартный профиль.
-
-👇 {bold('Что дальше?')}
-"""
-    
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton("🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"))
-    keyboard.row(
-        InlineKeyboardButton("🎤 ЗАДАТЬ ВОПРОС", callback_data="ask_question"),
-        InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations")
-    )
-    keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
-    
-    safe_send_message(
-        message,
-        text,
-        reply_markup=keyboard,
-        parse_mode=None,
-        delete_previous=True
-    )
-
-
-async def show_psychologist_thought_async(message: Message, user_id: int):
-    """Асинхронная версия показа мыслей психолога"""
-    data = user_data.get(user_id, {})
-    context = user_contexts.get(user_id)
-    user_name = context.name if context and context.name else ""
-    
-    status_msg = safe_send_message(
-        message,
-        "🧠 Анализирую ваш профиль и формирую мысли психолога...\n\nЭто займёт несколько секунд.",
-        delete_previous=True
-    )
-    
-    try:
-        thought = None
-        try:
-            thought = await generate_psychologist_thought(user_id, data)
-        except Exception as e:
-            if str(e):
-                logger.error(f"❌ Ошибка при вызове generate_psychologist_thought: {e}")
-            else:
-                logger.info("⚠️ Пустая ошибка при генерации мысли психолога")
-            thought = None
-        
-        if status_msg:
-            try:
-                await safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
-                pass
-        
-        if thought:
-            # Форматируем текст
-            formatted_text = format_psychologist_text(thought, user_name)
-            
-            # Добавляем заголовок
-            full_text = f"🧠 {bold('МЫСЛИ ПСИХОЛОГА')}\n\n{formatted_text}"
-            
-            # Разбиваем на части
-            if len(full_text) > 3500:
-                logger.info(f"📏 Мысли психолога слишком длинные: {len(full_text)} > 3500. Разбиваем на части.")
-                thought_parts = split_long_message(full_text)
-                logger.info(f"✂️ Разбито на {len(thought_parts)} частей")
-                
-                # Оптимизируем части
-                thought_parts = optimize_message_parts(thought_parts)
-            else:
-                thought_parts = [full_text]
-            
-            keyboard = InlineKeyboardMarkup()
-            keyboard.row(InlineKeyboardButton("📊 К ПРОФИЛЮ", callback_data="show_profile"))
-            keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
-            keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
-            
-            chat_id = message.chat.id
-            
-            merged_parts = []
-            current = ""
-            
-            for part in thought_parts:
-                if len(current) + len(part) + 2 <= 3500:
-                    if current:
-                        current += "\n\n" + part
-                    else:
-                        current = part
-                else:
-                    if current:
-                        merged_parts.append(current)
-                    current = part
-            
-            if current:
-                merged_parts.append(current)
-            
-            for i, part in enumerate(merged_parts):
-                try:
-                    if i == len(merged_parts) - 1:
-                        safe_send_message(
-                            message if i == 0 else None,
-                            part,
-                            reply_markup=keyboard,
-                            parse_mode=None,
-                            delete_previous=(i == 0),
-                            chat_id=chat_id if i > 0 else None
-                        )
-                        logger.info(f"✅ Отправлена последняя часть мысли {i+1} с кнопками")
-                    else:
-                        safe_send_message(
-                            None,
-                            part,
-                            parse_mode=None,
-                            delete_previous=False,
-                            chat_id=chat_id
-                        )
-                        logger.info(f"✅ Отправлена часть мысли {i+1}/{len(merged_parts)}")
-                    
-                    await asyncio.sleep(1)
-                    
-                except Exception as e:
-                    logger.error(f"❌ Ошибка при отправке части мысли {i+1}: {e}")
-                    continue
-            
-            # ✅ ИСПРАВЛЕНО: синхронное сохранение
-            if user_id not in user_data:
-                user_data[user_id] = {}
-            user_data[user_id]["psychologist_thought"] = thought
-            sync_db.save_user_to_db(user_id)
-            
-            logger.info(f"🎉 Все {len(merged_parts)} частей мысли успешно отправлены")
-            return
-            
-        else:
-            text = f"""
-🧠 {bold('МЫСЛИ ПСИХОЛОГА')}
-
-Анализируя ваш профиль, я вижу интересную динамику...
-
-**Ключевой паттерн:** Вы склонны анализировать ситуации глубоко, но иногда это мешает быстрым решениям.
-
-**Петля:** Анализ → Сомнения → Ещё больший анализ.
-
-**Точка входа:** Попробуйте в следующий раз, когда будете анализировать, задать себе вопрос: "Что я чувствую прямо сейчас?"
-
-**Прогноз:** Если продолжите в том же духе, рискуете упустить несколько хороших возможностей.
-
-👇 {bold('Что дальше?')}
-"""
-    except Exception as e:
-        logger.error(f"❌ Ошибка при генерации мысли психолога: {e}")
-        traceback.print_exc()
-        
-        if status_msg:
-            try:
-                await safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
-                pass
-        
-        text = f"""
-⚠️ Ошибка генерации
-
-Не удалось сформировать мысли психолога.
-Пожалуйста, попробуйте позже.
-
-👇 {bold('Что дальше?')}
-"""
-    
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton("📊 К ПРОФИЛЮ", callback_data="show_profile"))
-    keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
-    keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
-    
-    safe_send_message(
-        message,
-        text,
-        reply_markup=keyboard,
-        parse_mode=None,
-        delete_previous=True
-    )
-
-
-async def show_final_profile_async(message: Message, user_id: int):
-    """Асинхронная версия показа финального профиля после всех этапов"""
-    logger.info(f"🔍 show_final_profile_async ВЫЗВАНО для пользователя {user_id}")
-    
-    if user_id in _profile_generation_in_progress and _profile_generation_in_progress[user_id]:
-        logger.info(f"⏳ Генерация профиля уже выполняется для пользователя {user_id}")
+    # Проверяем, есть ли профиль
+    if not is_test_completed_check(user_data_dict):
         safe_send_message(
-            message,
-            "⏳ Ваш профиль уже генерируется, пожалуйста, подождите...",
+            call.message,
+            "❓ Сначала нужно пройти тест, чтобы я понимал твой профиль. Используй /start",
             delete_previous=True
         )
         return
     
-    data = user_data.get(user_id, {})
+    text = f"""
+🎨 {bold('ИДЕИ НА ВЫХОДНЫЕ')}
+
+{user_name}, я подготовил для тебя несколько идей, как провести выходные с пользой и удовольствием.
+
+Выбери, что тебя интересует:
+"""
     
-    if data.get("ai_generated_profile"):
-        logger.info(f"✅ Найден сохраненный AI профиль для пользователя {user_id}")
-        await show_ai_profile_async(message, user_id)
-        return
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🏃 Активный отдых", callback_data="weekend_active"),
+            InlineKeyboardButton(text="🧘 Расслабление", callback_data="weekend_relax")
+        ],
+        [
+            InlineKeyboardButton(text="🎨 Творчество", callback_data="weekend_creative"),
+            InlineKeyboardButton(text="📚 Саморазвитие", callback_data="weekend_learning")
+        ],
+        [
+            InlineKeyboardButton(text="👥 Общение", callback_data="weekend_social"),
+            InlineKeyboardButton(text="🏠 Домашний уют", callback_data="weekend_home")
+        ],
+        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="back_to_main")]
+    ])
     
-    status_msg = safe_send_message(
-        message,
-        "🧠 Анализирую данные...\n\n"
-        "Собираю воедино результаты 5 этапов тестирования.\n"
-        "Это займёт около 20-30 секунд.\n\n"
-        "Формирую ваш точный психологический портрет...",
+    safe_send_message(
+        call.message,
+        text,
+        reply_markup=keyboard,
+        parse_mode='HTML',
         delete_previous=True
     )
-    
-    _profile_generation_in_progress[user_id] = True
-    start_time = time.time()
-    logger.info(f"⏱️ Начало генерации профиля ИИ в {start_time}")
-    
-    ai_profile = None
-    try:
-        ai_profile = await generate_ai_profile(user_id, data)
-        elapsed = time.time() - start_time
-        logger.info(f"⏱️ Генерация профиля ИИ завершена, прошло {elapsed:.1f} сек")
-    except Exception as e:
-        elapsed = time.time() - start_time
-        logger.error(f"❌ Ошибка при генерации AI профиля: {e}")
-        logger.error(traceback.format_exc())
-        logger.info(f"⏱️ Генерация завершилась ошибкой через {elapsed:.1f} сек")
-        ai_profile = None
-    finally:
-        _profile_generation_in_progress[user_id] = False
-        logger.info(f"🔓 Флаг генерации снят для пользователя {user_id}")
-    
-    if ai_profile:
-        logger.info(f"✅ AI профиль успешно сгенерирован, длина: {len(ai_profile)} символов")
-        if user_id not in user_data:
-            user_data[user_id] = {}
-        user_data[user_id]["ai_generated_profile"] = ai_profile
-        
-        # ✅ ИСПРАВЛЕНО: синхронное сохранение
-        save_profile_to_db_sync(user_id)
-        
-        if status_msg:
-            try:
-                await safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
-                pass
-        
-        await show_ai_profile_async(message, user_id)
-        return
-    
-    logger.warning(f"⚠️ Не удалось сгенерировать AI профиль, показываем стандартный")
-    show_old_final_profile(message, user_id, status_msg)
-
 
 # ============================================
-# СИНХРОННЫЕ ОБЕРТКИ
+# ОБРАБОТКА ВОПРОСОВ ПОСЛЕ ПОМОЩИ
 # ============================================
 
-def show_profile(message: Message, user_id: int):
-    """Синхронная обертка для показа профиля"""
-    data = user_data.get(user_id, {})
+def process_help_question(message: Message, user_id: int, text: str, category: str):
+    """
+    Обрабатывает вопрос, заданный через категорию помощи
+    """
+    user_data_dict = get_user_data_dict(user_id)
     
-    if not data:
+    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    threading.Thread(target=log_help_event, args=(user_id, 'question_asked', category), daemon=True).start()
+    
+    # Проверяем, завершен ли тест
+    if not is_test_completed_check(user_data_dict):
+        # Если тест не пройден, предлагаем пройти
+        response = f"""
+Спасибо за вопрос в категории "{category}".
+
+Чтобы я мог ответить точнее с учётом твоего профиля, рекомендую сначала пройти тест (15 минут).
+
+А пока — вот общий ответ:
+        """
+        
+        # Общие ответы по категориям
+        general_responses = {
+            "relations": "В отношениях важно помнить, что каждый человек — отдельный мир со своими страхами и желаниями. Иногда достаточно просто быть рядом и слушать.",
+            "money": "Деньги — это энергия, которая приходит и уходит. Важно не количество, а ваше отношение к ним. Начните с благодарности за то, что уже есть.",
+            "self": "Самоощущение меняется каждый день. Разрешите себе чувствовать всё, что приходит, без осуждения.",
+            "knowledge": "Знания — это путь, а не цель. Важно не то, сколько вы знаете, а то, как вы это применяете.",
+            "support": "Просить о поддержке — это нормально. Вы не одиноки в своих переживаниях.",
+            "muse": "Творчество — это игра. Иногда нужно просто начать, не думая о результате.",
+            "care": "Забота о себе — это не эгоизм, а необходимость. Вы не можете дать другим то, чего нет у вас."
+        }
+        
+        general = general_responses.get(category, "Я здесь, чтобы помочь. Расскажите подробнее.")
+        
+        full_response = f"{response}\n\n{general}"
+        
         safe_send_message(
             message,
-            "📊 У вас пока нет профиля. Пройдите тест, чтобы узнать себя лучше.",
+            full_response,
+            parse_mode='HTML',
             delete_previous=True
         )
         return
     
-    # ✅ 1. ПРОВЕРЯЕМ НАЛИЧИЕ AI ПРОФИЛЯ
-    if data.get("ai_generated_profile"):
-        logger.info(f"✅ Найден AI профиль для пользователя {user_id}, показываем его")
-        show_ai_profile(message, user_id)
-        return
-    
-    # ✅ 2. ПРОВЕРЯЕМ НАЛИЧИЕ ФИНАЛЬНОГО ПРОФИЛЯ
-    if data.get("profile_data"):
-        logger.info(f"✅ Найден profile_data для пользователя {user_id}, показываем финальный профиль")
-        show_final_profile(message, user_id)
-        return
-    
-    # ✅ 3. ЕСЛИ НЕТ НИЧЕГО, ПОКАЗЫВАЕМ СТАНДАРТНЫЙ
-    logger.info(f"📊 Нет AI профиля для пользователя {user_id}, показываем стандартный")
-    
-    scores = {}
-    for k in VECTORS:
-        levels = data.get("behavioral_levels", {}).get(k, [])
-        scores[k] = sum(levels) / len(levels) if levels else 3.0
-    
-    perception_type = data.get("perception_type", "не определен")
-    thinking_level = data.get("thinking_level", 5)
-    dilts_counts = data.get("dilts_counts", {})
-    dominant_dilts = determine_dominant_dilts(dilts_counts)
-    
-    profile_text = get_human_readable_profile(
-        scores, model=None,
-        perception_type=perception_type,
-        thinking_level=thinking_level,
-        dominant_dilts=dominant_dilts
-    )
-    
-    text = f"{profile_text}\n\n👇 {bold('Что дальше?')}"
-    
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton("🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"))
-    keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
-    keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
-    
-    safe_send_message(
-        message,
-        text,
-        reply_markup=keyboard,
-        parse_mode=None,
-        delete_previous=True
-    )
+    # Если тест пройден, используем режим для ответа
+    from handlers.questions import process_text_question_sync
+    process_text_question_sync(message, user_id, text)
 
 
-def show_ai_profile(message: Message, user_id: int):
-    """Синхронная обертка для показа AI профиля"""
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(show_ai_profile_async(message, user_id))
-    except RuntimeError:
-        asyncio.run(show_ai_profile_async(message, user_id))
+# ============================================
+# АСИНХРОННЫЕ ВЕРСИИ ДЛЯ СОВМЕСТИМОСТИ С CALLBACK.PY
+# ============================================
+
+async def show_help_async(
+    call: CallbackQuery,
+    user_id: int,
+    user_data_dict: Dict[str, Any],
+    context_obj
+):
+    """
+    Асинхронная версия show_help для callback.py
+    Принимает 4 параметра как требуется в callback.py
+    """
+    # Вызываем существующую функцию show_help
+    show_help(call)
 
 
-def show_psychologist_thought(message: Message, user_id: int):
-    """Синхронная обертка для показа мыслей психолога"""
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(show_psychologist_thought_async(message, user_id))
-    except RuntimeError:
-        asyncio.run(show_psychologist_thought_async(message, user_id))
+async def show_benefits_async(
+    call: CallbackQuery,
+    user_id: int,
+    user_data_dict: Dict[str, Any],
+    context_obj
+):
+    """
+    Асинхронная версия show_benefits для callback.py
+    Принимает 4 параметра как требуется в callback.py
+    """
+    # Вызываем существующую функцию show_benefits
+    show_benefits(call)
 
 
-def show_final_profile(message: Message, user_id: int):
-    """Синхронная обертка для показа финального профиля"""
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(show_final_profile_async(message, user_id))
-    except RuntimeError:
-        asyncio.run(show_final_profile_async(message, user_id))
+async def show_weekend_ideas_async(
+    call: CallbackQuery,
+    user_id: int,
+    user_data_dict: Dict[str, Any],
+    context_obj
+):
+    """
+    Асинхронная версия show_weekend_ideas для callback.py
+    Принимает 4 параметра как требуется в callback.py
+    """
+    # Вызываем существующую функцию show_weekend_ideas
+    show_weekend_ideas(call)
 
 
-def show_old_final_profile(message: Message, user_id: int, status_msg: Optional[Message] = None):
-    """Старая версия финального профиля (резерв)"""
-    data = user_data.get(user_id, {})
-    scores = {}
-    for k in VECTORS:
-        levels = data.get("behavioral_levels", {}).get(k, [])
-        scores[k] = sum(levels) / len(levels) if levels else 3.0
-    
-    perception_type = data.get("perception_type", "не определен")
-    thinking_level = data.get("thinking_level", 5)
-    dilts_counts = data.get("dilts_counts", {})
-    dominant_dilts = determine_dominant_dilts(dilts_counts)
-    
-    profile_text = get_human_readable_profile(
-        scores, model=None,
-        perception_type=perception_type,
-        thinking_level=thinking_level,
-        dominant_dilts=dominant_dilts
-    )
-    
-    text = f"{profile_text}\n\n👇 {bold('Что дальше?')}"
-    
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton("🧠 МЫСЛИ ПСИХОЛОГА", callback_data="psychologist_thought"))
-    keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
-    keyboard.row(InlineKeyboardButton("⚙️ ВЫБРАТЬ РЕЖИМ", callback_data="show_mode_selection"))
-    
-    if status_msg:
-        try:
-            safe_delete_message(message.chat.id, status_msg.message_id)
-        except:
-            pass
-    
-    safe_send_message(
-        message,
-        text,
-        reply_markup=keyboard,
-        parse_mode=None,
-        delete_previous=True
-    )
+# ============================================
+# СИНХРОННЫЕ ОБЕРТКИ ДЛЯ ВЫЗОВА ИЗ АСИНХРОННОГО КОДА
+# ============================================
+
+def show_help_sync(
+    call: CallbackQuery,
+    user_id: int,
+    user_data_dict: Dict[str, Any],
+    context_obj
+):
+    """
+    Синхронная обертка для вызова из асинхронного кода
+    """
+    show_help(call)
+
+
+def show_benefits_sync(
+    call: CallbackQuery,
+    user_id: int,
+    user_data_dict: Dict[str, Any],
+    context_obj
+):
+    """
+    Синхронная обертка для вызова из асинхронного кода
+    """
+    show_benefits(call)
+
+
+def show_weekend_ideas_sync(
+    call: CallbackQuery,
+    user_id: int,
+    user_data_dict: Dict[str, Any],
+    context_obj
+):
+    """
+    Синхронная обертка для вызова из асинхронного кода
+    """
+    show_weekend_ideas(call)
 
 
 # ============================================
@@ -1039,12 +568,22 @@ def show_old_final_profile(message: Message, user_id: int, status_msg: Optional[
 # ============================================
 
 __all__ = [
-    'show_profile',
-    'show_ai_profile',
-    'show_psychologist_thought',
-    'show_final_profile',
-    'show_old_final_profile',
-    'show_preliminary_profile',
-    'set_morning_manager',
-    'save_profile_to_db_sync'
+    # Основные функции
+    'show_help',
+    'show_benefits', 
+    'show_weekend_ideas',
+    'handle_help_category',
+    'process_help_question',
+    'get_help_keyboard',
+    'log_help_event',
+    'log_benefits_view',
+    'log_weekend_ideas_view',
+    # Асинхронные версии для callback.py
+    'show_help_async',
+    'show_benefits_async',
+    'show_weekend_ideas_async',
+    # Синхронные обертки
+    'show_help_sync',
+    'show_benefits_sync',
+    'show_weekend_ideas_sync'
 ]
