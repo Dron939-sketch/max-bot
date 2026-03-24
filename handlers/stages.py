@@ -1446,16 +1446,15 @@ def finish_stage_5(message, user_id: int, state_data: dict):
         profile_code = user_data[user_id]["profile_data"].get("display_name")
     
     run_sync_in_background(save_test_result,
-        user_id=user_id,
-        test_type='full_profile',
-        results=user_data[user_id],
-        profile_code=profile_code,
-        perception_type=user_data[user_id].get("perception_type"),
-        thinking_level=user_data[user_id].get("thinking_level"),
-        vectors=user_data[user_id].get("behavioral_levels"),
-        deep_patterns=deep_patterns,
-        confinement_model=user_data[user_id].get("confinement_model")
-    )
+    user_id=user_id,
+    test_type='full_profile',
+    results=user_data[user_id],
+    profile_code=profile_code,
+    perception_type=user_data[user_id].get("perception_type"),
+    thinking_level=user_data[user_id].get("thinking_level"),
+    vectors=user_data[user_id].get("behavioral_levels"),
+    deep_patterns=deep_patterns
+)
     
     run_sync_in_background(save_user, user_id, user_data[user_id].get('first_name'), None)
     run_sync_in_background(save_user_data, user_id, user_data[user_id])
