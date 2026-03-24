@@ -2,14 +2,16 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики проверки реальности для MAX
-Версия 2.2 - ИСПРАВЛЕНО: замена прямых вызовов db на run_async_task
+Версия 2.1 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
+ИСПРАВЛЕНО: убраны await перед синхронными функциями safe_send_message
+И ДОБАВЛЕНЫ ПРОВЕРКИ ТИПОВ ДЛЯ state_data
 """
 
 import logging
 import re
 import time
 import asyncio
-import threading
+import threading  # ✅ ДОБАВЛЕНО
 from typing import Dict, Any, Optional
 
 from bot_instance import bot
@@ -30,41 +32,31 @@ from reality_check import (
 from services import generate_route_ai
 from state import user_data, user_state_data, user_contexts, user_states, user_names
 
-# ✅ ИСПРАВЛЕНО: импорт синхронных функций из db_instance
-from db_instance import (
-    save_user,
-    save_user_data,
-    save_context,
-    save_test_result,
-    log_event,
-    add_reminder,
-    get_user_reminders,
-    complete_reminder,
-    load_user_data,
-    load_user_context,
-    load_all_users,
-    get_stats
-)
+# ✅ ДОБАВЛЕНО: импорт для БД
+from db_instance import db, save_user_to_db
 
 logger = logging.getLogger(__name__)
 
-
 # ============================================
-# ✅ ФУНКЦИЯ ДЛЯ ЗАПУСКА СИНХРОННЫХ ВЫЗОВОВ В ФОНЕ
+# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
 # ============================================
 
-def run_sync_in_background(func, *args, **kwargs):
+def run_async_task(coro_func, *args, **kwargs):
     """
-    Запускает синхронную функцию в отдельном потоке
+    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
     """
     def _wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            func(*args, **kwargs)
+            coro = coro_func(*args, **kwargs)
+            loop.run_until_complete(coro)
         except Exception as e:
-            logger.error(f"❌ Ошибка в фоновой задаче: {e}")
+            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
+        finally:
+            loop.close()
     
     threading.Thread(target=_wrapper, daemon=True).start()
-
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -109,15 +101,14 @@ def ensure_state_dict(state_data, user_id: int) -> Dict:
     logger.warning(f"⚠️ state_data не является словарем: {type(state_data)}. Создаем новый.")
     return get_user_state_data(user_id)
 
-
 # ============================================
-# ✅ ФУНКЦИИ ДЛЯ РАБОТЫ С БД (СИНХРОННЫЕ)
+# ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
 # ============================================
 
-def save_reality_check_to_db_sync(user_id: int, goal: Dict, result: Dict):
-    """Синхронно сохраняет результат проверки реальности в БД"""
+async def save_reality_check_to_db(user_id: int, goal: Dict, result: Dict):
+    """Сохраняет результат проверки реальности в БД"""
     try:
-        log_event(
+        await db.log_event(
             user_id,
             'reality_check_completed',
             {
@@ -132,34 +123,25 @@ def save_reality_check_to_db_sync(user_id: int, goal: Dict, result: Dict):
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения результата проверки для {user_id}: {e}")
 
-def save_life_context_to_db_sync(user_id: int):
-    """Синхронно сохраняет жизненный контекст в БД"""
+async def save_life_context_to_db(user_id: int):
+    """Сохраняет жизненный контекст в БД"""
     try:
-        save_user(user_id, user_names.get(user_id), None)
-        context = get_user_context(user_id)
-        if context:
-            save_context(
-                user_id,
-                name=getattr(context, 'name', None),
-                age=getattr(context, 'age', None),
-                gender=getattr(context, 'gender', None),
-                city=getattr(context, 'city', None),
-                mode=getattr(context, 'communication_mode', None)
-            )
+        await save_user_to_db(user_id, user_data, user_contexts, {})
         logger.debug(f"💾 Жизненный контекст для {user_id} сохранен в БД")
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения жизненного контекста для {user_id}: {e}")
 
-def save_goal_context_to_db_sync(user_id: int, goal_context: Dict):
-    """Синхронно сохраняет целевой контекст в БД"""
+async def save_goal_context_to_db(user_id: int, goal_context: Dict):
+    """Сохраняет целевой контекст в БД"""
     try:
+        # Сохраняем в user_data
         user_data_dict = get_user_data(user_id)
         user_data_dict['goal_context'] = goal_context
-        save_user_data(user_id, user_data_dict)
+        
+        await save_user_to_db(user_id, user_data, user_contexts, {})
         logger.debug(f"💾 Целевой контекст для {user_id} сохранен в БД")
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения целевого контекста для {user_id}: {e}")
-
 
 # ============================================
 # ОСНОВНЫЕ ФУНКЦИИ ПРОВЕРКИ РЕАЛЬНОСТИ
@@ -173,16 +155,18 @@ async def show_reality_check(call: CallbackQuery, state_data: Dict = None):
     state_data = ensure_state_dict(state_data, user_id)
     context = get_user_context(user_id)
     
-    # ✅ ИСПРАВЛЕНО: запускаем в фоне
-    run_sync_in_background(log_event, user_id, 'reality_check_started', {})
+    # ✅ ИСПРАВЛЕНО: Логируем начало проверки через run_async_task
+    run_async_task(db.log_event, user_id, 'reality_check_started', {})
     
-    # Получаем данные из user_data, если в state_data нет
+    # ✅ Получаем данные из user_data, если в state_data нет
     if not state_data.get("current_destination"):
+        # Пробуем найти в user_data
         user_data_dict = get_user_data(user_id)
         if user_data_dict.get("current_destination"):
             update_user_state_data(user_id, current_destination=user_data_dict["current_destination"])
-            state_data = get_user_state_data(user_id)
+            state_data = get_user_state_data(user_id)  # Обновляем
     
+    # Проверяем, есть ли цель
     goal = state_data.get("current_destination")
     
     if not goal:
@@ -197,13 +181,16 @@ async def show_reality_check(call: CallbackQuery, state_data: Dict = None):
         keyboard.row(InlineKeyboardButton("🎯 ВЫБРАТЬ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
         keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_mode_selected"))
         
+        # Убираем await!
         safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
         return
     
     # Проверяем, есть ли базовый контекст
     if not (context and hasattr(context, 'life_context_complete') and context.life_context_complete):
+        # Если нет — собираем
         await start_life_context_collection(call, goal, state_data)
     else:
+        # Если есть — задаём целевые вопросы
         await ask_goal_specific_questions(call, goal, state_data)
 
 
@@ -232,8 +219,10 @@ async def start_life_context_collection(call: CallbackQuery, goal: Dict, state_d
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("⏭ ПРОПУСТИТЬ (будет неточно)", callback_data="skip_life_context"))
     
+    # Убираем await!
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
     
+    # Устанавливаем состояние
     set_user_state(user_id, "collecting_life_context")
     update_user_state_data(user_id, pending_goal=goal)
 
@@ -270,8 +259,10 @@ async def ask_goal_specific_questions(call: CallbackQuery, goal: Dict, state_dat
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton("⏭ ПРОПУСТИТЬ (общий план)", callback_data="skip_goal_questions"))
     
+    # Убираем await!
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
     
+    # Устанавливаем состояние
     set_user_state(user_id, "collecting_goal_context")
     update_user_state_data(user_id, pending_goal=goal)
 
@@ -291,6 +282,7 @@ async def process_life_context(message: Message, user_id: int, text: str):
     try:
         parsed = parse_life_context_answers(text)
         
+        # Заполняем контекст из распарсенных данных
         context.family_status = parsed.get('family_status', 'не указано')
         context.has_children = parsed.get('has_children', False)
         context.children_ages = parsed.get('children_info', '')
@@ -306,17 +298,20 @@ async def process_life_context(message: Message, user_id: int, text: str):
         
     except Exception as e:
         logger.error(f"Ошибка при парсинге жизненного контекста: {e}")
+        # Запасной вариант — просто сохраняем сырой ответ
         context.raw_life_context = text
     
     context.life_context_complete = True
     
-    # ✅ ИСПРАВЛЕНО: синхронное сохранение в фоне
-    run_sync_in_background(save_life_context_to_db_sync, user_id)
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_life_context_to_db, user_id)
     
+    # Получаем сохранённую цель
     state_data = get_user_state_data(user_id)
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
     if goal:
+        # Переходим к целевым вопросам
         from maxibot.types import CallbackQuery
         fake_call = CallbackQuery(
             id="fake",
@@ -325,8 +320,10 @@ async def process_life_context(message: Message, user_id: int, text: str):
             data="fake",
             chat_instance=""
         )
+        # Запускаем асинхронную функцию
         await ask_goal_specific_questions(fake_call, goal, state_data)
     else:
+        # Если цели нет, показываем меню
         from handlers.modes import show_main_menu_after_mode
         await show_main_menu_after_mode(message, context)
 
@@ -340,8 +337,13 @@ async def process_goal_context(message: Message, user_id: int, text: str):
         goal_context = parse_goal_context_answers(text)
     except Exception as e:
         logger.error(f"Ошибка при парсинге целевого контекста: {e}")
-        goal_context = {"raw_answers": text, "time_per_week": 5, "budget": 0}
+        goal_context = {
+            "raw_answers": text,
+            "time_per_week": 5,
+            "budget": 0
+        }
         
+        # Пробуем извлечь время
         time_match = re.search(r'(\d+)\s*часов', text, re.IGNORECASE)
         if time_match:
             goal_context["time_per_week"] = int(time_match.group(1))
@@ -352,9 +354,10 @@ async def process_goal_context(message: Message, user_id: int, text: str):
     
     update_user_state_data(user_id, goal_context=goal_context)
     
-    # ✅ ИСПРАВЛЕНО: синхронное сохранение в фоне
-    run_sync_in_background(save_goal_context_to_db_sync, user_id, goal_context)
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_goal_context_to_db, user_id, goal_context)
     
+    # Переходим к расчёту
     from maxibot.types import CallbackQuery
     fake_call = CallbackQuery(
         id="fake",
@@ -363,6 +366,7 @@ async def process_goal_context(message: Message, user_id: int, text: str):
         data="fake",
         chat_instance=""
     )
+    # Запускаем асинхронную функцию
     await calculate_and_show_feasibility(fake_call, user_id)
 
 
@@ -381,14 +385,17 @@ async def calculate_and_show_feasibility(call: CallbackQuery, user_id: int):
     
     goal = state_data.get("current_destination") or state_data.get("pending_goal")
     if not goal:
+        # Убираем await!
         safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
         return
     
     goal_id = goal.get("id", "income_growth")
     mode = user_data_dict.get("communication_mode", "coach")
     
+    # Получаем теоретический путь
     path = get_theoretical_path(goal_id, mode)
     
+    # Собираем контекст
     life_context = {}
     if context:
         life_context = {
@@ -401,13 +408,16 @@ async def calculate_and_show_feasibility(call: CallbackQuery, user_id: int):
     goal_context = state_data.get("goal_context", {})
     profile = user_data_dict.get("profile_data", {})
     
+    # Рассчитываем
     result = calculate_feasibility(path, life_context, goal_context, profile)
     
+    # Сохраняем результат
     update_user_state_data(user_id, feasibility_result=result)
     
-    # ✅ ИСПРАВЛЕНО: синхронное сохранение в фоне
-    run_sync_in_background(save_reality_check_to_db_sync, user_id, goal, result)
+    # ✅ ИСПРАВЛЕНО: Сохраняем результат в БД через run_async_task
+    run_async_task(save_reality_check_to_db, user_id, goal, result)
     
+    # Определяем статус
     status_emoji = "✅" if result['deficit'] < 30 else "⚠️" if result['deficit'] < 60 else "❌"
     
     text = f"""
@@ -436,6 +446,7 @@ async def calculate_and_show_feasibility(call: CallbackQuery, user_id: int):
     keyboard.row(InlineKeyboardButton("📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal"))
     keyboard.row(InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
+    # Убираем await!
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
@@ -451,8 +462,8 @@ async def skip_life_context(call: CallbackQuery, state_data: Dict = None):
     state_data = ensure_state_dict(state_data, user_id)
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
-    # ✅ ИСПРАВЛЕНО: синхронное логирование в фоне
-    run_sync_in_background(log_event, user_id, 'life_context_skipped', {'goal_id': goal.get('id') if goal else None})
+    # ✅ ИСПРАВЛЕНО: Логируем пропуск через run_async_task
+    run_async_task(db.log_event, user_id, 'life_context_skipped', {'goal_id': goal.get('id') if goal else None})
     
     text = f"""
 🧠 **ФРЕДИ: БУДЕТ НЕТОЧНО**
@@ -467,6 +478,7 @@ async def skip_life_context(call: CallbackQuery, state_data: Dict = None):
     keyboard.row(InlineKeyboardButton("🔄 ВСЁ-ТАКИ ОТВЕТИТЬ", callback_data="check_reality"))
     keyboard.row(InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
+    # Убираем await!
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
@@ -478,14 +490,15 @@ async def skip_goal_questions(call: CallbackQuery, state_data: Dict = None):
     state_data = ensure_state_dict(state_data, user_id)
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
-    # ✅ ИСПРАВЛЕНО: синхронное логирование в фоне
-    run_sync_in_background(log_event, user_id, 'goal_questions_skipped', {'goal_id': goal.get('id') if goal else None})
+    # ✅ ИСПРАВЛЕНО: Логируем пропуск через run_async_task
+    run_async_task(db.log_event, user_id, 'goal_questions_skipped', {'goal_id': goal.get('id') if goal else None})
     
+    # Используем данные по умолчанию
     default_context = {"time_per_week": 5, "budget": 0}
     update_user_state_data(user_id, goal_context=default_context)
     
-    # ✅ ИСПРАВЛЕНО: синхронное сохранение в фоне
-    run_sync_in_background(save_goal_context_to_db_sync, user_id, default_context)
+    # ✅ ИСПРАВЛЕНО: Сохраняем в БД через run_async_task
+    run_async_task(save_goal_context_to_db, user_id, default_context)
     
     await calculate_and_show_feasibility(call, user_id)
 
@@ -501,18 +514,21 @@ async def skip_to_route(call: CallbackQuery, state_data: Dict = None):
     goal = state_data.get("pending_goal") or state_data.get("current_destination")
     
     if not goal:
+        # Убираем await!
         safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
         return
     
-    # ✅ ИСПРАВЛЕНО: синхронное логирование в фоне
-    run_sync_in_background(log_event, user_id, 'reality_check_skipped', {'goal_id': goal.get('id')})
+    # ✅ ИСПРАВЛЕНО: Логируем пропуск через run_async_task
+    run_async_task(db.log_event, user_id, 'reality_check_skipped', {'goal_id': goal.get('id')})
     
+    # Отправляем статусное сообщение (без await!)
     status_msg = safe_send_message(
         call.message,
         f"🧠 Строю маршрут к цели: **{goal.get('name')}**...\n\nЭто займёт несколько секунд.",
         delete_previous=True
     )
     
+    # Генерируем маршрут (асинхронно)
     try:
         loop = asyncio.get_running_loop()
         route = loop.run_until_complete(generate_route_ai(user_id, user_data_dict, goal))
@@ -522,6 +538,7 @@ async def skip_to_route(call: CallbackQuery, state_data: Dict = None):
     if route:
         update_user_state_data(user_id, current_route=route)
         from handlers.goals import show_route_step
+        # show_route_step теперь ожидает state_data как третий параметр
         await show_route_step(call, state_data, 1, route, status_msg)
     else:
         from handlers.goals import show_fallback_route
@@ -543,18 +560,25 @@ async def accept_feasibility_plan(call: CallbackQuery, state_data: Dict = None):
     goal = state_data.get("current_destination")
     
     if not goal:
+        # Убираем await!
         safe_send_message(call.message, "❌ Цель не найдена", delete_previous=True)
         return
     
-    # ✅ ИСПРАВЛЕНО: синхронное логирование в фоне
-    run_sync_in_background(log_event, user_id, 'feasibility_plan_accepted', {'goal_id': goal.get('id'), 'goal_name': goal.get('name')})
+    # ✅ ИСПРАВЛЕНО: Логируем принятие плана через run_async_task
+    run_async_task(db.log_event,
+        user_id, 
+        'feasibility_plan_accepted', 
+        {'goal_id': goal.get('id'), 'goal_name': goal.get('name')}
+    )
     
+    # Отправляем статусное сообщение (без await!)
     status_msg = safe_send_message(
         call.message,
         f"🧠 Строю маршрут к цели: **{goal.get('name')}**...\n\nЭто займёт несколько секунд.",
         delete_previous=True
     )
     
+    # Генерируем маршрут (асинхронно)
     try:
         loop = asyncio.get_running_loop()
         route = loop.run_until_complete(generate_route_ai(user_id, user_data_dict, goal))
@@ -578,8 +602,8 @@ async def adjust_timeline(call: CallbackQuery, state_data: Dict = None):
     state_data = ensure_state_dict(state_data, user_id)
     goal = state_data.get("current_destination")
     
-    # ✅ ИСПРАВЛЕНО: синхронное логирование в фоне
-    run_sync_in_background(log_event, user_id, 'timeline_adjustment_started', {'goal_id': goal.get('id') if goal else None})
+    # ✅ ИСПРАВЛЕНО: Логируем корректировку через run_async_task
+    run_async_task(db.log_event, user_id, 'timeline_adjustment_started', {'goal_id': goal.get('id') if goal else None})
     
     text = f"""
 🧠 **ФРЕДИ: КОРРЕКТИРОВКА СРОКОВ**
@@ -601,6 +625,7 @@ async def adjust_timeline(call: CallbackQuery, state_data: Dict = None):
     keyboard.row(InlineKeyboardButton("📉 СНИЗИТЬ ПЛАНКУ", callback_data="reduce_goal"))
     keyboard.row(InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
+    # Убираем await!
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
@@ -612,8 +637,8 @@ async def reduce_goal(call: CallbackQuery, state_data: Dict = None):
     state_data = ensure_state_dict(state_data, user_id)
     goal = state_data.get("current_destination")
     
-    # ✅ ИСПРАВЛЕНО: синхронное логирование в фоне
-    run_sync_in_background(log_event, user_id, 'goal_reduction_started', {'goal_id': goal.get('id') if goal else None})
+    # ✅ ИСПРАВЛЕНО: Логируем снижение планки через run_async_task
+    run_async_task(db.log_event, user_id, 'goal_reduction_started', {'goal_id': goal.get('id') if goal else None})
     
     text = f"""
 🧠 **ФРЕДИ: СНИЖЕНИЕ ПЛАНКИ**
@@ -632,6 +657,7 @@ async def reduce_goal(call: CallbackQuery, state_data: Dict = None):
     keyboard.row(InlineKeyboardButton("🧠 ПРОРАБОТКА БЛОКОВ", callback_data="select_goal_blocks"))
     keyboard.row(InlineKeyboardButton("◀️ ДРУГАЯ ЦЕЛЬ", callback_data="show_dynamic_destinations"))
     
+    # Убираем await!
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
@@ -641,9 +667,10 @@ async def apply_extended_timeline(call: CallbackQuery, state_data: Dict = None):
     """
     user_id = call.from_user.id
     
-    # ✅ ИСПРАВЛЕНО: синхронное логирование в фоне
-    run_sync_in_background(log_event, user_id, 'extended_timeline_applied', {})
+    # ✅ ИСПРАВЛЕНО: Логируем применение через run_async_task
+    run_async_task(db.log_event, user_id, 'extended_timeline_applied', {})
     
+    # Пока просто принимаем план
     await accept_feasibility_plan(call, state_data)
 
 
@@ -654,6 +681,7 @@ async def select_goal_50(call: CallbackQuery, state_data: Dict = None):
     user_id = call.from_user.id
     state_data = ensure_state_dict(state_data, user_id)
     
+    # Создаём новую цель с меньшей амбициозностью
     new_goal = {
         "id": "income_growth_50",
         "name": "Увеличить доход на 50%",
@@ -664,9 +692,14 @@ async def select_goal_50(call: CallbackQuery, state_data: Dict = None):
     
     update_user_state_data(user_id, current_destination=new_goal)
     
-    # ✅ ИСПРАВЛЕНО: синхронное логирование в фоне
-    run_sync_in_background(log_event, user_id, 'goal_reduced_to_50', {'original_goal': state_data.get("current_destination", {}).get('id')})
+    # ✅ ИСПРАВЛЕНО: Логируем выбор через run_async_task
+    run_async_task(db.log_event,
+        user_id, 
+        'goal_reduced_to_50', 
+        {'original_goal': state_data.get("current_destination", {}).get('id')}
+    )
     
+    # Показываем теоретический путь
     from handlers.goals import show_theoretical_path
     await show_theoretical_path(call, state_data, new_goal)
 
@@ -688,8 +721,12 @@ async def select_goal_30(call: CallbackQuery, state_data: Dict = None):
     
     update_user_state_data(user_id, current_destination=new_goal)
     
-    # ✅ ИСПРАВЛЕНО: синхронное логирование в фоне
-    run_sync_in_background(log_event, user_id, 'goal_reduced_to_30', {'original_goal': state_data.get("current_destination", {}).get('id')})
+    # ✅ ИСПРАВЛЕНО: Логируем выбор через run_async_task
+    run_async_task(db.log_event,
+        user_id, 
+        'goal_reduced_to_30', 
+        {'original_goal': state_data.get("current_destination", {}).get('id')}
+    )
     
     from handlers.goals import show_theoretical_path
     await show_theoretical_path(call, state_data, new_goal)
@@ -712,8 +749,12 @@ async def select_goal_blocks(call: CallbackQuery, state_data: Dict = None):
     
     update_user_state_data(user_id, current_destination=new_goal)
     
-    # ✅ ИСПРАВЛЕНО: синхронное логирование в фоне
-    run_sync_in_background(log_event, user_id, 'goal_changed_to_blocks', {'original_goal': state_data.get("current_destination", {}).get('id')})
+    # ✅ ИСПРАВЛЕНО: Логируем выбор через run_async_task
+    run_async_task(db.log_event,
+        user_id, 
+        'goal_changed_to_blocks', 
+        {'original_goal': state_data.get("current_destination", {}).get('id')}
+    )
     
     from handlers.goals import show_theoretical_path
     await show_theoretical_path(call, state_data, new_goal)
@@ -740,8 +781,8 @@ __all__ = [
     'select_goal_50',
     'select_goal_30',
     'select_goal_blocks',
-    'save_reality_check_to_db_sync',
-    'save_life_context_to_db_sync',
-    'save_goal_context_to_db_sync',
-    'run_sync_in_background'
+    # ✅ ДОБАВЛЕНО: функции для БД
+    'save_reality_check_to_db',
+    'save_life_context_to_db',
+    'save_goal_context_to_db'
 ]
