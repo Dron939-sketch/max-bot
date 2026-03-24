@@ -1,6 +1,6 @@
 // ============================================
 // ЛИЧНЫЙ КАБИНЕТ - КОНСОРЦИУМ ФРЕДИ
-// Версия 2.8 - ИСПРАВЛЕНА РАБОТА МИКРОФОНА ДЛЯ MAX WEBVIEW
+// Версия 3.2 - УНИВЕРСАЛЬНАЯ (веб + мобильный MAX)
 // ============================================
 
 class FrediDashboard {
@@ -30,7 +30,7 @@ class FrediDashboard {
         this.recordingTimer = null;
         this.recordingStartTime = null;
         
-        // ✅ ДЕТЕКЦИЯ WEBVIEW
+        // Детекция WEBVIEW
         this.isWebView = /; wv\)/.test(navigator.userAgent) || 
                          /WebView/.test(navigator.userAgent) ||
                          (window.MAX && window.MAX.WebApp);
@@ -49,31 +49,56 @@ class FrediDashboard {
             { id: 'creativity', name: '🎨 Творчество', icon: '🎨', color: '#FF6B6B', description: 'Вдохновение и идеи' }
         ];
         
-        this.init();
+        // Откладываем инициализацию до загрузки API
+        this.initPromise = this.init();
     }
+    
+    // ============================================
+    // ИНИЦИАЛИЗАЦИЯ С ОЖИДАНИЕМ API
+    // ============================================
     
     async init() {
         console.log('🎯 Инициализация личного кабинета...');
+        console.log('📱 Режим WebView:', this.isWebView);
+        
+        // ✅ ЖДЁМ ЗАГРУЗКИ API (до 5 секунд, проверяем каждые 100мс)
+        let attempts = 0;
+        const maxAttempts = 50; // 5 секунд
+        
+        while (!window.api && attempts < maxAttempts) {
+            await new Promise(r => setTimeout(r, 100));
+            attempts++;
+            if (attempts % 10 === 0) {
+                console.log(`⏳ Ожидание window.api... ${attempts * 100}мс`);
+            }
+        }
+        
+        if (!window.api) {
+            console.error('❌ window.api не загружен!');
+            this.showError('Не удалось загрузить API. Проверьте соединение и перезагрузите страницу.');
+            return;
+        }
+        
+        console.log('✅ window.api доступен');
         
         if (!this.userId) {
             this.showError('Не удалось идентифицировать пользователя. Пожалуйста, откройте приложение через MAX.');
             return;
         }
         
-        console.log('📱 Режим WebView:', this.isWebView);
-        
-        await this.loadUserData();
-        await this.loadProfileData();
-        await this.loadPsychologistThought();
-        this.renderDashboard();
-        this.initVoiceInput();
-        
-        if (this.isTestCompleted) {
-            await this.initAnimatedAvatar();
-            // Временно отключаем проблемные модули
-            // await this.initChallenges();
-            // await this.initPsychometricDoubles();
-            // await this.initNotifications();
+        try {
+            await this.loadUserData();
+            await this.loadProfileData();
+            await this.loadPsychologistThought();
+            this.renderDashboard();
+            this.initVoiceInput();
+            
+            if (this.isTestCompleted) {
+                await this.initAnimatedAvatar();
+            }
+        } catch (error) {
+            console.error('❌ Ошибка инициализации:', error);
+            this.showError('Ошибка загрузки данных. Попробуйте обновить страницу.');
         }
     }
     
@@ -82,22 +107,18 @@ class FrediDashboard {
     // ============================================
     
     checkMicrophoneSupport() {
-        // 1. Проверяем через MAX WebApp
         if (window.MAX && window.MAX.WebApp) {
             console.log('✅ MAX WebApp доступен');
-            
             if (window.MAX.WebApp.isMediaSupported && window.MAX.WebApp.isMediaSupported('audio')) {
                 console.log('✅ MAX поддерживает аудио');
                 return true;
             }
-            
             if (window.MAX.WebApp.getUserMedia) {
                 console.log('✅ MAX имеет getUserMedia');
                 return true;
             }
         }
         
-        // 2. Fallback на стандартный Web API
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             console.warn('⚠️ getUserMedia не поддерживается в этом браузере');
             const voiceBtn = document.getElementById('dashboardVoiceBtn');
@@ -114,19 +135,15 @@ class FrediDashboard {
     }
     
     // ============================================
-    // ЗАПРОС РАЗРЕШЕНИЯ НА МИКРОФОН (ИСПРАВЛЕНО ДЛЯ WEBVIEW)
+    // ЗАПРОС РАЗРЕШЕНИЯ НА МИКРОФОН
     // ============================================
     
     async requestMicrophonePermission() {
-        // Для WebView не нужно отдельно запрашивать разрешение
-        // Просто пробуем получить доступ
-        
         try {
             console.log('🎤 Проверка доступа к микрофону...');
             
             let stream = null;
             
-            // Пробуем через MAX WebApp
             if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUserMedia) {
                 try {
                     stream = await window.MAX.WebApp.getUserMedia({ audio: true });
@@ -136,7 +153,6 @@ class FrediDashboard {
                 }
             }
             
-            // Fallback на стандартный Web API
             if (!stream) {
                 stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 console.log('✅ Микрофон доступен через Web API');
@@ -148,7 +164,6 @@ class FrediDashboard {
         } catch (error) {
             console.error('❌ Ошибка доступа к микрофону:', error);
             
-            // ✅ ИСПРАВЛЕНО: показываем инструкцию для MAX, а не для браузера
             if (error.name === 'NotAllowedError') {
                 this.showMicrophoneInstructions();
             } else if (error.name === 'NotFoundError') {
@@ -160,7 +175,6 @@ class FrediDashboard {
         }
     }
     
-    // ✅ НОВЫЙ МЕТОД: показывает инструкцию для настройки микрофона в MAX
     showMicrophoneInstructions() {
         const isAndroid = /Android/i.test(navigator.userAgent);
         const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -182,8 +196,6 @@ class FrediDashboard {
 5️⃣ Включите <b>Микрофон</b> → <b>Разрешить</b>
 <br><br>
 6️⃣ Вернитесь в чат и нажмите 🎤 ещё раз
-<br><br>
-<i>После включения разрешения — всё заработает!</i>
             `;
         } else if (isIOS) {
             instructions = `
@@ -198,8 +210,6 @@ class FrediDashboard {
 4️⃣ Включите переключатель <b>Микрофон</b>
 <br><br>
 5️⃣ Вернитесь в чат и нажмите 🎤 ещё раз
-<br><br>
-<i>После включения — всё заработает!</i>
             `;
         } else {
             instructions = `
@@ -241,15 +251,35 @@ class FrediDashboard {
     
     async loadUserData() {
         try {
-            const statusResponse = await fetch(`/api/user-status?user_id=${this.userId}`);
-            const status = await statusResponse.json();
+            // Запрос статуса
+            const status = await window.api.request(`/api/user-status?user_id=${this.userId}`);
             
-            this.isTestCompleted = status.test_completed || status.has_profile;
-            this.profileCode = status.profile_code;
+            // Если профиля нет в памяти — загружаем из БД
+            if (!status.has_profile && !status.test_completed) {
+                console.log('🔄 Профиль не найден в памяти, загружаем из БД...');
+                
+                const loadResult = await window.api.request('/api/force-load-user', {
+                    method: 'POST',
+                    body: JSON.stringify({ user_id: this.userId })
+                });
+                
+                if (loadResult.success && loadResult.has_profile) {
+                    console.log('✅ Профиль загружен из БД!');
+                    const newStatus = await window.api.request(`/api/user-status?user_id=${this.userId}`);
+                    this.isTestCompleted = newStatus.test_completed || newStatus.has_profile;
+                    this.profileCode = newStatus.profile_code;
+                } else {
+                    this.isTestCompleted = false;
+                    console.log('❌ Профиль не найден в БД');
+                }
+            } else {
+                this.isTestCompleted = status.test_completed || status.has_profile;
+                this.profileCode = status.profile_code;
+            }
             
+            // Загружаем имя пользователя
             try {
-                const userDataResponse = await fetch(`/api/user-data?user_id=${this.userId}`);
-                const userData = await userDataResponse.json();
+                const userData = await window.api.request(`/api/user-data?user_id=${this.userId}`);
                 if (userData && userData.user_name) {
                     this.userName = userData.user_name;
                     console.log('👤 Имя пользователя загружено из БД:', this.userName);
@@ -258,20 +288,21 @@ class FrediDashboard {
                 console.warn('Не удалось загрузить имя из БД:', nameError);
             }
             
+            // Если имя не загрузилось, пробуем из MAX.WebApp
             if (this.userName === 'Друг' && window.MAX?.WebApp?.initDataUnsafe?.user?.first_name) {
                 this.userName = window.MAX.WebApp.initDataUnsafe.user.first_name;
                 console.log('👤 Имя получено из MAX.WebApp:', this.userName);
             }
             
-            if (status.has_profile || status.has_interpretation) {
-                const profileResponse = await fetch(`/api/get-profile?user_id=${this.userId}`);
-                const profile = await profileResponse.json();
+            // Если тест пройден, загружаем полный профиль
+            if (this.isTestCompleted) {
+                const profile = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
                 this.userData = profile;
             }
             
+            // Загружаем статистику
             try {
-                const statsResponse = await fetch(`/api/user-full-status?user_id=${this.userId}`);
-                const stats = await statsResponse.json();
+                const stats = await window.api.request(`/api/user-full-status?user_id=${this.userId}`);
                 if (stats.days_active) this.daysActive = stats.days_active;
                 if (stats.sessions_count) this.sessionsCount = stats.sessions_count;
             } catch (statsError) {
@@ -291,34 +322,47 @@ class FrediDashboard {
         }
     }
     
+    // ============================================
+    // ЗАГРУЗКА ПРОФИЛЯ
+    // ============================================
+    
     async loadProfileData() {
         try {
-            const response = await fetch(`/api/get-profile?user_id=${this.userId}`);
-            const data = await response.json();
+            const response = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
             
-            if (data.ai_generated_profile) {
-                this.profileText = data.ai_generated_profile;
-            } else if (data.profile_data) {
-                this.profileText = this.formatProfileText(data);
+            if (response.ai_generated_profile) {
+                this.profileText = response.ai_generated_profile;
+            } else if (response.profile_data) {
+                this.profileText = this.formatProfileText(response);
             } else {
                 this.profileText = 'Профиль пока не сформирован. Пройдите тест.';
             }
+            
+            console.log('✅ Профиль загружен');
         } catch (error) {
             console.error('Ошибка загрузки профиля:', error);
             this.profileText = 'Ошибка загрузки профиля. Попробуйте позже.';
         }
     }
     
+    // ============================================
+    // ЗАГРУЗКА МЫСЛЕЙ ПСИХОЛОГА
+    // ============================================
+    
     async loadPsychologistThought() {
         try {
-            const response = await fetch(`/api/thought?user_id=${this.userId}`);
-            const data = await response.json();
-            this.psychologistThought = data.thought || 'Мысли психолога еще не сгенерированы. Пройдите тест для получения персонального анализа.';
+            const response = await window.api.request(`/api/thought?user_id=${this.userId}`);
+            this.psychologistThought = response.thought || 'Мысли психолога еще не сгенерированы. Пройдите тест для получения персонального анализа.';
+            console.log('✅ Мысли психолога загружены');
         } catch (error) {
             console.error('Ошибка загрузки мыслей психолога:', error);
             this.psychologistThought = 'Мысли психолога пока недоступны. Попробуйте позже.';
         }
     }
+    
+    // ============================================
+    // ФОРМАТИРОВАНИЕ ТЕКСТА ПРОФИЛЯ
+    // ============================================
     
     formatProfileText(data) {
         const profile = data.profile_data || {};
@@ -379,8 +423,7 @@ class FrediDashboard {
         }
         
         try {
-            const profileResponse = await fetch(`/api/get-profile?user_id=${this.userId}`);
-            const profileData = await profileResponse.json();
+            const profileData = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
             
             this.animatedAvatar = new AnimatedAvatar(this.userId, this.userName, profileData);
             const avatarCanvas = await this.animatedAvatar.init();
@@ -451,8 +494,7 @@ class FrediDashboard {
         }
         
         try {
-            const profileResponse = await fetch(`/api/get-profile?user_id=${this.userId}`);
-            const profileData = await profileResponse.json();
+            const profileData = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
             
             const userProfile = {
                 sb: profileData.profile_data?.sb_level || 4,
@@ -532,7 +574,6 @@ class FrediDashboard {
         
         container.innerHTML = `
             <div class="dashboard-container">
-                <!-- Верхняя панель с профилем -->
                 <div class="dashboard-header">
                     <div class="user-welcome">
                         <div class="user-avatar" id="avatarContainer">${this.getUserAvatar()}</div>
@@ -553,7 +594,6 @@ class FrediDashboard {
                     </div>
                 </div>
                 
-                <!-- Голосовой ввод -->
                 <div class="voice-input-dashboard" id="voiceInputDashboard">
                     <button class="voice-record-btn-large" id="dashboardVoiceBtn">
                         <span class="voice-icon">🎤</span>
@@ -566,7 +606,6 @@ class FrediDashboard {
                     </div>
                 </div>
                 
-                <!-- Модули-ярлыки -->
                 <div class="modules-grid" id="modulesGrid">
                     ${modulesToShow.map(module => `
                         <div class="module-card" data-module="${module.id}" style="border-left-color: ${module.color}">
@@ -577,7 +616,6 @@ class FrediDashboard {
                     `).join('')}
                 </div>
                 
-                <!-- Быстрые действия -->
                 <div class="quick-actions">
                     <div class="quick-actions-title">⚡ Быстрые действия</div>
                     <div class="quick-actions-grid">
@@ -600,7 +638,6 @@ class FrediDashboard {
                     </div>
                 </div>
                 
-                <!-- Всплывающее окно для сообщений -->
                 <div class="floating-message" id="floatingMessage" style="display: none;">
                     <div class="floating-message-content">
                         <div class="floating-message-text" id="floatingMessageText"></div>
@@ -980,7 +1017,7 @@ class FrediDashboard {
     }
     
     // ============================================
-    // 🎤 ГОЛОСОВОЙ ВВОД - ИСПРАВЛЕНА ВЕРСИЯ ДЛЯ MAX WEBVIEW
+    // 🎤 ГОЛОСОВОЙ ВВОД
     // ============================================
     
     setupVoiceButton(button) {
@@ -993,7 +1030,6 @@ class FrediDashboard {
         const voiceStatus = document.getElementById('voiceStatusDashboard');
         const timerEl = document.getElementById('dashboardRecordingTimer');
         
-        // Детекция устройств
         const isSamsung = /Samsung|SM-|GT-|SHV-|SCH-|SPH-/.test(navigator.userAgent);
         
         if (isSamsung || this.isWebView) {
@@ -1008,7 +1044,6 @@ class FrediDashboard {
                 let stream = null;
                 let mimeType = '';
                 
-                // 1. Пробуем через MAX WebApp
                 if (window.MAX && window.MAX.WebApp && window.MAX.WebApp.getUserMedia) {
                     try {
                         console.log('🎤 Пробуем через MAX WebApp...');
@@ -1029,7 +1064,6 @@ class FrediDashboard {
                     }
                 }
                 
-                // 2. Пробуем через стандартный Web API
                 if (!stream) {
                     try {
                         console.log('🎤 Пробуем через Web API...');
@@ -1055,7 +1089,6 @@ class FrediDashboard {
                     }
                 }
                 
-                // 3. Выбираем правильный MIME тип
                 const mimeTypes = [
                     'audio/webm',
                     'audio/mp4',
@@ -1073,7 +1106,6 @@ class FrediDashboard {
                 
                 console.log('📱 Используем MIME тип:', mimeType || 'default');
                 
-                // 4. Создаем MediaRecorder
                 const options = mimeType ? { mimeType } : {};
                 mediaRecorder = new MediaRecorder(stream, options);
                 audioChunks = [];
@@ -1108,7 +1140,6 @@ class FrediDashboard {
                     this._resetVoiceUI(button, voiceStatus, timerInterval);
                 };
                 
-                // Устанавливаем интервал для записи
                 mediaRecorder.start(1000);
                 isRecording = true;
                 recordingStartTime = Date.now();
@@ -1160,14 +1191,12 @@ class FrediDashboard {
             }
         };
         
-        // Очищаем старые обработчики
         button.removeEventListener('mousedown', startRecording);
         button.removeEventListener('mouseup', stopRecording);
         button.removeEventListener('mouseleave', stopRecording);
         button.removeEventListener('touchstart', startRecording);
         button.removeEventListener('touchend', stopRecording);
         
-        // Добавляем новые обработчики
         button.addEventListener('mousedown', startRecording);
         button.addEventListener('mouseup', stopRecording);
         button.addEventListener('mouseleave', stopRecording);
@@ -1200,7 +1229,7 @@ class FrediDashboard {
         formData.append('voice', audioBlob, 'voice.webm');
         
         try {
-            const response = await fetch('/api/voice/process', {
+            const response = await fetch(`${window.api.baseUrl}/api/voice/process`, {
                 method: 'POST',
                 body: formData
             });
@@ -1297,17 +1326,14 @@ class FrediDashboard {
     
     async sendQuestionToBot(question) {
         try {
-            const response = await fetch('/api/chat/message', {
+            const result = await window.api.request('/api/chat/message', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     user_id: this.userId,
                     message: question,
                     mode: this.mode
                 })
             });
-            
-            const result = await response.json();
             
             if (result.success && result.response) {
                 this.showFloatingMessage(result.response, 'info');
@@ -1323,9 +1349,8 @@ class FrediDashboard {
     
     async saveMode(mode) {
         try {
-            await fetch('/api/save-mode', {
+            await window.api.request('/api/save-mode', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ user_id: this.userId, mode })
             });
         } catch (error) {
@@ -1362,6 +1387,8 @@ class FrediDashboard {
     // ============================================
     
     showChatModal(double) {
+        if (!this.psychometric) return;
+        
         const modalHtml = this.psychometric.renderChatModal(double);
         const modalContainer = document.createElement('div');
         modalContainer.innerHTML = modalHtml;
@@ -1403,8 +1430,13 @@ class FrediDashboard {
     }
     
     addBotReply(double, messagesList) {
+        const compatibility = this.psychometric?.calculateCompatibility(
+            this.psychometric.userProfile, 
+            double.profile
+        ) || { score: 85 };
+        
         const replies = [
-            `Привет! Рад познакомиться! У нас ${double.compatibility.score}% совместимости!`,
+            `Привет! Рад познакомиться! У нас ${compatibility.score}% совместимости!`,
             `Ого, у нас очень похожий профиль! Как у тебя дела?`,
             `Здорово, что нас свела система! Расскажи, как у тебя дела?`,
             `Привет-привет! Смотрю на твой профиль — мы очень похожи. Как проходит твой день?`
@@ -1463,7 +1495,9 @@ class FrediDashboard {
 }
 
 // Инициализация при загрузке страницы
+// НЕ СОЗДАЁМ dashboard СРАЗУ — ждём DOMContentLoaded
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('📄 DOM загружен, создаём FrediDashboard');
     window.dashboard = new FrediDashboard();
 });
 
