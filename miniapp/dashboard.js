@@ -1,7 +1,41 @@
 // ============================================
 // ЛИЧНЫЙ КАБИНЕТ - КОНСОРЦИУМ ФРЕДИ
-// Версия 3.4 - ПОЛНАЯ (с рабочим голосом и всеми функциями)
+// Версия 3.5 - ПОЛНАЯ (с улучшенной стабильностью и кэшированием)
 // ============================================
+
+class CacheManager {
+    constructor() {
+        this.cache = new Map();
+        this.ttl = 5 * 60 * 1000; // 5 минут
+    }
+    
+    get(key) {
+        const cached = this.cache.get(key);
+        if (cached && Date.now() - cached.timestamp < this.ttl) {
+            console.log(`📦 Cache hit: ${key}`);
+            return cached.data;
+        }
+        return null;
+    }
+    
+    set(key, data) {
+        this.cache.set(key, {
+            data: data,
+            timestamp: Date.now()
+        });
+        console.log(`💾 Cache set: ${key}`);
+    }
+    
+    clear(key) {
+        if (key) {
+            this.cache.delete(key);
+            console.log(`🗑️ Cache cleared: ${key}`);
+        } else {
+            this.cache.clear();
+            console.log(`🗑️ Cache cleared all`);
+        }
+    }
+}
 
 class FrediDashboard {
     constructor() {
@@ -17,6 +51,10 @@ class FrediDashboard {
         this.sessionsCount = 12;
         this.profileText = null;
         this.psychologistThought = null;
+        this.refreshInterval = null;
+        
+        // Кэш-менеджер
+        this.cache = new CacheManager();
         
         // Модули улучшений
         this.challengeManager = null;
@@ -52,6 +90,57 @@ class FrediDashboard {
         
         // Откладываем инициализацию
         this.initPromise = this.init();
+        
+        // Слушаем события сети
+        window.addEventListener('online', () => this.handleOnline());
+        window.addEventListener('offline', () => this.handleOffline());
+        
+        // Обработка deep links
+        this.handleDeepLinks();
+    }
+    
+    // ============================================
+    // ОБРАБОТКА СОБЫТИЙ СЕТИ
+    // ============================================
+    
+    handleOnline() {
+        console.log('🟢 Соединение восстановлено');
+        this.showFloatingMessage('✅ Соединение восстановлено', 'success');
+        setTimeout(() => this.refreshData(), 1000);
+    }
+    
+    handleOffline() {
+        console.log('🔴 Потеря соединения');
+        this.showFloatingMessage('⚠️ Нет интернета. Проверьте соединение.', 'error');
+    }
+    
+    // ============================================
+    // ОБРАБОТКА DEEP LINKS
+    // ============================================
+    
+    handleDeepLinks() {
+        if (window.location.hash) {
+            const hash = window.location.hash.substring(1);
+            console.log('🔗 Deep link:', hash);
+            
+            setTimeout(() => {
+                if (hash === 'test') {
+                    this.startTest();
+                } else if (hash === 'profile') {
+                    if (this.isTestCompleted) {
+                        this.renderProfileScreen();
+                    }
+                } else if (hash === 'thoughts') {
+                    if (this.isTestCompleted) {
+                        this.renderPsychologistThoughtScreen();
+                    }
+                } else if (hash === 'goals') {
+                    if (this.isTestCompleted) {
+                        this.renderGoalsScreen();
+                    }
+                }
+            }, 1500);
+        }
     }
     
     // ============================================
@@ -64,22 +153,23 @@ class FrediDashboard {
         console.log('👤 user_id:', this.userId);
         console.log('👤 user_name:', this.userName);
         
-        // Ждем загрузки API
-        let attempts = 0;
-        const maxAttempts = 50;
-        
-        while (!window.api && attempts < maxAttempts) {
-            await new Promise(r => setTimeout(r, 100));
-            attempts++;
-            if (attempts % 10 === 0) {
-                console.log(`⏳ Ожидание window.api... ${attempts * 100}мс`);
-            }
-        }
-        
+        // Проверяем наличие API
         if (!window.api) {
             console.error('❌ window.api не загружен!');
             this.showError('Не удалось загрузить API. Проверьте соединение и перезагрузите страницу.');
             return;
+        }
+        
+        // Ждем загрузки API
+        let attempts = 0;
+        const maxAttempts = 50;
+        
+        while (!window.api.baseUrl && attempts < maxAttempts) {
+            await new Promise(r => setTimeout(r, 100));
+            attempts++;
+            if (attempts % 10 === 0) {
+                console.log(`⏳ Ожидание window.api.baseUrl... ${attempts * 100}мс`);
+            }
         }
         
         console.log('✅ window.api доступен');
@@ -96,9 +186,12 @@ class FrediDashboard {
             await this.loadPsychologistThought();
             this.renderDashboard();
             this.initVoiceInput();
+            this.startAutoRefresh();
             
             if (this.isTestCompleted) {
                 await this.initAnimatedAvatar();
+                await this.initChallenges();
+                await this.initPsychometricDoubles();
             }
         } catch (error) {
             console.error('❌ Ошибка инициализации:', error);
@@ -110,9 +203,18 @@ class FrediDashboard {
     // ЗАГРУЗКА ДАННЫХ
     // ============================================
     
-    async loadUserData() {
+    async loadUserData(forceRefresh = false) {
         try {
             console.log('🔍 Загрузка данных для user_id:', this.userId);
+            
+            // Проверяем кэш
+            const cached = this.cache.get(`user_status_${this.userId}`);
+            if (cached && !forceRefresh) {
+                console.log('📦 Используем кэшированные данные статуса');
+                this.isTestCompleted = cached.isTestCompleted;
+                this.profileCode = cached.profileCode;
+                return;
+            }
             
             const status = await window.api.request(`/api/user-status?user_id=${this.userId}`);
             console.log('📊 Статус пользователя:', status);
@@ -126,6 +228,13 @@ class FrediDashboard {
             
             console.log('📌 isTestCompleted:', this.isTestCompleted);
             console.log('📌 profileCode:', this.profileCode);
+            
+            // Сохраняем в кэш
+            this.cache.set(`user_status_${this.userId}`, {
+                isTestCompleted: this.isTestCompleted,
+                profileCode: this.profileCode,
+                timestamp: Date.now()
+            });
             
             // Если профиля нет в памяти — загружаем из БД
             if (!status.has_profile && !status.test_completed && !status.has_interpretation) {
@@ -142,6 +251,10 @@ class FrediDashboard {
                     console.log('✅ Профиль загружен из БД!');
                     this.isTestCompleted = true;
                     this.profileCode = loadResult.profile_code;
+                    this.cache.set(`user_status_${this.userId}`, {
+                        isTestCompleted: this.isTestCompleted,
+                        profileCode: this.profileCode
+                    });
                 }
             }
             
@@ -161,6 +274,7 @@ class FrediDashboard {
                 const profile = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
                 this.userData = profile;
                 console.log('📊 Профиль загружен');
+                this.cache.set(`user_profile_${this.userId}`, profile);
             }
             
             console.log('✅ loadUserData завершён, isTestCompleted:', this.isTestCompleted);
@@ -176,8 +290,15 @@ class FrediDashboard {
     // ЗАГРУЗКА ПРОФИЛЯ
     // ============================================
     
-    async loadProfileData() {
+    async loadProfileData(forceRefresh = false) {
         try {
+            const cached = this.cache.get(`profile_text_${this.userId}`);
+            if (cached && !forceRefresh) {
+                console.log('📦 Используем кэшированный текст профиля');
+                this.profileText = cached;
+                return;
+            }
+            
             const response = await window.api.request(`/api/get-profile?user_id=${this.userId}`);
             
             if (response.ai_generated_profile) {
@@ -188,6 +309,7 @@ class FrediDashboard {
                 this.profileText = 'Профиль пока не сформирован. Пройдите тест.';
             }
             
+            this.cache.set(`profile_text_${this.userId}`, this.profileText);
             console.log('✅ Профиль загружен');
         } catch (error) {
             console.error('Ошибка загрузки профиля:', error);
@@ -199,15 +321,92 @@ class FrediDashboard {
     // ЗАГРУЗКА МЫСЛЕЙ ПСИХОЛОГА
     // ============================================
     
-    async loadPsychologistThought() {
+    async loadPsychologistThought(forceRefresh = false) {
         try {
+            const cached = this.cache.get(`thought_${this.userId}`);
+            if (cached && !forceRefresh) {
+                console.log('📦 Используем кэшированные мысли психолога');
+                this.psychologistThought = cached;
+                return;
+            }
+            
             const response = await window.api.request(`/api/thought?user_id=${this.userId}`);
             this.psychologistThought = response.thought || 'Мысли психолога еще не сгенерированы. Пройдите тест для получения персонального анализа.';
+            this.cache.set(`thought_${this.userId}`, this.psychologistThought);
             console.log('✅ Мысли психолога загружены');
         } catch (error) {
             console.error('Ошибка загрузки мыслей психолога:', error);
             this.psychologistThought = 'Мысли психолога пока недоступны. Попробуйте позже.';
         }
+    }
+    
+    // ============================================
+    // ОБНОВЛЕНИЕ ДАННЫХ
+    // ============================================
+    
+    async refreshData() {
+        console.log('🔄 Обновление данных...');
+        this.showFloatingMessage('🔄 Обновление данных...', 'info');
+        
+        try {
+            await this.loadUserData(true);
+            await this.loadProfileData(true);
+            await this.loadPsychologistThought(true);
+            this.renderDashboard();
+            this.showFloatingMessage('✅ Данные обновлены', 'success');
+        } catch (error) {
+            console.error('Ошибка обновления:', error);
+            this.showFloatingMessage('❌ Ошибка обновления данных', 'error');
+        }
+    }
+    
+    startAutoRefresh(interval = 300000) { // 5 минут
+        if (this.refreshInterval) clearInterval(this.refreshInterval);
+        
+        this.refreshInterval = setInterval(() => {
+            if (document.visibilityState === 'visible') {
+                this.refreshData();
+            }
+        }, interval);
+    }
+    
+    stopAutoRefresh() {
+        if (this.refreshInterval) {
+            clearInterval(this.refreshInterval);
+            this.refreshInterval = null;
+        }
+    }
+    
+    // ============================================
+    // ОЧИСТКА РЕСУРСОВ
+    // ============================================
+    
+    destroy() {
+        console.log('🧹 Очистка ресурсов...');
+        
+        this.stopAutoRefresh();
+        
+        // Останавливаем запись голоса
+        if (this.mediaRecorder && this.isRecording) {
+            this.mediaRecorder.stop();
+            this.isRecording = false;
+        }
+        
+        // Очищаем таймеры
+        if (this.recordingTimer) {
+            clearInterval(this.recordingTimer);
+            this.recordingTimer = null;
+        }
+        
+        // Очищаем анимации
+        if (this.animatedAvatar) {
+            this.animatedAvatar.destroy();
+        }
+        
+        // Очищаем кэш
+        this.cache.clear();
+        
+        console.log('✅ Ресурсы очищены');
     }
     
     // ============================================
@@ -405,6 +604,7 @@ class FrediDashboard {
                     </div>
                     <div class="profile-buttons">
                         <button class="onboarding-btn primary" id="backToDashboardBtn">◀️ НАЗАД</button>
+                        <button class="onboarding-btn secondary" id="refreshProfileBtn">🔄 ОБНОВИТЬ</button>
                     </div>
                 </div>
             </div>
@@ -412,6 +612,12 @@ class FrediDashboard {
         
         const backBtn = document.getElementById('backToDashboardBtn');
         if (backBtn) backBtn.onclick = () => this.renderDashboard();
+        
+        const refreshBtn = document.getElementById('refreshProfileBtn');
+        if (refreshBtn) refreshBtn.onclick = async () => {
+            await this.loadProfileData(true);
+            this.renderProfileScreen();
+        };
     }
     
     renderPsychologistThoughtScreen() {
@@ -430,6 +636,7 @@ class FrediDashboard {
                     </div>
                     <div class="thought-buttons">
                         <button class="onboarding-btn secondary" id="backToDashboardFromThoughtBtn">◀️ НАЗАД</button>
+                        <button class="onboarding-btn secondary" id="refreshThoughtBtn">🔄 ОБНОВИТЬ</button>
                     </div>
                 </div>
             </div>
@@ -437,6 +644,12 @@ class FrediDashboard {
         
         const backBtn = document.getElementById('backToDashboardFromThoughtBtn');
         if (backBtn) backBtn.onclick = () => this.renderDashboard();
+        
+        const refreshBtn = document.getElementById('refreshThoughtBtn');
+        if (refreshBtn) refreshBtn.onclick = async () => {
+            await this.loadPsychologistThought(true);
+            this.renderPsychologistThoughtScreen();
+        };
     }
     
     renderGoalsScreen() {
@@ -496,17 +709,17 @@ class FrediDashboard {
                         Слушай, я могу быть разным. Хочешь конкретики — давай определимся.
                     </div>
                     <div class="mode-cards" id="modeCards">
-                        <div class="mode-card" data-mode="coach">
+                        <div class="mode-card ${this.mode === 'coach' ? 'active' : ''}" data-mode="coach">
                             <div class="mode-emoji">🔮</div>
                             <div class="mode-name">КОУЧ</div>
                             <div class="mode-desc">Помогаю найти ответы внутри себя</div>
                         </div>
-                        <div class="mode-card" data-mode="psychologist">
+                        <div class="mode-card ${this.mode === 'psychologist' ? 'active' : ''}" data-mode="psychologist">
                             <div class="mode-emoji">🧠</div>
                             <div class="mode-name">ПСИХОЛОГ</div>
                             <div class="mode-desc">Исследую глубинные паттерны</div>
                         </div>
-                        <div class="mode-card" data-mode="trainer">
+                        <div class="mode-card ${this.mode === 'trainer' ? 'active' : ''}" data-mode="trainer">
                             <div class="mode-emoji">⚡</div>
                             <div class="mode-name">ТРЕНЕР</div>
                             <div class="mode-desc">Даю чёткие инструменты и задачи</div>
@@ -772,6 +985,8 @@ class FrediDashboard {
         formData.append('user_id', this.userId);
         formData.append('voice', audioBlob, 'voice.webm');
         
+        const loadingToast = this.showLoadingToast('Распознавание речи...');
+        
         try {
             const response = await fetch(`${window.api.baseUrl}/api/voice/process`, {
                 method: 'POST',
@@ -779,6 +994,7 @@ class FrediDashboard {
             });
             
             const result = await response.json();
+            if (loadingToast) loadingToast.remove();
             
             if (result.success) {
                 if (result.recognized_text) {
@@ -801,8 +1017,23 @@ class FrediDashboard {
             }
         } catch (error) {
             console.error('Send voice error:', error);
+            if (loadingToast) loadingToast.remove();
             this.showFloatingMessage('❌ Ошибка отправки голоса', 'error');
         }
+    }
+    
+    showLoadingToast(message) {
+        const toast = document.createElement('div');
+        toast.className = 'floating-message loading';
+        toast.innerHTML = `
+            <div class="floating-message-content">
+                <div class="loading-spinner-small">🧠</div>
+                <div class="floating-message-text">${message}</div>
+            </div>
+        `;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.classList.add('show'), 10);
+        return toast;
     }
     
     playAudioResponse(audioUrl) {
@@ -909,7 +1140,10 @@ class FrediDashboard {
         const floatingMsg = document.getElementById('floatingMessage');
         const textEl = document.getElementById('floatingMessageText');
         
-        if (!floatingMsg || !textEl) return;
+        if (!floatingMsg || !textEl) {
+            console.warn('Floating message elements not found');
+            return;
+        }
         
         textEl.innerHTML = text;
         floatingMsg.className = `floating-message ${type}`;
@@ -933,13 +1167,19 @@ class FrediDashboard {
                     <div class="error-icon">⚠️</div>
                     <div class="error-title">Ошибка</div>
                     <div class="error-text">${message}</div>
+                    <button class="onboarding-btn primary" id="retryInitBtn" style="margin-top: 24px;">🔄 ПОВТОРИТЬ</button>
                 </div>
             `;
+            
+            const retryBtn = document.getElementById('retryInitBtn');
+            if (retryBtn) retryBtn.onclick = () => location.reload();
         }
     }
     
     startTest() {
         window.location.hash = '#test';
+        // Отправляем событие для навигации
+        window.dispatchEvent(new CustomEvent('navigate', { detail: { screen: 'test' } }));
     }
     
     showSkipMessage() {
