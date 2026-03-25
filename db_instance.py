@@ -4,6 +4,7 @@
 Централизованный доступ к экземпляру базы данных
 ВЕРСИЯ ДЛЯ PYTHON 3.11 - ПОЛНАЯ ВЕРСИЯ С ВСЕМИ ФУНКЦИЯМИ
 ДОБАВЛЕНО: Сохранение мыслей психолога и описания профиля
+ВЕРСИЯ 3.3 - ДОБАВЛЕНЫ ФУНКЦИИ ДЛЯ УПРАВЛЕНИЯ МЫСЛЯМИ
 """
 
 import os
@@ -809,7 +810,8 @@ def save_psychologist_thought(
     thought_text: str,
     test_result_id: int = None,
     thought_type: str = 'psychologist_thought',
-    **kwargs
+    thought_summary: str = None,
+    metadata: Dict = None
 ) -> Optional[int]:
     """Синхронная обертка для сохранения мысли психолога"""
     try:
@@ -819,7 +821,8 @@ def save_psychologist_thought(
             thought_text,
             test_result_id,
             thought_type,
-            **kwargs,
+            thought_summary,
+            metadata,
             timeout=30
         )
         return result if result is not None else None
@@ -947,6 +950,325 @@ def get_psychologist_thought_history(
     except Exception as e:
         logger.error(f"❌ Ошибка get_psychologist_thought_history: {e}")
         return []
+
+
+# ============================================
+# ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С МЫСЛЯМИ
+# ============================================
+
+async def get_all_psychologist_thoughts_async(
+    user_id: int,
+    limit: int = 50,
+    include_inactive: bool = False
+) -> List[Dict]:
+    """
+    Получает все мысли психолога для пользователя (с пагинацией)
+    """
+    try:
+        if not await ensure_db_connection():
+            return []
+        
+        async with db.get_connection() as conn:
+            query = """
+                SELECT 
+                    id, thought_type, thought_text, thought_summary,
+                    created_at, is_active, metadata,
+                    test_result_id
+                FROM fredi_psychologist_thoughts 
+                WHERE user_id = $1
+            """
+            params = [user_id]
+            
+            if not include_inactive:
+                query += " AND is_active = TRUE"
+            
+            query += " ORDER BY created_at DESC LIMIT $2"
+            params.append(limit)
+            
+            rows = await conn.fetch(query, *params)
+            
+            return [
+                {
+                    'id': row['id'],
+                    'type': row['thought_type'],
+                    'text': row['thought_text'],
+                    'summary': row['thought_summary'],
+                    'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                    'is_active': row['is_active'],
+                    'metadata': row['metadata'],
+                    'test_result_id': row['test_result_id']
+                }
+                for row in rows
+            ]
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения всех мыслей: {e}")
+        return []
+
+
+def get_all_psychologist_thoughts(
+    user_id: int,
+    limit: int = 50,
+    include_inactive: bool = False
+) -> List[Dict]:
+    """Синхронная обертка для получения всех мыслей психолога"""
+    try:
+        result = db_loop_manager.run_coro(
+            get_all_psychologist_thoughts_async,
+            user_id,
+            limit,
+            include_inactive,
+            timeout=10
+        )
+        return result if result is not None else []
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_all_psychologist_thoughts: {e}")
+        return []
+
+
+async def delete_psychologist_thought_async(thought_id: int) -> bool:
+    """
+    Удаляет мысль психолога по ID
+    """
+    try:
+        if not await ensure_db_connection():
+            return False
+        
+        async with db.get_connection() as conn:
+            result = await conn.execute("""
+                DELETE FROM fredi_psychologist_thoughts 
+                WHERE id = $1
+            """, thought_id)
+            
+            deleted = int(result.split()[-1]) > 0
+            if deleted:
+                logger.info(f"🗑️ Удалена мысль психолога id={thought_id}")
+            return deleted
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка удаления мысли: {e}")
+        return False
+
+
+def delete_psychologist_thought(thought_id: int) -> bool:
+    """Синхронная обертка для удаления мысли"""
+    try:
+        result = db_loop_manager.run_coro(
+            delete_psychologist_thought_async,
+            thought_id,
+            timeout=10
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка delete_psychologist_thought: {e}")
+        return False
+
+
+async def update_psychologist_thought_async(
+    thought_id: int,
+    thought_text: str = None,
+    thought_summary: str = None,
+    is_active: bool = None,
+    metadata: Dict = None
+) -> bool:
+    """
+    Обновляет мысль психолога
+    """
+    try:
+        if not await ensure_db_connection():
+            return False
+        
+        async with db.get_connection() as conn:
+            updates = []
+            params = []
+            param_index = 2
+            
+            if thought_text is not None:
+                updates.append(f"thought_text = ${param_index}")
+                params.append(thought_text)
+                param_index += 1
+            
+            if thought_summary is not None:
+                updates.append(f"thought_summary = ${param_index}")
+                params.append(thought_summary)
+                param_index += 1
+            
+            if is_active is not None:
+                updates.append(f"is_active = ${param_index}")
+                params.append(is_active)
+                param_index += 1
+            
+            if metadata is not None:
+                updates.append(f"metadata = ${param_index}")
+                params.append(json.dumps(metadata))
+                param_index += 1
+            
+            if not updates:
+                logger.warning(f"⚠️ Нет полей для обновления мысли {thought_id}")
+                return False
+            
+            updates.append("updated_at = NOW()")
+            
+            query = f"""
+                UPDATE fredi_psychologist_thoughts 
+                SET {', '.join(updates)}
+                WHERE id = $1
+            """
+            params.insert(0, thought_id)
+            
+            result = await conn.execute(query, *params)
+            updated = int(result.split()[-1]) > 0
+            
+            if updated:
+                logger.info(f"✏️ Обновлена мысль психолога id={thought_id}")
+            return updated
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка обновления мысли: {e}")
+        return False
+
+
+def update_psychologist_thought(
+    thought_id: int,
+    thought_text: str = None,
+    thought_summary: str = None,
+    is_active: bool = None,
+    metadata: Dict = None
+) -> bool:
+    """Синхронная обертка для обновления мысли"""
+    try:
+        result = db_loop_manager.run_coro(
+            update_psychologist_thought_async,
+            thought_id,
+            thought_text,
+            thought_summary,
+            is_active,
+            metadata,
+            timeout=10
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка update_psychologist_thought: {e}")
+        return False
+
+
+async def get_thoughts_by_test_result_async(test_result_id: int) -> List[Dict]:
+    """
+    Получает все мысли, связанные с конкретным результатом теста
+    """
+    try:
+        if not await ensure_db_connection():
+            return []
+        
+        async with db.get_connection() as conn:
+            rows = await conn.fetch("""
+                SELECT 
+                    id, thought_type, thought_text, thought_summary,
+                    created_at, is_active, metadata, user_id
+                FROM fredi_psychologist_thoughts 
+                WHERE test_result_id = $1
+                ORDER BY created_at DESC
+            """, test_result_id)
+            
+            return [
+                {
+                    'id': row['id'],
+                    'type': row['thought_type'],
+                    'text': row['thought_text'],
+                    'summary': row['thought_summary'],
+                    'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                    'is_active': row['is_active'],
+                    'metadata': row['metadata'],
+                    'user_id': row['user_id']
+                }
+                for row in rows
+            ]
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения мыслей по тесту: {e}")
+        return []
+
+
+def get_thoughts_by_test_result(test_result_id: int) -> List[Dict]:
+    """Синхронная обертка для получения мыслей по тесту"""
+    try:
+        result = db_loop_manager.run_coro(
+            get_thoughts_by_test_result_async,
+            test_result_id,
+            timeout=10
+        )
+        return result if result is not None else []
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_thoughts_by_test_result: {e}")
+        return []
+
+
+async def get_psychologist_thoughts_stats_async(user_id: int) -> Dict[str, Any]:
+    """
+    Получает статистику по мыслям психолога для пользователя
+    """
+    try:
+        if not await ensure_db_connection():
+            return {}
+        
+        async with db.get_connection() as conn:
+            # Общее количество мыслей
+            total = await conn.fetchval("""
+                SELECT COUNT(*) FROM fredi_psychologist_thoughts 
+                WHERE user_id = $1
+            """, user_id)
+            
+            # Активные мысли
+            active = await conn.fetchval("""
+                SELECT COUNT(*) FROM fredi_psychologist_thoughts 
+                WHERE user_id = $1 AND is_active = TRUE
+            """, user_id)
+            
+            # По типам
+            by_type = await conn.fetch("""
+                SELECT thought_type, COUNT(*) as count 
+                FROM fredi_psychologist_thoughts 
+                WHERE user_id = $1 
+                GROUP BY thought_type
+            """, user_id)
+            
+            # Последняя мысль
+            last = await conn.fetchrow("""
+                SELECT thought_text, thought_type, created_at 
+                FROM fredi_psychologist_thoughts 
+                WHERE user_id = $1 
+                ORDER BY created_at DESC LIMIT 1
+            """, user_id)
+            
+            return {
+                'total': total or 0,
+                'active': active or 0,
+                'inactive': (total or 0) - (active or 0),
+                'by_type': {row['thought_type']: row['count'] for row in by_type},
+                'last_thought': {
+                    'text': last['thought_text'][:100] if last else None,
+                    'type': last['thought_type'] if last else None,
+                    'created_at': last['created_at'].isoformat() if last and last['created_at'] else None
+                } if last else None
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения статистики мыслей: {e}")
+        return {}
+
+
+def get_psychologist_thoughts_stats(user_id: int) -> Dict[str, Any]:
+    """Синхронная обертка для получения статистики мыслей"""
+    try:
+        result = db_loop_manager.run_coro(
+            get_psychologist_thoughts_stats_async,
+            user_id,
+            timeout=10
+        )
+        return result if result is not None else {}
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_psychologist_thoughts_stats: {e}")
+        return {}
 
 
 # ============================================
@@ -1266,11 +1588,17 @@ __all__ = [
     'save_user_context',
     'get_user_context',
     'save_route_data',
-    # НОВЫЕ ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
+    # Функции для мыслей психолога (основные)
     'create_psychologist_thoughts_table',
     'save_psychologist_thought',
     'get_psychologist_thought',
     'get_psychologist_thought_history',
+    # Дополнительные функции для работы с мыслями
+    'get_all_psychologist_thoughts',
+    'delete_psychologist_thought',
+    'update_psychologist_thought',
+    'get_thoughts_by_test_result',
+    'get_psychologist_thoughts_stats',
 ]
 
-logger.info("✅ db_instance инициализирован (с поддержкой мыслей психолога)")
+logger.info("✅ db_instance инициализирован (версия 3.3 с полной поддержкой мыслей психолога)")
