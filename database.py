@@ -4,7 +4,7 @@
 Модуль для работы с PostgreSQL базой данных бота "Фреди"
 Все таблицы имеют префикс fredi_ для избежания конфликтов
 
-Версия 3.1 - ИСПРАВЛЕНО: сериализация ConfinementElement
+Версия 3.2 - ДОБАВЛЕНА ТАБЛИЦА И МЕТОДЫ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
 """
 
 import asyncpg
@@ -120,6 +120,10 @@ class BotDatabase:
                 if not key.startswith('_'):
                     result[key] = self._make_json_serializable(value)
             return result
+        
+        # Если есть метод to_dict (например, ConfinementElement)
+        if hasattr(obj, 'to_dict'):
+            return self._make_json_serializable(obj.to_dict())
         
         # Если ничего не подошло, преобразуем в строку
         return str(obj)
@@ -360,6 +364,23 @@ class BotDatabase:
                 )
             """)
             
+            # 👇👇👇 НОВАЯ ТАБЛИЦА ДЛЯ МЫСЛЕЙ ПСИХОЛОГА 👇👇👇
+            # Таблица мыслей психолога
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS fredi_psychologist_thoughts (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL REFERENCES fredi_users(user_id) ON DELETE CASCADE,
+                    test_result_id BIGINT REFERENCES fredi_test_results(id) ON DELETE SET NULL,
+                    thought_type VARCHAR(50) NOT NULL DEFAULT 'psychologist_thought',
+                    thought_text TEXT NOT NULL,
+                    thought_summary VARCHAR(500),
+                    metadata JSONB DEFAULT '{}',
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    is_active BOOLEAN DEFAULT TRUE
+                )
+            """)
+            
             # Таблица событий для статистики
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS fredi_events (
@@ -383,7 +404,76 @@ class BotDatabase:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_question_cache_expires ON fredi_question_analysis_cache(expires_at)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_hypno_anchors_user ON fredi_hypno_anchors(user_id)")
             
+            # 👇👇👇 ИНДЕКСЫ ДЛЯ ТАБЛИЦЫ МЫСЛЕЙ ПСИХОЛОГА 👇👇👇
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_psych_thoughts_user_id 
+                ON fredi_psychologist_thoughts(user_id)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_psych_thoughts_test_result 
+                ON fredi_psychologist_thoughts(test_result_id)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_psych_thoughts_type 
+                ON fredi_psychologist_thoughts(thought_type)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_psych_thoughts_created 
+                ON fredi_psychologist_thoughts(created_at)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_psych_thoughts_text_gin 
+                ON fredi_psychologist_thoughts 
+                USING GIN(to_tsvector('russian', thought_text))
+            """)
+            
             logger.info("✅ Все таблицы созданы или уже существуют")
+    
+    async def create_psychologist_thoughts_table(self):
+        """
+        Создаёт таблицу для мыслей психолога (отдельный вызов)
+        Используется для гарантии существования таблицы перед сохранением
+        """
+        async with self.get_connection() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS fredi_psychologist_thoughts (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL REFERENCES fredi_users(user_id) ON DELETE CASCADE,
+                    test_result_id BIGINT REFERENCES fredi_test_results(id) ON DELETE SET NULL,
+                    thought_type VARCHAR(50) NOT NULL DEFAULT 'psychologist_thought',
+                    thought_text TEXT NOT NULL,
+                    thought_summary VARCHAR(500),
+                    metadata JSONB DEFAULT '{}',
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    is_active BOOLEAN DEFAULT TRUE
+                )
+            """)
+            
+            # Индексы
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_psych_thoughts_user_id 
+                ON fredi_psychologist_thoughts(user_id)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_psych_thoughts_test_result 
+                ON fredi_psychologist_thoughts(test_result_id)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_psych_thoughts_type 
+                ON fredi_psychologist_thoughts(thought_type)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_psych_thoughts_created 
+                ON fredi_psychologist_thoughts(created_at)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_psych_thoughts_text_gin 
+                ON fredi_psychologist_thoughts 
+                USING GIN(to_tsvector('russian', thought_text))
+            """)
+            
+            logger.info("✅ Таблица fredi_psychologist_thoughts создана")
     
     # ====================== ПОЛЬЗОВАТЕЛИ ======================
     
@@ -459,6 +549,11 @@ class BotDatabase:
         """
         # Сначала убеждаемся, что пользователь существует
         await self.save_telegram_user(user_id)
+        
+        # Поддержка как объектов, так и словарей
+        if isinstance(context_obj, dict):
+            from types import SimpleNamespace
+            context_obj = SimpleNamespace(**context_obj)
         
         async with self.get_connection() as conn:
             await conn.execute("""
@@ -1073,6 +1168,167 @@ class BotDatabase:
             
             return None
     
+    # ====================== МЫСЛИ ПСИХОЛОГА ======================
+    
+    async def save_psychologist_thought(
+        self,
+        user_id: int,
+        thought_text: str,
+        test_result_id: Optional[int] = None,
+        thought_type: str = 'psychologist_thought',
+        thought_summary: Optional[str] = None,
+        metadata: Optional[Dict] = None
+    ) -> Optional[int]:
+        """
+        Сохраняет мысль психолога в отдельную таблицу
+        
+        Args:
+            user_id: ID пользователя
+            thought_text: Текст мысли
+            test_result_id: ID результата теста (опционально)
+            thought_type: Тип мысли (psychologist_thought, profile_description, etc)
+            thought_summary: Краткое описание (первые 200 символов)
+            metadata: Дополнительные метаданные
+        
+        Returns:
+            ID сохранённой мысли или None при ошибке
+        """
+        try:
+            # Убеждаемся, что таблица существует
+            await self.create_psychologist_thoughts_table()
+            
+            # Убеждаемся, что пользователь существует
+            await self.save_telegram_user(user_id)
+            
+            async with self.get_connection() as conn:
+                # Если test_result_id не передан, получаем последний
+                if test_result_id is None:
+                    row = await conn.fetchrow("""
+                        SELECT id FROM fredi_test_results 
+                        WHERE user_id = $1 
+                        ORDER BY created_at DESC LIMIT 1
+                    """, user_id)
+                    if row:
+                        test_result_id = row['id']
+                
+                # Деактивируем предыдущие мысли того же типа
+                await conn.execute("""
+                    UPDATE fredi_psychologist_thoughts 
+                    SET is_active = FALSE 
+                    WHERE user_id = $1 AND thought_type = $2 AND is_active = TRUE
+                """, user_id, thought_type)
+                
+                # Сохраняем новую мысль
+                row = await conn.fetchrow("""
+                    INSERT INTO fredi_psychologist_thoughts (
+                        user_id, test_result_id, thought_type, thought_text, 
+                        thought_summary, metadata
+                    ) VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING id
+                """, user_id, test_result_id, thought_type, thought_text,
+                    thought_summary, self._safe_json_dumps(metadata or {}))
+                
+                thought_id = row['id']
+                logger.info(f"💾 Мысль психолога сохранена: user={user_id}, id={thought_id}, type={thought_type}")
+                return thought_id
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения мысли: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    async def get_psychologist_thought(
+        self,
+        user_id: int,
+        thought_type: str = 'psychologist_thought',
+        only_active: bool = True
+    ) -> Optional[str]:
+        """
+        Получает последнюю мысль психолога
+        
+        Args:
+            user_id: ID пользователя
+            thought_type: Тип мысли
+            only_active: Только активные мысли
+        
+        Returns:
+            Текст мысли или None
+        """
+        try:
+            async with self.get_connection() as conn:
+                query = """
+                    SELECT thought_text FROM fredi_psychologist_thoughts 
+                    WHERE user_id = $1 AND thought_type = $2
+                """
+                params = [user_id, thought_type]
+                
+                if only_active:
+                    query += " AND is_active = TRUE"
+                
+                query += " ORDER BY created_at DESC LIMIT 1"
+                
+                row = await conn.fetchrow(query, *params)
+                return row['thought_text'] if row else None
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения мысли: {e}")
+            return None
+    
+    async def get_psychologist_thought_history(
+        self,
+        user_id: int,
+        thought_type: Optional[str] = None,
+        limit: int = 10
+    ) -> List[Dict]:
+        """
+        Получает историю мыслей психолога
+        
+        Args:
+            user_id: ID пользователя
+            thought_type: Тип мысли (опционально)
+            limit: Максимальное количество записей
+        
+        Returns:
+            Список мыслей
+        """
+        try:
+            async with self.get_connection() as conn:
+                query = """
+                    SELECT 
+                        id, thought_type, thought_text, thought_summary,
+                        created_at, is_active, metadata
+                    FROM fredi_psychologist_thoughts 
+                    WHERE user_id = $1
+                """
+                params = [user_id]
+                
+                if thought_type:
+                    query += " AND thought_type = $2"
+                    params.append(thought_type)
+                
+                query += " ORDER BY created_at DESC LIMIT $3"
+                params.append(limit)
+                
+                rows = await conn.fetch(query, *params)
+                
+                return [
+                    {
+                        'id': row['id'],
+                        'type': row['thought_type'],
+                        'text': row['thought_text'],
+                        'summary': row['thought_summary'],
+                        'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                        'is_active': row['is_active'],
+                        'metadata': row['metadata']
+                    }
+                    for row in rows
+                ]
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения истории мыслей: {e}")
+            return []
+    
     # ====================== СОБЫТИЯ И СТАТИСТИКА ======================
     
     async def log_event(
@@ -1206,6 +1462,12 @@ class BotDatabase:
             """)
             await conn.execute("""
                 DELETE FROM fredi_question_analysis_cache WHERE expires_at < NOW()
+            """)
+            
+            # Удаляем неактивные мысли психолога старше 180 дней
+            await conn.execute("""
+                DELETE FROM fredi_psychologist_thoughts
+                WHERE is_active = FALSE AND created_at < NOW() - INTERVAL '180 days'
             """)
             
             logger.info(f"🧹 Очистка старых данных выполнена")
