@@ -213,7 +213,9 @@ async def start_life_context_collection(call: CallbackQuery, goal: Dict, state_d
 
 {questions}
 
-👇 **Напиши ответы одним сообщением или отправь голосовое сообщение 🎤**
+👇 **Напиши ответы одним сообщением:**
+
+*(🎙 Голосовой ввод временно недоступен на платформе MAX)*
 """
     
     keyboard = InlineKeyboardMarkup()
@@ -253,7 +255,9 @@ async def ask_goal_specific_questions(call: CallbackQuery, goal: Dict, state_dat
 
 {questions}
 
-👇 **Напиши ответы (можно по порядку) или отправь голосовое сообщение 🎤**
+👇 **Напиши ответы (можно по порядку):**
+
+*(🎙 Голосовой ввод временно недоступен на платформе MAX)*
 """
     
     keyboard = InlineKeyboardMarkup()
