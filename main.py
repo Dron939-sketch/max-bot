@@ -1008,7 +1008,7 @@ async def process_voice(request: Request):
                 with open(audio_path, 'wb') as f:
                     f.write(audio_response)
                 
-                audio_url = f"/audio/{audio_filename}"
+                audio_url = f"https://max-bot-1-ywpz.onrender.com/audio/{audio_filename}"
             
             return JSONResponse({
                 "success": True,
