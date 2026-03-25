@@ -2136,6 +2136,44 @@ def main():
     finally:
         cleanup_resources()
 
+@api_app.get("/api/user-status")
+async def get_user_status(user_id: int):
+    try:
+        # Проверяем соединение с таймаутом
+        try:
+            await asyncio.wait_for(ensure_db_connection(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.error(f"❌ Таймаут при проверке БД для user {user_id}")
+            return JSONResponse({
+                "success": False,
+                "error": "Database connection timeout",
+                "has_profile": False,
+                "test_completed": False,
+                "profile_code": None
+            }, status_code=503)
+        
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        return JSONResponse({
+            "success": True,
+            "has_profile": bool(user_info.get('profile_data')),
+            "has_interpretation": bool(user_info.get('ai_generated_profile')),
+            "test_completed": user_info.get('test_completed', False),
+            "interpretation_ready": bool(user_info.get('ai_generated_profile')),
+            "profile_code": user_info.get('profile_data', {}).get('display_name')
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка в user-status: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": str(e),
+            "has_profile": False,
+            "test_completed": False,
+            "profile_code": None
+        }, status_code=500)
+
 # ============================================
 # ДОПОЛНИТЕЛЬНЫЕ API ЭНДПОИНТЫ ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
 # ============================================
