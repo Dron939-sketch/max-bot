@@ -49,7 +49,7 @@ def get_mode_selection_keyboard() -> types.InlineKeyboardMarkup:
         ],
         [
             {"text": "⚡ ТРЕНЕР", "callback_data": "mode_trainer"},
-            {"text": "❓ ЗАЧЕМ ЭТО", "callback_data": "why_details"}
+            {"text": "◀️ НАЗАД", "callback_data": "back_to_mode_selected"}  # ← ЗАМЕНЕНО
         ]
     ]
     return create_inline_keyboard(buttons)
