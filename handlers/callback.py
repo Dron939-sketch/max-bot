@@ -384,32 +384,37 @@ async def handle_sync_callback(call: CallbackQuery):
         logger.info(f"🎭 Установка режима: trainer для пользователя {user_id}")
         update_state_data(user_id, communication_mode="trainer")
         show_mode_selected(call.message, "trainer")
-    
+
     # ============================================
     # РЕЖИМЫ ОБЩЕНИЯ (СТАРЫЙ ФОРМАТ - ДЛЯ СОВМЕСТИМОСТИ)
     # ============================================
+    elif data == "show_modes":
+        logger.info(f"🎭 show_modes для пользователя {user_id}")
+        from handlers.modes import show_mode_selection
+        show_mode_selection(call.message)
+
     elif data == "mode_coach":
         logger.info(f"🎭 Выбран режим: coach (старый формат) для пользователя {user_id}")
         update_state_data(user_id, communication_mode="coach")
         show_mode_selected(call.message, "coach")
-    
+
     elif data == "mode_psychologist":
         logger.info(f"🎭 Выбран режим: psychologist (старый формат) для пользователя {user_id}")
         update_state_data(user_id, communication_mode="psychologist")
         show_mode_selected(call.message, "psychologist")
-    
+
     elif data == "mode_trainer":
         logger.info(f"🎭 Выбран режим: trainer (старый формат) для пользователя {user_id}")
         update_state_data(user_id, communication_mode="trainer")
         show_mode_selected(call.message, "trainer")
-    
+
     elif data == "back_to_mode_selected":
         logger.info(f"◀️ back_to_mode_selected для пользователя {user_id}")
         context = user_contexts.get(user_id)
         if context:
             mode = context.communication_mode or "coach"
             show_mode_selected(call.message, mode)
-    
+            
     # ============================================
     # КОНТЕКСТ (пол, возраст и т.д.)
     # ============================================
