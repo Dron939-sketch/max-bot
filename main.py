@@ -388,12 +388,10 @@ api_app = FastAPI(title="Фреди - Мини-приложение")
 api_app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://max-bot-miniapp.onrender.com",
-        "https://max-bot-1-ywpz.onrender.com",
-        "https://max-bot-2-ogve.onrender.com",
-        "http://localhost:3000",
+        "https://max-bot-miniapp.onrender.com",  # статический сайт
+        "https://max-bot-1-ywpz.onrender.com",   # бэкенд
         "http://localhost:10000",
-        "*"
+        "http://localhost:3000",
     ],
     allow_methods=["*"],
     allow_headers=["*"],
