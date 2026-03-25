@@ -1085,15 +1085,47 @@ async def generate_route_ai(user_id: int, data: dict, goal: dict) -> Optional[Di
     
     mode_info = mode_descriptions.get(mode, mode_descriptions["coach"])
     
+    # ✅ БЕРЁМ РЕАЛЬНЫЙ ПРОФИЛЬ ИЗ ДАННЫХ ТЕСТА
     profile_data = data.get("profile_data", {})
-    profile_code = profile_data.get("display_name", "СБ-4_ТФ-4_УБ-4_ЧВ-4")
+    
+    # Если нет profile_data, пытаемся собрать из behavioral_levels
+    if not profile_data:
+        behavioral_levels = data.get("behavioral_levels", {})
+        if behavioral_levels:
+            sb_vals = behavioral_levels.get("СБ", [])
+            tf_vals = behavioral_levels.get("ТФ", [])
+            ub_vals = behavioral_levels.get("УБ", [])
+            chv_vals = behavioral_levels.get("ЧВ", [])
+            
+            sb = sum(sb_vals) / len(sb_vals) if sb_vals else 4
+            tf = sum(tf_vals) / len(tf_vals) if tf_vals else 4
+            ub = sum(ub_vals) / len(ub_vals) if ub_vals else 4
+            chv = sum(chv_vals) / len(chv_vals) if chv_vals else 4
+            
+            profile_code = f"СБ-{round(sb)}_ТФ-{round(tf)}_УБ-{round(ub)}_ЧВ-{round(chv)}"
+            profile_data = {
+                "display_name": profile_code,
+                "sb_level": round(sb),
+                "tf_level": round(tf),
+                "ub_level": round(ub),
+                "chv_level": round(chv)
+            }
+            logger.info(f"📊 Профиль собран из behavioral_levels: {profile_code}")
+        else:
+            # Fallback — используем perception_type и thinking_level
+            perception_type = data.get("perception_type", "не определен")
+            thinking_level = data.get("thinking_level", 5)
+            profile_code = f"Восприятие: {perception_type}, Мышление: {thinking_level}/9"
+            logger.warning(f"⚠️ Нет profile_data и behavioral_levels, используем fallback: {profile_code}")
+    else:
+        profile_code = profile_data.get("display_name", "СБ-4_ТФ-4_УБ-4_ЧВ-4")
     
     sb_level = profile_data.get("sb_level", 4)
     tf_level = profile_data.get("tf_level", 4)
     ub_level = profile_data.get("ub_level", 4)
     chv_level = profile_data.get("chv_level", 4)
     
-    logger.info(f"📊 Профиль: {profile_code}, СБ={sb_level}, ТФ={tf_level}, УБ={ub_level}, ЧВ={chv_level}")
+    logger.info(f"📊 ИТОГОВЫЙ ПРОФИЛЬ: {profile_code}, СБ={sb_level}, ТФ={tf_level}, УБ={ub_level}, ЧВ={chv_level}")
     
     prompt = f"""Ты — {mode_info['emoji']} {mode_info['name']}, виртуальный помощник. Создай пошаговый маршрут для пользователя к его цели.
 
