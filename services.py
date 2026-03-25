@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Сервисные функции для работы с API и генерации ответов
-Версия 9.8.4 - ДОБАВЛЕНА ПОГОДА И УЛУЧШЕНА ДИАГНОСТИКА
+Версия 9.8.5 - ДОБАВЛЕНО СОХРАНЕНИЕ МЫСЛЕЙ ПСИХОЛОГА В БД
 """
 
 import os
@@ -25,6 +25,8 @@ from config import (
     DEEPGRAM_API_URL,
     YANDEX_TTS_API_URL
 )
+
+from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
 
@@ -733,6 +735,7 @@ async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
 async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
     """
     Генерирует психологический портрет на основе данных теста
+    И сохраняет результат в БД
     """
     logger.info(f"🧠 Генерация AI-профиля для пользователя {user_id}")
     logger.info(f"📊 Размер входных данных: {len(str(data))} символов")
@@ -812,7 +815,7 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
         "deep_patterns": data.get("deep_patterns", {})
     }
     
-    # Добавляем конфайнмент-модель, если есть
+    # Добавляем конфайнтмент-модель, если есть
     if data.get("confinement_model"):
         try:
             profile_data["confinement_model"] = make_json_serializable(data["confinement_model"])
@@ -901,6 +904,36 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
             logger.warning("⚠️ В ответе отсутствуют некоторые обязательные эмодзи")
             logger.info(f"📄 Начало ответа: {response[:200]}...")
         
+        # 👇👇👇 СОХРАНЕНИЕ В БД 👇👇👇
+        try:
+            # Получаем profile_code
+            profile_code = data.get('profile_data', {}).get('display_name')
+            if not profile_code:
+                match = re.search(r'СБ-\d+_ТФ-\d+_УБ-\d+_ЧВ-\d+', str(data))
+                if match:
+                    profile_code = match.group(0)
+            
+            # Сохраняем в БД
+            thought_id = sync_db.save_psychologist_thought(
+                user_id=user_id,
+                thought_text=response,
+                thought_type='profile_description',
+                thought_summary=response[:200],
+                metadata={
+                    'profile_code': profile_code,
+                    'vectors': data.get('behavioral_levels'),
+                    'perception_type': data.get('perception_type'),
+                    'thinking_level': data.get('thinking_level'),
+                    'model': 'deepseek',
+                    'generation_time': datetime.now().isoformat()
+                }
+            )
+            logger.info(f"💾 AI-профиль сохранён в БД: id={thought_id}")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения профиля в БД: {e}")
+            traceback.print_exc()
+        
         return response
     else:
         logger.error("❌ Не удалось сгенерировать AI-профиль (пустой ответ)")
@@ -929,6 +962,20 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
 Анализ → Поиск идеального решения → Страх ошибки → Ещё больший анализ
 """
         logger.info(f"✅ Тестовый профиль создан ({len(test_profile)} символов)")
+        
+        # Сохраняем тестовый профиль в БД
+        try:
+            sync_db.save_psychologist_thought(
+                user_id=user_id,
+                thought_text=test_profile,
+                thought_type='profile_description',
+                thought_summary=test_profile[:200],
+                metadata={'is_fallback': True}
+            )
+            logger.info(f"💾 Тестовый профиль сохранён в БД")
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения тестового профиля: {e}")
+        
         return test_profile
 
 
@@ -939,6 +986,7 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
 async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[str]:
     """
     Генерирует мысли психолога на основе конфайнтмент-модели
+    И сохраняет результат в БД
     """
     logger.info(f"🧠 Генерация мыслей психолога для пользователя {user_id}")
     logger.info(f"📊 Размер входных данных: {len(str(data))} символов")
@@ -1044,6 +1092,36 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
     
     if response:
         logger.info(f"✅ Мысли психолога сгенерированы ({len(response)} символов)")
+        
+        # 👇👇👇 СОХРАНЕНИЕ В БД 👇👇👇
+        try:
+            # Получаем profile_code
+            profile_code = data.get('profile_data', {}).get('display_name')
+            if not profile_code:
+                match = re.search(r'СБ-\d+_ТФ-\d+_УБ-\d+_ЧВ-\d+', str(data))
+                if match:
+                    profile_code = match.group(0)
+            
+            # Сохраняем в БД
+            thought_id = sync_db.save_psychologist_thought(
+                user_id=user_id,
+                thought_text=response,
+                thought_type='psychologist_thought',
+                metadata={
+                    'profile_code': profile_code,
+                    'vectors': data.get('behavioral_levels'),
+                    'perception_type': data.get('perception_type'),
+                    'thinking_level': data.get('thinking_level'),
+                    'model': 'deepseek',
+                    'generation_time': datetime.now().isoformat()
+                }
+            )
+            logger.info(f"💾 Мысль психолога сохранена в БД: id={thought_id}")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения мысли в БД: {e}")
+            traceback.print_exc()
+        
         return response
     else:
         logger.error("❌ Не удалось сгенерировать мысли психолога")
@@ -1362,8 +1440,6 @@ async def save_generated_content_to_db(
     Сохраняет сгенерированный контент в БД
     """
     try:
-        from db_sync import sync_db
-        
         if test_result_id is None:
             test_result_id = data.get('last_test_result_id')
         
@@ -1447,7 +1523,7 @@ __all__ = [
     'call_deepseek',
     'speech_to_text',
     'text_to_speech',
-    'get_weather',  # новая функция погоды
+    'get_weather',
     'bold',
     'italic',
     'emoji_text',
