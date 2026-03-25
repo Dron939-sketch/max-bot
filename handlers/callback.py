@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик всех callback-запросов для MAX
-Версия 2.6 - ИСПРАВЛЕНЫ ВЫЗОВЫ ФУНКЦИЙ ЭТАПОВ
+Версия 2.7 - ИСПРАВЛЕНЫ ВЫЗОВЫ АСИНХРОННЫХ ФУНКЦИЙ
 """
 
 import logging
@@ -384,7 +384,7 @@ async def handle_sync_callback(call: CallbackQuery):
         logger.info(f"🎭 Установка режима: trainer для пользователя {user_id}")
         update_state_data(user_id, communication_mode="trainer")
         show_mode_selected(call.message, "trainer")
-
+    
     # ============================================
     # РЕЖИМЫ ОБЩЕНИЯ (СТАРЫЙ ФОРМАТ - ДЛЯ СОВМЕСТИМОСТИ)
     # ============================================
@@ -408,13 +408,21 @@ async def handle_sync_callback(call: CallbackQuery):
         update_state_data(user_id, communication_mode="trainer")
         show_mode_selected(call.message, "trainer")
 
+    # ============================================
+    # СМЕНА РЕЖИМА (кнопка в главном меню)
+    # ============================================
+    elif data == "change_mode" or data == "switch_mode":
+        logger.info(f"🎭 Смена режима для пользователя {user_id}")
+        from handlers.modes import show_mode_selection
+        show_mode_selection(call.message)
+    
     elif data == "back_to_mode_selected":
         logger.info(f"◀️ back_to_mode_selected для пользователя {user_id}")
         context = user_contexts.get(user_id)
         if context:
             mode = context.communication_mode or "coach"
             show_mode_selected(call.message, mode)
-            
+    
     # ============================================
     # КОНТЕКСТ (пол, возраст и т.д.)
     # ============================================
@@ -537,7 +545,8 @@ async def handle_sync_callback(call: CallbackQuery):
             user_info = user_data.get(uid, {})
             return bool(user_info.get("profile_data") or user_info.get("ai_generated_profile"))
         
-        show_smart_questions(call, user_id, user_data, context_obj, check_test_completed)
+        # 👇 ИСПРАВЛЕНО: добавляем await
+        await show_smart_questions(call, user_id, user_data, context_obj, check_test_completed)
     
     elif data.startswith("ask_"):
         # Проверяем, что вторая часть - это число (для умных вопросов)
