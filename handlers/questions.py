@@ -1199,7 +1199,8 @@ def update_profile_with_clarifications(message, user_id: int):
 
 def show_question_input(call: CallbackQuery):
     """
-    Показывает экран ввода вопроса с новым текстом
+    Показывает экран ввода вопроса
+    ⚠️ ВНИМАНИЕ: Голосовой ввод временно отключён на платформе MAX
     """
     user_id = call.from_user.id
     user_name = get_user_name(user_id)
@@ -1217,15 +1218,15 @@ def show_question_input(call: CallbackQuery):
     if profile_code:
         info_line = f"**Твой профиль:** {profile_code}  |  **Режим:** {mode_config['emoji']} {mode_config['name']}\n\n"
     
-    # ✅ НОВЫЙ ТЕКСТ ЭКРАНА
+    # ✅ ТЕКСТ ЭКРАНА С КОММЕНТАРИЕМ О ГОЛОСЕ
     text = f"""
 ✏️ **ЗАДАВАЙТЕ ЛЮБОЙ ВОПРОС**
 
 {info_line}Если мой создатель знает ответ на него — значит и я вам что-то отвечу 😉
 
-🎤 **Можно просто отправить голосовое сообщение** — я внимательно выслушаю.
+📝 **Напишите свой вопрос:**
 
-👇 Напишите или нажмите на микрофон:
+*(🎙 Голосовой ввод временно недоступен на платформе MAX)*
 """
     
     keyboard = InlineKeyboardMarkup()
