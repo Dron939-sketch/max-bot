@@ -2595,7 +2595,7 @@ async def process_voice(request: Request):
             mode = context.communication_mode if context else "coach"
             profile = user_data.get(user_id, {})
             
-                        from services import call_deepseek_with_context
+            from services import call_deepseek_with_context
             response = await call_deepseek_with_context(
                 user_id=user_id,
                 user_message=recognized_text,
