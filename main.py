@@ -2596,14 +2596,15 @@ async def process_voice(request: Request):
             profile = user_data.get(user_id, {})
             
             from services import call_deepseek_with_context
-            response = await call_deepseek_with_context(
+                       response = await call_deepseek_with_context(
                 user_id=user_id,
                 user_message=recognized_text,
                 context=context,
                 mode=mode,
                 profile_data=profile
             )
-                        if not response:
+            
+            if not response:
                 response = "Я понял ваш вопрос. Дайте подумать..."
             
             # Генерируем голосовой ответ через Yandex TTS
@@ -2619,7 +2620,7 @@ async def process_voice(request: Request):
                     f.write(audio_response)
                 
                 audio_url = f"/audio/{audio_filename}"
-
+            
             return JSONResponse({
                 "success": True,
                 "recognized_text": recognized_text,
