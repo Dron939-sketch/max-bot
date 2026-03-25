@@ -2620,7 +2620,7 @@ async def process_voice(request: Request):
                 with open(audio_path, 'wb') as f:
                     f.write(audio_response)
                 
-                audio_url = f"/static/audio/{audio_filename}"
+                audio_url = f"https://fredi-app.onrender.com/audio/{audio_filename}"
             
             return JSONResponse({
                 "success": True,
