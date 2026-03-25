@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик голосовых сообщений для MAX
-Версия 5.3 - С ДИАГНОСТИКОЙ ДЛЯ ОТЛАДКИ
+Версия 6.0 - ИСПРАВЛЕНА РАБОТА С API И СТАТУСНЫМИ СООБЩЕНИЯМИ
 """
 
 import logging
@@ -19,7 +19,7 @@ from datetime import datetime
 from maxibot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import MAX_TOKEN, DEEPGRAM_API_KEY, YANDEX_API_KEY, VOICE_SETTINGS, COMMUNICATION_MODES, MAX_API_BASE_URL
-from message_utils import safe_send_message, safe_delete_message
+from message_utils import safe_send_message, safe_edit_message, safe_delete_message
 from services import speech_to_text, text_to_speech, call_deepseek
 from state import user_data, user_contexts, get_state, set_state, TestStates, get_user_name
 from state import is_voice_processing, set_voice_processing, clear_voice_processing
@@ -45,7 +45,6 @@ def log_stage(stage_name: str, data: Dict[str, Any] = None):
     logger.info(f"⏰ ВРЕМЯ: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
     if data:
         for key, value in data.items():
-            # Обрезаем слишком длинные значения
             if isinstance(value, str) and len(value) > 500:
                 value = value[:500] + "... [обрезано]"
             logger.info(f"   📌 {key}: {value}")
@@ -272,10 +271,11 @@ def download_voice_message(voice_url: str) -> Optional[bytes]:
 
 async def handle_voice_message(message: Message, state=None):
     """
-    Обработка голосового сообщения - С ДИАГНОСТИКОЙ
+    Обработка голосового сообщения - ИСПРАВЛЕННАЯ ВЕРСИЯ
     """
     start_time = time.time()
     user_id = message.from_user.id
+    chat_id = message.chat.id
     
     # ============================================
     # ✅ ПРОВЕРКА ФЛАГА - ПРЕДОТВРАЩЕНИЕ ДУБЛИРОВАНИЯ
@@ -290,6 +290,7 @@ async def handle_voice_message(message: Message, state=None):
     try:
         log_stage("HANDLE_VOICE_START", {
             "user_id": user_id,
+            "chat_id": chat_id,
             "timestamp": datetime.now().isoformat(),
             "has_voice": message.voice is not None
         })
@@ -300,7 +301,7 @@ async def handle_voice_message(message: Message, state=None):
                 "content_type": message.content_type
             })
             await safe_send_message(
-                message,
+                chat_id,
                 "❌ Не удалось получить голосовое сообщение. Попробуйте еще раз.",
                 delete_previous=True
             )
@@ -342,7 +343,7 @@ async def handle_voice_message(message: Message, state=None):
         if not test_completed:
             log_stage("TEST_NOT_COMPLETED", {})
             await safe_send_message(
-                message,
+                chat_id,
                 "🎙 Голосовые сообщения доступны только после завершения теста.\n\n"
                 "Пожалуйста, пройдите тест с помощью команды /start",
                 delete_previous=True
@@ -351,7 +352,7 @@ async def handle_voice_message(message: Message, state=None):
         
         # Отправляем статусное сообщение
         status_msg = await safe_send_message(
-            message,
+            chat_id,
             "🎤 Распознаю речь...",
             delete_previous=True
         )
@@ -386,10 +387,12 @@ async def handle_voice_message(message: Message, state=None):
                 
                 if file_size == 0:
                     log_error("STEP1_EMPTY_FILE", Exception("Downloaded file is empty"), {})
-                    await status_msg.edit_text(
-                        "❌ Не удалось загрузить голосовое сообщение (пустой файл).\n\n"
-                        "Попробуйте еще раз."
-                    )
+                    if status_msg:
+                        await safe_edit_message(
+                            chat_id,
+                            status_msg.message_id,
+                            "❌ Не удалось загрузить голосовое сообщение (пустой файл).\n\nПопробуйте еще раз."
+                        )
                     return
             
             # Проверка формата файла
@@ -413,33 +416,17 @@ async def handle_voice_message(message: Message, state=None):
             
             if not DEEPGRAM_API_KEY:
                 log_error("STEP2_NO_API_KEY", Exception("DEEPGRAM_API_KEY not configured"), {})
-                await status_msg.edit_text(
-                    "❌ Сервис распознавания голоса не настроен.\n\n"
-                    "Пожалуйста, используйте текст."
-                )
+                if status_msg:
+                    await safe_edit_message(
+                        chat_id,
+                        status_msg.message_id,
+                        "❌ Сервис распознавания голоса не настроен.\n\nПожалуйста, используйте текст."
+                    )
                 return
             
             stt_start = time.time()
             recognized_text = await speech_to_text(temp_file)
             stt_duration = time.time() - stt_start
-            
-            # 🔥🔥🔥 КРИТИЧЕСКАЯ ДИАГНОСТИКА ДЛЯ ОТЛАДКИ
-            logger.error("=" * 80)
-            logger.error("🔥🔥🔥 РЕЗУЛЬТАТ speech_to_text:")
-            logger.error(f"   recognized_text = '{recognized_text}'")
-            logger.error(f"   тип recognized_text = {type(recognized_text)}")
-            logger.error(f"   длина recognized_text = {len(recognized_text) if recognized_text else 0}")
-            logger.error(f"   recognized_text is None: {recognized_text is None}")
-            logger.error(f"   recognized_text пустой: {not recognized_text or len(recognized_text.strip()) < 2}")
-            logger.error("=" * 80)
-            
-            # 🔥 ДИАГНОСТИКА: ЧТО ПРИШЛО С DEEPGRAM
-            log_stage("DEEPGRAM_OUTPUT", {
-                "raw_text": recognized_text,
-                "text_length": len(recognized_text) if recognized_text else 0,
-                "is_empty": not recognized_text,
-                "first_100_chars": recognized_text[:100] if recognized_text else "None"
-            })
             
             log_stage("STEP2_STT_COMPLETE", {
                 "text": recognized_text,
@@ -455,26 +442,29 @@ async def handle_voice_message(message: Message, state=None):
             except Exception as e:
                 log_error("STEP2_TEMP_CLEANUP_ERROR", e, {"file": temp_file})
             
-            # 🔥🔥🔥 ПРОВЕРКА С ПРИНУДИТЕЛЬНЫМ ВЫХОДОМ
             if not recognized_text or len(recognized_text.strip()) < 2:
-                logger.error("🔥🔥🔥 ОТПРАВЛЯЮ ВШИТУЮ ФРАЗУ! recognized_text пустой или None")
                 log_stage("STEP2_STT_FAILED", {"recognized_text": recognized_text})
-                await status_msg.edit_text(
-                    "❌ [КОД: STT_FAILED] Не удалось распознать речь\n\n"
-                    "Возможные причины:\n"
-                    "• Говорите чётче и громче\n"
-                    "• Убедитесь, что микрофон работает\n"
-                    "• Попробуйте написать текстом"
-                )
+                if status_msg:
+                    await safe_edit_message(
+                        chat_id,
+                        status_msg.message_id,
+                        "❌ Не удалось распознать речь\n\n"
+                        "Возможные причины:\n"
+                        "• Говорите чётче и громче\n"
+                        "• Убедитесь, что микрофон работает\n"
+                        "• Попробуйте написать текстом"
+                    )
                 return
             
             # ========== ЭТАП 3: АНАЛИЗ ВОПРОСА ==========
             log_stage("STEP3_ANALYSIS_START", {})
             
-            await status_msg.edit_text(
-                f"📝 Распознано: {recognized_text[:100]}...\n\n"
-                "🧠 Анализирую вопрос..."
-            )
+            if status_msg:
+                await safe_edit_message(
+                    chat_id,
+                    status_msg.message_id,
+                    f"📝 Распознано: {recognized_text[:100]}...\n\n🧠 Анализирую вопрос..."
+                )
             
             analyzer = create_analyzer_from_user_data(data, user_name)
             reflection = ""
@@ -524,10 +514,12 @@ async def handle_voice_message(message: Message, state=None):
             })
             
             # ========== ЭТАП 5: ВЫЗОВ DEEPSEEK ==========
-            await status_msg.edit_text(
-                f"📝 Распознано: {recognized_text[:100]}...\n\n"
-                "🧠 Формирую ответ с учётом твоего профиля..."
-            )
+            if status_msg:
+                await safe_edit_message(
+                    chat_id,
+                    status_msg.message_id,
+                    f"📝 Распознано: {recognized_text[:100]}...\n\n🧠 Формирую ответ с учётом твоего профиля..."
+                )
             
             prompt = f"""
 Вопрос пользователя: {recognized_text}
@@ -553,14 +545,6 @@ async def handle_voice_message(message: Message, state=None):
                 temperature=0.7
             )
             deepseek_duration = time.time() - deepseek_start
-            
-            # 🔥 ДИАГНОСТИКА: ЧТО ПРИШЛО С DEEPSEEK
-            log_stage("DEEPSEEK_OUTPUT", {
-                "raw_response": response,
-                "response_length": len(response) if response else 0,
-                "is_empty": not response,
-                "first_200_chars": response[:200] if response else "None"
-            })
             
             log_stage("STEP5_DEEPSEEK_COMPLETE", {
                 "response_preview": response[:200] + "..." if response and len(response) > 200 else response,
@@ -588,11 +572,8 @@ async def handle_voice_message(message: Message, state=None):
                 log_error("STEP5_DB_SAVE", e, {})
             
             # Удаляем статусное сообщение
-            try:
-                await status_msg.delete()
-                log_stage("STEP5_STATUS_DELETED", {})
-            except Exception as e:
-                log_error("STEP5_STATUS_DELETE", e, {})
+            if status_msg:
+                await safe_delete_message(chat_id, status_msg.message_id)
             
             # ========== ЭТАП 6: ОТПРАВКА ТЕКСТОВОГО ОТВЕТА ==========
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -611,7 +592,7 @@ async def handle_voice_message(message: Message, state=None):
             })
             
             await safe_send_message(
-                message,
+                chat_id,
                 f"📝 <b>Вы сказали:</b>\n{recognized_text}\n\n"
                 f"{mode_config['emoji']} <b>Ответ:</b>\n{response}",
                 reply_markup=keyboard,
@@ -625,15 +606,6 @@ async def handle_voice_message(message: Message, state=None):
             audio_text = response
             if len(audio_text) > 500:
                 audio_text = audio_text[:500] + "..."
-            
-            # 🔥 ДИАГНОСТИКА: ЧТО ОТПРАВЛЯЕМ НА ОЗВУЧКУ
-            log_stage("TTS_INPUT", {
-                "text_for_tts": audio_text,
-                "text_length": len(audio_text),
-                "mode": mode_name,
-                "voice": mode_config.get("voice", "filipp"),
-                "emotion": mode_config.get("voice_emotion", "neutral")
-            })
             
             log_stage("STEP7_TTS_START", {
                 "text_length": len(audio_text),
@@ -655,11 +627,11 @@ async def handle_voice_message(message: Message, state=None):
                 # ========== ЭТАП 8: ОТПРАВКА ГОЛОСОВОГО ОТВЕТА ==========
                 log_stage("STEP8_VOICE_SEND_START", {
                     "audio_size": len(audio_data),
-                    "chat_id": message.chat.id
+                    "chat_id": chat_id
                 })
                 
                 voice_send_start = time.time()
-                success = send_voice_message(message.chat.id, audio_data, "response.ogg")
+                success = send_voice_message(chat_id, audio_data, "response.ogg")
                 voice_send_duration = time.time() - voice_send_start
                 
                 log_stage("STEP8_VOICE_SEND_COMPLETE", {
@@ -674,9 +646,8 @@ async def handle_voice_message(message: Message, state=None):
                         "deepseek_duration": round(deepseek_duration, 2),
                         "tts_duration": round(tts_duration, 2),
                         "send_duration": round(voice_send_duration, 2),
-                        "recognized_text": recognized_text,
-                        "deepseek_response": response,
-                        "tts_text": audio_text
+                        "recognized_text": recognized_text[:100],
+                        "deepseek_response": response[:100]
                     })
                 else:
                     log_error("STEP8_VOICE_SEND_FAILED", Exception("send_voice_message returned False"), {})
@@ -699,12 +670,12 @@ async def handle_voice_message(message: Message, state=None):
             
             if status_msg:
                 try:
-                    await status_msg.delete()
+                    await safe_delete_message(chat_id, status_msg.message_id)
                 except:
                     pass
             
             await safe_send_message(
-                message,
+                chat_id,
                 "❌ Произошла ошибка при обработке голосового сообщения.\n\n"
                 "Попробуйте еще раз или напишите текстом.",
                 delete_previous=True
@@ -716,7 +687,7 @@ async def handle_voice_message(message: Message, state=None):
         logger.info(f"🎤 Снят флаг обработки голоса для {user_id}")
 
 
-async def send_voice_response(message: Message, text: str, mode: str = "coach"):
+async def send_voice_response(chat_id: int, text: str, mode: str = "coach"):
     """Отправляет голосовой ответ через MAX API"""
     try:
         import re
@@ -739,7 +710,7 @@ async def send_voice_response(message: Message, text: str, mode: str = "coach"):
         audio_data = await text_to_speech(clean_text, mode)
         
         if audio_data:
-            success = send_voice_message(message.chat.id, audio_data, "response.ogg")
+            success = send_voice_message(chat_id, audio_data, "response.ogg")
             log_stage("SEND_VOICE_RESPONSE_COMPLETE", {
                 "success": success,
                 "audio_size": len(audio_data)
