@@ -30,6 +30,7 @@ class BotDatabase:
         """
         self.dsn = dsn
         self.pool: Optional[asyncpg.Pool] = None
+        self._connection_lock = None  # Блокировка для предотвращения конкурентных операций
     
     async def connect(self, min_size: int = 1, max_size: int = 10):
         """
@@ -73,24 +74,24 @@ class BotDatabase:
             logger.info("🔌 Пул соединений с PostgreSQL закрыт")
     
     @asynccontextmanager
-async def get_connection(self):
-    """Контекстный менеджер для получения соединения из пула с блокировкой"""
-    if not self.pool:
-        error_msg = "Пул соединений не инициализирован. Вызовите connect()"
-        logger.error(f"❌ {error_msg}")
-        raise RuntimeError(error_msg)
-    
-    # Добавляем блокировку для предотвращения конкурентных операций
-    if not hasattr(self, '_connection_lock'):
-        self._connection_lock = asyncio.Lock()
-    
-    async with self._connection_lock:
-        try:
-            async with self.pool.acquire() as conn:
-                yield conn
-        except Exception as e:
-            logger.error(f"❌ Ошибка при получении соединения: {e}")
-            raise
+    async def get_connection(self):
+        """Контекстный менеджер для получения соединения из пула с блокировкой"""
+        if not self.pool:
+            error_msg = "Пул соединений не инициализирован. Вызовите connect()"
+            logger.error(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
+        
+        # Создаем блокировку, если её нет
+        if self._connection_lock is None:
+            self._connection_lock = asyncio.Lock()
+        
+        async with self._connection_lock:
+            try:
+                async with self.pool.acquire() as conn:
+                    yield conn
+            except Exception as e:
+                logger.error(f"❌ Ошибка при получении соединения: {e}")
+                raise
     
     # ====================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ СЕРИАЛИЗАЦИИ ======================
     
@@ -369,7 +370,6 @@ async def get_connection(self):
                 )
             """)
             
-            # 👇👇👇 НОВАЯ ТАБЛИЦА ДЛЯ МЫСЛЕЙ ПСИХОЛОГА 👇👇👇
             # Таблица мыслей психолога
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS fredi_psychologist_thoughts (
@@ -409,7 +409,7 @@ async def get_connection(self):
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_question_cache_expires ON fredi_question_analysis_cache(expires_at)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_hypno_anchors_user ON fredi_hypno_anchors(user_id)")
             
-            # 👇👇👇 ИНДЕКСЫ ДЛЯ ТАБЛИЦЫ МЫСЛЕЙ ПСИХОЛОГА 👇👇👇
+            # Индексы для таблицы мыслей психолога
             await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_psych_thoughts_user_id 
                 ON fredi_psychologist_thoughts(user_id)
