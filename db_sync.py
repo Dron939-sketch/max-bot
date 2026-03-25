@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Синхронные обертки для работы с БД - для вызовов из любого потока
-ВЕРСИЯ 2.6 - ДОБАВЛЕНЫ ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
+ВЕРСИЯ 2.7 - ДОБАВЛЕНЫ ВСЕ ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
 """
 
 import logging
@@ -187,7 +187,7 @@ class SyncDB:
             return None
     
     # ============================================
-    # НОВЫЕ ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
+    # ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
     # ============================================
     
     @staticmethod
@@ -249,6 +249,86 @@ class SyncDB:
         except Exception as e:
             logger.error(f"❌ Ошибка get_psychologist_thought_history: {e}")
             return []
+    
+    # ============================================
+    # ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
+    # ============================================
+    
+    @staticmethod
+    def get_all_psychologist_thoughts(
+        user_id: int,
+        limit: int = 50,
+        include_inactive: bool = False
+    ) -> List[Dict]:
+        """
+        Синхронное получение всех мыслей психолога с пагинацией
+        """
+        try:
+            from db_instance import get_all_psychologist_thoughts
+            return get_all_psychologist_thoughts(user_id, limit, include_inactive)
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_all_psychologist_thoughts: {e}")
+            return []
+    
+    @staticmethod
+    def delete_psychologist_thought(thought_id: int) -> bool:
+        """
+        Синхронное удаление мысли психолога по ID
+        """
+        try:
+            from db_instance import delete_psychologist_thought
+            return delete_psychologist_thought(thought_id)
+        except Exception as e:
+            logger.error(f"❌ Ошибка delete_psychologist_thought: {e}")
+            return False
+    
+    @staticmethod
+    def update_psychologist_thought(
+        thought_id: int,
+        thought_text: str = None,
+        thought_summary: str = None,
+        is_active: bool = None,
+        metadata: Dict = None
+    ) -> bool:
+        """
+        Синхронное обновление мысли психолога
+        """
+        try:
+            from db_instance import update_psychologist_thought
+            return update_psychologist_thought(
+                thought_id, thought_text, thought_summary, is_active, metadata
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка update_psychologist_thought: {e}")
+            return False
+    
+    @staticmethod
+    def get_thoughts_by_test_result(test_result_id: int) -> List[Dict]:
+        """
+        Синхронное получение всех мыслей, связанных с результатом теста
+        """
+        try:
+            from db_instance import get_thoughts_by_test_result
+            return get_thoughts_by_test_result(test_result_id)
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_thoughts_by_test_result: {e}")
+            return []
+    
+    @staticmethod
+    def get_psychologist_thoughts_stats(user_id: int) -> Dict[str, Any]:
+        """
+        Синхронное получение статистики по мыслям психолога
+        """
+        try:
+            from db_instance import get_psychologist_thoughts_stats
+            return get_psychologist_thoughts_stats(user_id)
+        except Exception as e:
+            logger.error(f"❌ Ошибка get_psychologist_thoughts_stats: {e}")
+            return {}
+    
+    # ============================================
+    # ОСТАЛЬНЫЕ ФУНКЦИИ (без изменений)
+    # ============================================
     
     @staticmethod
     def save_test_answer(
@@ -397,4 +477,4 @@ class SyncDB:
 # Создаем глобальный экземпляр
 sync_db = SyncDB()
 
-logger.info("✅ sync_db инициализирован (версия 2.6 с поддержкой мыслей психолога)")
+logger.info("✅ sync_db инициализирован (версия 2.7 с полной поддержкой мыслей психолога)")
