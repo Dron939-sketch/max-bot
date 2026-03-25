@@ -927,108 +927,108 @@ async def get_chat_history(user_id: int, limit: int = 50):
             content={"success": False, "error": str(e), "history": []}
         )
 
-@api_app.post("/api/chat/message")
-async def chat_message(request: Request):
+@api_app.post("/api/voice/process")
+async def process_voice(request: Request):
+    """Обработка голосового сообщения"""
     try:
-        data = await request.json()
-        user_id = data.get('user_id')
-        message_text = data.get('message')
-        mode = data.get('mode')
+        import time
         
-        if not user_id or not message_text:
-            raise HTTPException(status_code=400, detail="user_id and message required")
+        form = await request.form()
+        user_id = form.get('user_id')
+        voice_file = form.get('voice')
         
-        user_id = int(user_id)
+        if not user_id or not voice_file:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "user_id and voice file required"}
+            )
         
-        if user_id not in user_contexts:
-            user_contexts[user_id] = UserContext(user_id)
+        try:
+            user_id = int(user_id)
+        except ValueError:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "invalid user_id"}
+            )
         
-        context = user_contexts[user_id]
+        import tempfile
         
-        if mode and mode in COMMUNICATION_MODES:
-            context.communication_mode = mode
+        with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as tmp:
+            tmp_path = tmp.name
         
-        user_info = user_data.get(user_id, {})
+        content = await voice_file.read()
+        with open(tmp_path, 'wb') as f:
+            f.write(content)
         
-        from question_analyzer import QuestionAnalyzer
-        from models import UserContext
-
-        # Получаем объект контекста пользователя
-        user_context_obj = user_contexts.get(user_id)
-        if not user_context_obj:
-            user_context_obj = UserContext(user_id)
-            user_contexts[user_id] = user_context_obj
-
-        analyzer = QuestionAnalyzer(user_context_obj, user_info)
-        analysis = analyzer.analyze(message_text)
+        file_size = os.path.getsize(tmp_path)
+        if file_size == 0:
+            os.unlink(tmp_path)
+            return JSONResponse({
+                "success": False,
+                "error": "Пустой аудиофайл",
+                "answer": "Не удалось записать голос. Попробуйте еще раз."
+            })
         
-        from services import call_deepseek_with_context
-        
-        system_prompt = f"Ты психолог Фреди. Режим: {context.communication_mode}. "
-        
-        if context.name:
-            system_prompt += f"Имя пользователя: {context.name}. "
-        
-        if user_info.get('perception_type'):
-            system_prompt += f"Тип восприятия: {user_info['perception_type']}. "
-        
-        if user_info.get('thinking_level'):
-            system_prompt += f"Уровень мышления: {user_info['thinking_level']}/9. "
-        
-        if analysis:
-            system_prompt += f"Анализ вопроса: {analysis.get('analysis', '')}. "
-        
-        response = await call_deepseek_with_context(
-            user_id=user_id,
-            user_message=message_text,
-            context=context,
-            mode=context.communication_mode,
-            profile_data=user_info
-        )
-        
-        if not response:
-            response = "Я понял ваш запрос. Дайте подумать..."
-        
-        buttons = None
-        text_lower = response.lower()
-        
-        if any(word in text_lower for word in ['тест', 'пройди', 'этап']):
-            buttons = [
-                {"text": "🧠 Пройти тест", "action": "start_test"},
-                {"text": "📊 Мой портрет", "action": "show_profile"}
-            ]
-        elif any(word in text_lower for word in ['профиль', 'портрет', 'результат']):
-            buttons = [
-                {"text": "📊 Посмотреть", "action": "show_profile"},
-                {"text": "🧠 Мысли", "action": "show_thoughts"}
-            ]
-        elif any(word in text_lower for word in ['выходные', 'идеи', 'план']):
-            buttons = [
-                {"text": "🎯 Идеи", "action": "show_weekend"},
-                {"text": "📊 В профиль", "action": "show_profile"}
-            ]
-        
-        return JSONResponse({
-            "success": True,
-            "response": response,
-            "mode": context.communication_mode,
-            "analysis": analysis,
-            "buttons": buttons
-        })
+        try:
+            from services import speech_to_text
+            recognized_text = await speech_to_text(tmp_path)
+            
+            if not recognized_text:
+                return JSONResponse({
+                    "success": False,
+                    "error": "Не удалось распознать речь",
+                    "answer": "Не удалось распознать голос. Попробуйте говорить четче или напишите текстом."
+                })
+            
+            context = user_contexts.get(user_id)
+            mode = context.communication_mode if context else "coach"
+            profile = user_data.get(user_id, {})
+            
+            from services import call_deepseek_with_context
+            response = await call_deepseek_with_context(
+                user_id=user_id,
+                user_message=recognized_text,
+                context=context,
+                mode=mode,
+                profile_data=profile
+            )
+            
+            if not response:
+                response = "Я понял ваш вопрос. Дайте подумать..."
+            
+            # Генерируем голосовой ответ через Yandex TTS
+            audio_response = await text_to_speech(response, mode)
+            
+            audio_url = None
+            if audio_response:
+                audio_filename = f"voice_response_{user_id}_{int(time.time())}.ogg"
+                audio_path = os.path.join(MINIAPP_PATH, "audio", audio_filename)
+                os.makedirs(os.path.dirname(audio_path), exist_ok=True)
+                
+                with open(audio_path, 'wb') as f:
+                    f.write(audio_response)
+                
+                audio_url = f"/audio/{audio_filename}"
+            
+            return JSONResponse({
+                "success": True,
+                "recognized_text": recognized_text,
+                "answer": response,
+                "audio_url": audio_url
+            })
+            
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
         
     except Exception as e:
-        logger.error(f"❌ Error in chat_message: {e}")
+        logger.error(f"❌ Error in process_voice: {e}")
         import traceback
         traceback.print_exc()
         return JSONResponse(
             status_code=500,
-            content={
-                "success": False, 
-                "error": str(e),
-                "response": "Произошла ошибка. Попробуйте еще раз."
-            }
+            content={"success": False, "error": str(e), "answer": "Ошибка обработки голоса. Попробуйте позже."}
         )
-
 @api_app.post("/api/chat/action")
 async def chat_action(request: Request):
     try:
