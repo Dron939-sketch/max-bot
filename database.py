@@ -7,6 +7,7 @@
 Версия 3.2 - ДОБАВЛЕНА ТАБЛИЦА И МЕТОДЫ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
 """
 
+import asyncio
 import asyncpg
 import pickle
 import json
