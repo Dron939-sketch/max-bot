@@ -262,17 +262,6 @@ voice_handler = register_voice_handler(bot)
 logger.info("✅ Простой обработчик голоса зарегистрирован")
 
 # ============================================
-# ЭКЗЕМПЛЯР БОТА
-# ============================================
-
-if not MAX_TOKEN:
-    logger.error("❌ MAX_TOKEN не найден в переменных окружения!")
-    MAX_TOKEN = "ВАШ_ТОКЕН_ЗДЕСЬ"
-
-bot = MaxiBot(MAX_TOKEN)
-logger.info("✅ Экземпляр бота MAX создан")
-
-# ============================================
 # 🔥🔥🔥 ПЕРЕХВАТЧИК ВСЕХ ОБНОВЛЕНИЙ ДЛЯ ДИАГНОСТИКИ 🔥🔥🔥
 # ============================================
 
@@ -478,8 +467,23 @@ async def periodic_cleanup_db():
             logger.error(f"❌ Ошибка при очистке данных: {e}")
 
 # ============================================
-# FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ
+# FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ (ИСПРАВЛЕННЫЙ)
 # ============================================
+
+import mimetypes
+
+# Регистрируем MIME типы ДО монтирования статики
+mimetypes.add_type('text/css', '.css')
+mimetypes.add_type('application/javascript', '.js')
+mimetypes.add_type('image/png', '.png')
+mimetypes.add_type('image/jpeg', '.jpg')
+mimetypes.add_type('image/jpeg', '.jpeg')
+mimetypes.add_type('application/json', '.json')
+mimetypes.add_type('text/html', '.html')
+mimetypes.add_type('application/manifest+json', '.json')
+mimetypes.add_type('image/x-icon', '.ico')
+mimetypes.add_type('audio/ogg', '.ogg')
+mimetypes.add_type('audio/webm', '.webm')
 
 api_app = FastAPI(title="Фреди - Мини-приложение")
 
@@ -490,6 +494,7 @@ api_app.add_middleware(
         "https://max-bot-1-ywpz.onrender.com",
         "https://max-bot-2-ogve.onrender.com",
         "http://localhost:3000",
+        "http://localhost:10000",
         "*"
     ],
     allow_methods=["*"],
@@ -500,10 +505,19 @@ api_app.add_middleware(
 MINIAPP_PATH = os.path.join(os.path.dirname(__file__), 'miniapp')
 os.makedirs(MINIAPP_PATH, exist_ok=True)
 
+# ✅ ИСПРАВЛЕНО: добавляем html=False
 if os.path.exists(MINIAPP_PATH) and os.path.isdir(MINIAPP_PATH):
     try:
-        api_app.mount("/static", StaticFiles(directory=MINIAPP_PATH), name="static")
+        api_app.mount("/static", StaticFiles(directory=MINIAPP_PATH, html=False), name="static")
         logger.info(f"✅ Статические файлы подключены из {MINIAPP_PATH}")
+        
+        # Проверяем наличие ключевых файлов
+        index_path = os.path.join(MINIAPP_PATH, "index.html")
+        if os.path.exists(index_path):
+            logger.info(f"✅ index.html найден ({os.path.getsize(index_path)} байт)")
+        else:
+            logger.warning(f"⚠️ index.html не найден в {MINIAPP_PATH}")
+            
     except Exception as e:
         logger.error(f"❌ Ошибка при монтировании статических файлов: {e}")
 else:
@@ -511,23 +525,42 @@ else:
 
 @api_app.get("/")
 async def root():
+    """Главная страница"""
     try:
         index_path = os.path.join(MINIAPP_PATH, "index.html")
         if os.path.exists(index_path):
-            return FileResponse(index_path)
+            return FileResponse(
+                index_path, 
+                media_type="text/html",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0"
+                }
+            )
+        else:
+            logger.error(f"❌ index.html не найден по пути: {index_path}")
+            return JSONResponse(
+                status_code=404,
+                content={"error": "index.html not found", "path": index_path}
+            )
     except Exception as e:
-        logger.warning(f"⚠️ Не удалось вернуть index.html: {e}")
+        logger.error(f"❌ Ошибка при возврате index.html: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Internal server error"}
+        )
+
+@api_app.get("/health")
+async def health_check():
+    """Health check для Render"""
     return {
-        "name": "MAX Bot",
-        "version": "9.6",
-        "status": "online",
-        "message": "API работает. Мини-приложение доступно по пути /static/",
-        "endpoints": {
-            "health": "/health",
-            "docs": "/docs",
-            "api": "/api/*",
-            "miniapp": "/static/"
-        }
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "static_files_available": os.path.exists(os.path.join(MINIAPP_PATH, "styles.css")),
+        "index_available": os.path.exists(os.path.join(MINIAPP_PATH, "index.html")),
+        "miniapp_path": MINIAPP_PATH,
+        "files_count": len(os.listdir(MINIAPP_PATH)) if os.path.exists(MINIAPP_PATH) else 0
     }
 
 # ============================================
