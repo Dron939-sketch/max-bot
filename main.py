@@ -2798,6 +2798,18 @@ async def get_user_full_status(user_id: int):
         )
 
 # ============================================
+# ЭНДПОИНТ ДЛЯ ОТДАЧИ АУДИОФАЙЛОВ
+# ============================================
+
+@api_app.get("/audio/{filename}")
+async def serve_audio(filename: str):
+    """Отдаёт аудиофайлы для воспроизведения"""
+    audio_path = os.path.join(MINIAPP_PATH, "audio", filename)
+    if os.path.exists(audio_path):
+        return FileResponse(audio_path, media_type="audio/ogg")
+    return JSONResponse(status_code=404, content={"error": "Audio not found"})
+
+# ============================================
 # 🚀 НЕДОСТАЮЩИЕ API ЭНДПОИНТЫ ДЛЯ ДАШБОРДА 🚀
 # ============================================
 
