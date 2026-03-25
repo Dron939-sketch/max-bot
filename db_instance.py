@@ -4,7 +4,7 @@
 Централизованный доступ к экземпляру базы данных
 ВЕРСИЯ ДЛЯ PYTHON 3.11 - ПОЛНАЯ ВЕРСИЯ С ВСЕМИ ФУНКЦИЯМИ
 ДОБАВЛЕНО: Сохранение мыслей психолога и описания профиля
-ВЕРСИЯ 3.4 - ИСПРАВЛЕНА ОШИБКА КОНКУРЕНТНОГО ДОСТУПА К БД
+ВЕРСИЯ 3.5 - ИСПРАВЛЕНА ОШИБКА КОНКУРЕНТНОГО ДОСТУПА К БД
 """
 
 import os
@@ -59,7 +59,7 @@ class DBLoopManager:
         self._tasks = set()
         self._running = False
         self._db_instance: Optional[BotDatabase] = None
-        self._execution_lock = None  # Будет создан в цикле
+        self._execution_lock = None  # Блокировка для последовательного выполнения
     
     def init(self, db_instance: BotDatabase):
         """Инициализирует цикл событий в отдельном потоке"""
@@ -123,6 +123,10 @@ class DBLoopManager:
                 logger.error(f"❌ Ошибка подключения к БД: {e}")
                 raise
     
+    async def _create_lock(self):
+        """Создает блокировку в цикле БД"""
+        return asyncio.Lock()
+    
     def run_coro(self, coro_func: Callable[..., Awaitable], *args, timeout: int = 60, **kwargs):
         """
         Запускает корутину в цикле БД и возвращает результат.
@@ -138,7 +142,7 @@ class DBLoopManager:
         if not is_coro_func and not is_coro:
             raise TypeError(f"{coro_func} is not a coroutine or coroutine function")
         
-        # Создаем блокировку в цикле
+        # Создаем блокировку в цикле, если её нет
         if self._execution_lock is None:
             future = asyncio.run_coroutine_threadsafe(
                 self._create_lock(),
@@ -165,10 +169,6 @@ class DBLoopManager:
         except Exception as e:
             logger.error(f"❌ Ошибка при выполнении: {e}")
             raise
-    
-    async def _create_lock(self):
-        """Создает блокировку в цикле БД"""
-        return asyncio.Lock()
     
     def run_task(self, coro_func: Callable[..., Awaitable], *args, **kwargs):
         """
@@ -256,24 +256,22 @@ async def close_db():
         logger.error(f"❌ Ошибка при закрытии подключения: {e}")
 
 # ============================================
-# ПРОВЕРКА СОЕДИНЕНИЯ С ПОВТОРНЫМИ ПОПЫТКАМИ
+# ГЛОБАЛЬНАЯ БЛОКИРОВКА ДЛЯ ПРОВЕРКИ СОЕДИНЕНИЯ
 # ============================================
 
-# Глобальная блокировка для ensure_db_connection
-_ensure_connection_lock = None
+_ensure_db_lock = None
 
 async def _get_ensure_lock():
     """Получает глобальную блокировку для ensure_db_connection"""
-    global _ensure_connection_lock
-    if _ensure_connection_lock is None:
-        _ensure_connection_lock = asyncio.Lock()
-    return _ensure_connection_lock
+    global _ensure_db_lock
+    if _ensure_db_lock is None:
+        _ensure_db_lock = asyncio.Lock()
+    return _ensure_db_lock
 
 
 async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
     """
-    Проверяет соединение с БД через менеджер с повторными попытками
-    Исправлено: добавлена блокировка для предотвращения конкурентных операций
+    Проверяет соединение с БД с блокировкой, предотвращающей конкурентные вызовы
     """
     lock = await _get_ensure_lock()
     
@@ -294,8 +292,9 @@ async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
                     logger.info("✅ Переподключение к БД выполнено")
                     return True
                 
-                # Проверяем соединение с таймаутом
+                # Проверяем соединение простым запросом
                 try:
+                    # Используем таймаут для всей операции
                     async with asyncio.timeout(5.0):
                         async with db.get_connection() as conn:
                             await conn.execute("SELECT 1")
@@ -1658,4 +1657,4 @@ __all__ = [
     'get_psychologist_thoughts_stats',
 ]
 
-logger.info("✅ db_instance инициализирован (версия 3.4 с исправлением конкурентного доступа)")
+logger.info("✅ db_instance инициализирован (версия 3.5 с исправлением конкурентного доступа)")
