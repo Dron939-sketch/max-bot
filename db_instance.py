@@ -122,39 +122,44 @@ class DBLoopManager:
                 logger.error(f"❌ Ошибка подключения к БД: {e}")
                 raise
     
-    def run_coro(self, coro_func: Callable[..., Awaitable], *args, timeout: int = 30, **kwargs):
-        """
-        Запускает корутину в цикле БД и возвращает результат.
-        Это основной метод для вызова из любого потока.
-        """
-        if self.loop is None:
-            raise RuntimeError("Цикл БД не инициализирован. Вызовите init()")
-        
-        # Проверяем тип переданного объекта
-        is_coro_func = inspect.iscoroutinefunction(coro_func)
-        is_coro = inspect.iscoroutine(coro_func)
-        
-        if not is_coro_func and not is_coro:
-            raise TypeError(f"{coro_func} is not a coroutine or coroutine function")
-        
-        # ✅ ВСЕГДА выполняем в потоке БД, чтобы избежать конфликта циклов
-        if is_coro:
-            future = asyncio.run_coroutine_threadsafe(coro_func, self.loop)
-        else:
-            future = asyncio.run_coroutine_threadsafe(
-                coro_func(*args, **kwargs),
-                self.loop
-            )
-        
-        try:
-            return future.result(timeout=timeout)
-        except TimeoutError:
-            future.cancel()
-            logger.error(f"❌ Таймаут {timeout}с при выполнении")
-            raise
-        except Exception as e:
-            logger.error(f"❌ Ошибка при выполнении: {e}")
-            raise
+    def run_coro(self, coro_func: Callable[..., Awaitable], *args, timeout: int = 60, **kwargs):
+    """
+    Запускает корутину в цикле БД и возвращает результат.
+    Это основной метод для вызова из любого потока.
+    """
+    if self.loop is None:
+        raise RuntimeError("Цикл БД не инициализирован. Вызовите init()")
+    
+    # Проверяем тип переданного объекта
+    is_coro_func = inspect.iscoroutinefunction(coro_func)
+    is_coro = inspect.iscoroutine(coro_func)
+    
+    if not is_coro_func and not is_coro:
+        raise TypeError(f"{coro_func} is not a coroutine or coroutine function")
+    
+    # Добавляем блокировку для последовательного выполнения
+    if not hasattr(self, '_execution_lock'):
+        self._execution_lock = asyncio.Lock()
+    
+    async def _wrapped():
+        async with self._execution_lock:
+            if is_coro:
+                return await coro_func
+            else:
+                return await coro_func(*args, **kwargs)
+    
+    # ✅ ВСЕГДА выполняем в потоке БД, чтобы избежать конфликта циклов
+    future = asyncio.run_coroutine_threadsafe(_wrapped(), self.loop)
+    
+    try:
+        return future.result(timeout=timeout)
+    except TimeoutError:
+        future.cancel()
+        logger.error(f"❌ Таймаут {timeout}с при выполнении")
+        raise
+    except Exception as e:
+        logger.error(f"❌ Ошибка при выполнении: {e}")
+        raise
     
     def run_task(self, coro_func: Callable[..., Awaitable], *args, **kwargs):
         """
