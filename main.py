@@ -2603,12 +2603,10 @@ async def process_voice(request: Request):
                 mode=mode,
                 profile_data=profile
             )
-            
-            if not response:
+                        if not response:
                 response = "Я понял ваш вопрос. Дайте подумать..."
             
             # Генерируем голосовой ответ через Yandex TTS
-            from services import text_to_speech
             audio_response = await text_to_speech(response, mode)
             
             audio_url = None
@@ -2620,8 +2618,8 @@ async def process_voice(request: Request):
                 with open(audio_path, 'wb') as f:
                     f.write(audio_response)
                 
-                audio_url = f"https://fredi-app.onrender.com/audio/{audio_filename}"
-            
+                audio_url = f"/audio/{audio_filename}"
+
             return JSONResponse({
                 "success": True,
                 "recognized_text": recognized_text,
