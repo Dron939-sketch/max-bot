@@ -281,6 +281,26 @@ async def load_all_users_from_db():
                     except Exception as e:
                         logger.warning(f"⚠️ Не удалось загрузить pickled контекст для {user_id}: {e}")
         
+        # 👇👇👇 НОВАЯ ЗАГРУЗКА МЫСЛЕЙ ПСИХОЛОГА 👇👇👇
+        async with db.get_connection() as conn:
+            rows = await conn.fetch("""
+                SELECT user_id, thought_text, thought_type, is_active, metadata
+                FROM fredi_psychologist_thoughts 
+                WHERE is_active = TRUE
+                ORDER BY created_at DESC
+            """)
+            for row in rows:
+                user_id = row['user_id']
+                if user_id not in user_data:
+                    user_data[user_id] = {}
+                
+                if row['thought_type'] == 'psychologist_thought':
+                    user_data[user_id]['psychologist_thought'] = row['thought_text']
+                    user_data[user_id]['psychologist_thought_metadata'] = row['metadata']
+                elif row['thought_type'] == 'profile_description':
+                    if not user_data[user_id].get('ai_generated_profile'):
+                        user_data[user_id]['ai_generated_profile'] = row['thought_text']
+        
         logger.info(f"✅ Загружено: {len(user_data)} пользователей, "
                    f"{len(user_contexts)} контекстов, "
                    f"{len(user_routes)} маршрутов")
@@ -289,7 +309,7 @@ async def load_all_users_from_db():
         logger.error(f"❌ Ошибка загрузки данных из БД: {e}")
         import traceback
         traceback.print_exc()
-
+        
 async def periodic_save_to_db():
     """Периодически сохраняет всех пользователей в БД"""
     while True:
@@ -1145,7 +1165,22 @@ async def generate_profile_interpretation_async(user_id: int):
         if ai_profile:
             user_data[user_id]['ai_generated_profile'] = ai_profile
             sync_db.save_user_to_db(user_id)
-            logger.info(f"✅ Интерпретация для пользователя {user_id} сгенерирована")
+            
+            # 👇👇👇 ДОБАВИТЬ СОХРАНЕНИЕ В ТАБЛИЦУ МЫСЛЕЙ 👇👇👇
+            sync_db.save_psychologist_thought(
+                user_id=user_id,
+                thought_text=ai_profile,
+                thought_type='profile_description',
+                thought_summary=ai_profile[:200],
+                metadata={
+                    'profile_code': user_info.get('profile_data', {}).get('display_name'),
+                    'vectors': user_info.get('behavioral_levels'),
+                    'perception_type': user_info.get('perception_type'),
+                    'thinking_level': user_info.get('thinking_level')
+                }
+            )
+            
+            logger.info(f"✅ Интерпретация для пользователя {user_id} сгенерирована и сохранена в БД")
             await send_to_telegram(user_id, ai_profile)
         else:
             profile = user_info.get('profile_data', {})
@@ -1163,6 +1198,19 @@ async def generate_profile_interpretation_async(user_id: int):
             
             user_data[user_id]['ai_generated_profile'] = fallback_profile
             sync_db.save_user_to_db(user_id)
+            
+            # 👇👇👇 СОХРАНЯЕМ И FALLBACK ПРОФИЛЬ 👇👇👇
+            sync_db.save_psychologist_thought(
+                user_id=user_id,
+                thought_text=fallback_profile,
+                thought_type='profile_description',
+                thought_summary=fallback_profile[:200],
+                metadata={
+                    'profile_code': profile.get('display_name'),
+                    'is_fallback': True
+                }
+            )
+            
             await send_to_telegram(user_id, fallback_profile)
         
     except Exception as e:
@@ -2357,6 +2405,202 @@ async def get_smart_questions(user_id: int):
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": str(e), "questions": []}
+        )
+
+# ============================================
+# API ЭНДПОИНТЫ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
+# ============================================
+
+@api_app.get("/api/psychologist-thoughts")
+async def get_psychologist_thoughts(
+    user_id: int, 
+    thought_type: str = None,
+    limit: int = 10,
+    include_inactive: bool = False
+):
+    """
+    Получить историю мыслей психолога
+    """
+    try:
+        user_id = int(user_id)
+        
+        if include_inactive:
+            thoughts = sync_db.get_all_psychologist_thoughts(user_id, limit, include_inactive)
+        else:
+            if thought_type:
+                thoughts = sync_db.get_psychologist_thought_history(user_id, thought_type, limit)
+            else:
+                thoughts = sync_db.get_psychologist_thought_history(user_id, None, limit)
+        
+        stats = sync_db.get_psychologist_thoughts_stats(user_id)
+        
+        return JSONResponse({
+            "success": True,
+            "thoughts": thoughts,
+            "stats": stats
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_psychologist_thoughts: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e), "thoughts": []}
+        )
+
+
+@api_app.get("/api/psychologist-thoughts/{thought_id}")
+async def get_psychologist_thought_by_id(thought_id: int):
+    """
+    Получить конкретную мысль психолога по ID
+    """
+    try:
+        thoughts = sync_db.get_all_psychologist_thoughts(0, 1000, True)
+        for thought in thoughts:
+            if thought.get('id') == thought_id:
+                return JSONResponse({
+                    "success": True,
+                    "thought": thought
+                })
+        
+        return JSONResponse({
+            "success": False,
+            "error": "Thought not found"
+        }, status_code=404)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_psychologist_thought_by_id: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.put("/api/psychologist-thoughts/{thought_id}")
+async def update_psychologist_thought(thought_id: int, request: Request):
+    """
+    Обновить мысль психолога
+    """
+    try:
+        data = await request.json()
+        
+        result = sync_db.update_psychologist_thought(
+            thought_id=thought_id,
+            thought_text=data.get('thought_text'),
+            thought_summary=data.get('thought_summary'),
+            is_active=data.get('is_active'),
+            metadata=data.get('metadata')
+        )
+        
+        return JSONResponse({
+            "success": result,
+            "message": "Мысль обновлена" if result else "Не удалось обновить мысль"
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in update_psychologist_thought: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.delete("/api/psychologist-thoughts/{thought_id}")
+async def delete_psychologist_thought(thought_id: int):
+    """
+    Удалить мысль психолога
+    """
+    try:
+        result = sync_db.delete_psychologist_thought(thought_id)
+        
+        return JSONResponse({
+            "success": result,
+            "message": "Мысль удалена" if result else "Не удалось удалить мысль"
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in delete_psychologist_thought: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.post("/api/psychologist-thoughts/generate")
+async def generate_psychologist_thought_api(request: Request):
+    """
+    Сгенерировать новую мысль психолога
+    """
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        test_result_id = data.get('test_result_id')
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id required")
+        
+        user_id = int(user_id)
+        
+        user_info = user_data.get(user_id, {})
+        
+        if not user_info.get('profile_data') and not user_info.get('behavioral_levels'):
+            return JSONResponse({
+                "success": False,
+                "error": "Сначала пройдите тест"
+            })
+        
+        from services import generate_psychologist_thought
+        thought = await generate_psychologist_thought(user_id, user_info)
+        
+        if thought:
+            thought_id = sync_db.save_psychologist_thought(
+                user_id=user_id,
+                thought_text=thought,
+                test_result_id=test_result_id,
+                thought_type='psychologist_thought'
+            )
+            
+            if user_id not in user_data:
+                user_data[user_id] = {}
+            user_data[user_id]['psychologist_thought'] = thought
+            
+            return JSONResponse({
+                "success": True,
+                "thought": thought,
+                "thought_id": thought_id
+            })
+        else:
+            return JSONResponse({
+                "success": False,
+                "error": "Не удалось сгенерировать мысль"
+            })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in generate_psychologist_thought_api: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/psychologist-thoughts/stats/{user_id}")
+async def get_psychologist_thoughts_stats_api(user_id: int):
+    """
+    Получить статистику по мыслям психолога
+    """
+    try:
+        user_id = int(user_id)
+        stats = sync_db.get_psychologist_thoughts_stats(user_id)
+        
+        return JSONResponse({
+            "success": True,
+            "stats": stats
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_psychologist_thoughts_stats_api: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
         )
 
 # ============================================
