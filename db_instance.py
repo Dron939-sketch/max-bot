@@ -4,7 +4,7 @@
 Централизованный доступ к экземпляру базы данных
 ВЕРСИЯ ДЛЯ PYTHON 3.11 - ПОЛНАЯ ВЕРСИЯ С ВСЕМИ ФУНКЦИЯМИ
 ДОБАВЛЕНО: Сохранение мыслей психолога и описания профиля
-ВЕРСИЯ 3.3 - ДОБАВЛЕНЫ ФУНКЦИИ ДЛЯ УПРАВЛЕНИЯ МЫСЛЯМИ
+ВЕРСИЯ 3.4 - ИСПРАВЛЕНА ОШИБКА КОНКУРЕНТНОГО ДОСТУПА К БД
 """
 
 import os
@@ -59,6 +59,7 @@ class DBLoopManager:
         self._tasks = set()
         self._running = False
         self._db_instance: Optional[BotDatabase] = None
+        self._execution_lock = None  # Будет создан в цикле
     
     def init(self, db_instance: BotDatabase):
         """Инициализирует цикл событий в отдельном потоке"""
@@ -123,43 +124,51 @@ class DBLoopManager:
                 raise
     
     def run_coro(self, coro_func: Callable[..., Awaitable], *args, timeout: int = 60, **kwargs):
-    """
-    Запускает корутину в цикле БД и возвращает результат.
-    Это основной метод для вызова из любого потока.
-    """
-    if self.loop is None:
-        raise RuntimeError("Цикл БД не инициализирован. Вызовите init()")
+        """
+        Запускает корутину в цикле БД и возвращает результат.
+        Это основной метод для вызова из любого потока.
+        """
+        if self.loop is None:
+            raise RuntimeError("Цикл БД не инициализирован. Вызовите init()")
+        
+        # Проверяем тип переданного объекта
+        is_coro_func = inspect.iscoroutinefunction(coro_func)
+        is_coro = inspect.iscoroutine(coro_func)
+        
+        if not is_coro_func and not is_coro:
+            raise TypeError(f"{coro_func} is not a coroutine or coroutine function")
+        
+        # Создаем блокировку в цикле
+        if self._execution_lock is None:
+            future = asyncio.run_coroutine_threadsafe(
+                self._create_lock(),
+                self.loop
+            )
+            self._execution_lock = future.result()
+        
+        async def _wrapped():
+            async with self._execution_lock:
+                if is_coro:
+                    return await coro_func
+                else:
+                    return await coro_func(*args, **kwargs)
+        
+        # ✅ ВСЕГДА выполняем в потоке БД, чтобы избежать конфликта циклов
+        future = asyncio.run_coroutine_threadsafe(_wrapped(), self.loop)
+        
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            future.cancel()
+            logger.error(f"❌ Таймаут {timeout}с при выполнении")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Ошибка при выполнении: {e}")
+            raise
     
-    # Проверяем тип переданного объекта
-    is_coro_func = inspect.iscoroutinefunction(coro_func)
-    is_coro = inspect.iscoroutine(coro_func)
-    
-    if not is_coro_func and not is_coro:
-        raise TypeError(f"{coro_func} is not a coroutine or coroutine function")
-    
-    # Добавляем блокировку для последовательного выполнения
-    if not hasattr(self, '_execution_lock'):
-        self._execution_lock = asyncio.Lock()
-    
-    async def _wrapped():
-        async with self._execution_lock:
-            if is_coro:
-                return await coro_func
-            else:
-                return await coro_func(*args, **kwargs)
-    
-    # ✅ ВСЕГДА выполняем в потоке БД, чтобы избежать конфликта циклов
-    future = asyncio.run_coroutine_threadsafe(_wrapped(), self.loop)
-    
-    try:
-        return future.result(timeout=timeout)
-    except TimeoutError:
-        future.cancel()
-        logger.error(f"❌ Таймаут {timeout}с при выполнении")
-        raise
-    except Exception as e:
-        logger.error(f"❌ Ошибка при выполнении: {e}")
-        raise
+    async def _create_lock(self):
+        """Создает блокировку в цикле БД"""
+        return asyncio.Lock()
     
     def run_task(self, coro_func: Callable[..., Awaitable], *args, **kwargs):
         """
@@ -250,18 +259,25 @@ async def close_db():
 # ПРОВЕРКА СОЕДИНЕНИЯ С ПОВТОРНЫМИ ПОПЫТКАМИ
 # ============================================
 
+# Глобальная блокировка для ensure_db_connection
+_ensure_connection_lock = None
+
+async def _get_ensure_lock():
+    """Получает глобальную блокировку для ensure_db_connection"""
+    global _ensure_connection_lock
+    if _ensure_connection_lock is None:
+        _ensure_connection_lock = asyncio.Lock()
+    return _ensure_connection_lock
+
+
 async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
     """
     Проверяет соединение с БД через менеджер с повторными попытками
     Исправлено: добавлена блокировка для предотвращения конкурентных операций
     """
-    import asyncio
+    lock = await _get_ensure_lock()
     
-    # Глобальная блокировка для предотвращения одновременных проверок
-    if not hasattr(ensure_db_connection, '_lock'):
-        ensure_db_connection._lock = asyncio.Lock()
-    
-    async with ensure_db_connection._lock:
+    async with lock:
         for attempt in range(max_retries):
             try:
                 # Проверяем, существует ли пул
@@ -278,20 +294,15 @@ async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
                     logger.info("✅ Переподключение к БД выполнено")
                     return True
                 
-                # Проверяем соединение - НЕ используем get_connection, чтобы не создавать новое
-                # Вместо этого используем метод _acquire для проверки
+                # Проверяем соединение с таймаутом
                 try:
-                    # Пытаемся получить соединение с таймаутом
-                    conn = await asyncio.wait_for(db.pool._acquire(), timeout=5.0)
-                    try:
-                        await conn.execute("SELECT 1")
-                        logger.debug("✅ Соединение с БД работает")
-                        return True
-                    finally:
-                        # Возвращаем соединение обратно в пул
-                        await db.pool._release(conn)
+                    async with asyncio.timeout(5.0):
+                        async with db.get_connection() as conn:
+                            await conn.execute("SELECT 1")
+                    logger.debug("✅ Соединение с БД работает")
+                    return True
                 except asyncio.TimeoutError:
-                    logger.warning(f"⚠️ Таймаут при получении соединения (попытка {attempt + 1}/{max_retries})")
+                    logger.warning(f"⚠️ Таймаут при проверке соединения (попытка {attempt + 1}/{max_retries})")
                     # Пробуем переподключиться
                     try:
                         await db.disconnect()
@@ -1647,4 +1658,4 @@ __all__ = [
     'get_psychologist_thoughts_stats',
 ]
 
-logger.info("✅ db_instance инициализирован (версия 3.3 с полной поддержкой мыслей психолога)")
+logger.info("✅ db_instance инициализирован (версия 3.4 с исправлением конкурентного доступа)")
