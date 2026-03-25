@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик всех callback-запросов для MAX
-Версия 2.7 - ИСПРАВЛЕНЫ ВЫЗОВЫ АСИНХРОННЫХ ФУНКЦИЙ
+Версия 2.8 - ИСПРАВЛЕН ИМПОРТ show_mode_selection
 """
 
 import logging
@@ -43,8 +43,12 @@ from handlers.stages import (
 
 # Импорты обработчиков режимов
 from handlers.modes import (
-    show_mode_selection, show_mode_selected, show_main_menu_after_mode,
-    set_mode_coach, set_mode_psychologist, set_mode_trainer
+    show_mode_selection, 
+    show_mode_selected, 
+    show_main_menu_after_mode,
+    set_mode_coach, 
+    set_mode_psychologist, 
+    set_mode_trainer
 )
 
 # Импорты обработчиков контекста
@@ -197,7 +201,6 @@ async def async_callback_handler(call: CallbackQuery):
 
 async def handle_sync_callback(call: CallbackQuery):
     """Обработчик синхронных callback'ов"""
-    # 🔥 ДОБАВЛЯЕМ ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
     global user_data, user_contexts, user_names, user_routes
     
     user_id = call.from_user.id
@@ -247,7 +250,6 @@ async def handle_sync_callback(call: CallbackQuery):
         
         # Очищаем данные теста, но сохраняем контекст
         if user_id in user_data:
-            # Сохраняем контекст, но очищаем данные теста
             user_context = user_contexts.get(user_id)
             user_data[user_id] = {}
             if user_context:
@@ -384,13 +386,12 @@ async def handle_sync_callback(call: CallbackQuery):
         logger.info(f"🎭 Установка режима: trainer для пользователя {user_id}")
         update_state_data(user_id, communication_mode="trainer")
         show_mode_selected(call.message, "trainer")
-    
+
     # ============================================
     # РЕЖИМЫ ОБЩЕНИЯ (СТАРЫЙ ФОРМАТ - ДЛЯ СОВМЕСТИМОСТИ)
     # ============================================
     elif data == "show_modes":
         logger.info(f"🎭 show_modes для пользователя {user_id}")
-        from handlers.modes import show_mode_selection
         show_mode_selection(call.message)
 
     elif data == "mode_coach":
@@ -413,7 +414,6 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "change_mode" or data == "switch_mode":
         logger.info(f"🎭 Смена режима для пользователя {user_id}")
-        from handlers.modes import show_mode_selection
         show_mode_selection(call.message)
     
     elif data == "back_to_mode_selected":
@@ -537,19 +537,15 @@ async def handle_sync_callback(call: CallbackQuery):
     elif data == "smart_questions":
         logger.info(f"🤔 smart_questions для пользователя {user_id}")
         
-        # Получаем контекст пользователя
         context_obj = user_contexts.get(user_id)
         
-        # Функция проверки завершения теста
         def check_test_completed(uid):
             user_info = user_data.get(uid, {})
             return bool(user_info.get("profile_data") or user_info.get("ai_generated_profile"))
         
-        # 👇 ИСПРАВЛЕНО: добавляем await
         await show_smart_questions(call, user_id, user_data, context_obj, check_test_completed)
     
     elif data.startswith("ask_"):
-        # Проверяем, что вторая часть - это число (для умных вопросов)
         parts = data.split("_")
         if len(parts) > 1 and parts[1].isdigit():
             idx = int(parts[1]) - 1
@@ -559,7 +555,6 @@ async def handle_sync_callback(call: CallbackQuery):
                 logger.info(f"❓ smart question ответ: {data} для пользователя {user_id}")
                 handle_smart_question(call, questions[idx])
         else:
-            # Обычный запрос на вопрос
             logger.info(f"❓ ask_question для пользователя {user_id}")
             show_question_input(call)
     
@@ -587,7 +582,7 @@ async def handle_sync_callback(call: CallbackQuery):
         show_profile(call.message, user_id)
     
     # ============================================
-    # 👇 ПРОФИЛЬ НЕ ГОТОВ
+    # ПРОФИЛЬ НЕ ГОТОВ
     # ============================================
     elif data == "profile_not_ready":
         logger.info(f"📊 profile_not_ready для пользователя {user_id}")
@@ -631,7 +626,6 @@ async def handle_sync_callback(call: CallbackQuery):
         logger.info(f"◀️ back_to_main для пользователя {user_id}")
         context = user_contexts.get(user_id)
         if context:
-            from handlers.modes import show_main_menu_after_mode
             show_main_menu_after_mode(call.message, context)
     
     elif data == "back_to_results":
@@ -645,7 +639,6 @@ async def handle_sync_callback(call: CallbackQuery):
     elif data == "back_to_start":
         logger.info(f"◀️ back_to_start для пользователя {user_id}")
         from handlers.start import cmd_start
-        # Создаем фейковое сообщение для cmd_start
         class FakeMessage:
             def __init__(self, user_id, chat_id):
                 self.from_user = type('obj', (), {'id': user_id, 'first_name': get_user_name(user_id)})
@@ -665,7 +658,6 @@ async def handle_sync_callback(call: CallbackQuery):
     # ============================================
     elif data == "ignore":
         logger.debug(f"⏭ Игнорируем callback: {data}")
-        # Просто игнорируем
     
     # ============================================
     # НЕИЗВЕСТНЫЙ CALLBACK
@@ -683,7 +675,6 @@ def callback_handler(call: CallbackQuery):
     """
     Синхронная обертка для асинхронного обработчика callback'ов
     """
-    # 👇 ИСПРАВЛЕНО: отправляем непустой ответ
     try:
         call.answer("✅", show_alert=False)
         logger.debug(f"✅ Ответ на callback {call.data} отправлен")
@@ -691,13 +682,10 @@ def callback_handler(call: CallbackQuery):
         logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
     
     try:
-        # Пытаемся получить текущий цикл событий
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        # Нет запущенного цикла - создаем новый и запускаем
         asyncio.run(async_callback_handler(call))
     else:
-        # Есть запущенный цикл - создаем задачу
         asyncio.create_task(async_callback_handler(call))
 
 
