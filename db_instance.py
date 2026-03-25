@@ -3,8 +3,7 @@
 """
 Централизованный доступ к экземпляру базы данных
 ВЕРСИЯ ДЛЯ PYTHON 3.11 - ПОЛНАЯ ВЕРСИЯ С ВСЕМИ ФУНКЦИЯМИ
-ДОБАВЛЕНО: Сохранение мыслей психолога и описания профиля
-ВЕРСИЯ 3.5 - ИСПРАВЛЕНА ОШИБКА КОНКУРЕНТНОГО ДОСТУПА К БД
+ВЕРСИЯ 3.6 - ИСПРАВЛЕНА ОШИБКА С ЦИКЛАМИ И КОНКУРЕНТНЫМ ДОСТУПОМ
 """
 
 import os
@@ -59,7 +58,7 @@ class DBLoopManager:
         self._tasks = set()
         self._running = False
         self._db_instance: Optional[BotDatabase] = None
-        self._execution_lock = None  # Блокировка для последовательного выполнения
+        self._execution_lock = None  # Будет создан в цикле
     
     def init(self, db_instance: BotDatabase):
         """Инициализирует цикл событий в отдельном потоке"""
@@ -148,7 +147,12 @@ class DBLoopManager:
                 self._create_lock(),
                 self.loop
             )
-            self._execution_lock = future.result()
+            try:
+                self._execution_lock = future.result(timeout=5)
+            except Exception as e:
+                logger.error(f"❌ Ошибка создания блокировки: {e}")
+                # Создаем блокировку прямо в этом потоке (обходное решение)
+                self._execution_lock = asyncio.Lock()
         
         async def _wrapped():
             async with self._execution_lock:
@@ -292,9 +296,8 @@ async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
                     logger.info("✅ Переподключение к БД выполнено")
                     return True
                 
-                # Проверяем соединение простым запросом
+                # Проверяем соединение простым запросом с таймаутом
                 try:
-                    # Используем таймаут для всей операции
                     async with asyncio.timeout(5.0):
                         async with db.get_connection() as conn:
                             await conn.execute("SELECT 1")
@@ -1657,4 +1660,4 @@ __all__ = [
     'get_psychologist_thoughts_stats',
 ]
 
-logger.info("✅ db_instance инициализирован (версия 3.5 с исправлением конкурентного доступа)")
+logger.info("✅ db_instance инициализирован (версия 3.6 с исправлением конкурентного доступа)")
