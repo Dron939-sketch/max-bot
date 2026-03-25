@@ -423,31 +423,19 @@ else:
 
 @api_app.get("/")
 async def root():
-    """Главная страница"""
-    try:
-        index_path = os.path.join(MINIAPP_PATH, "index.html")
-        if os.path.exists(index_path):
-            return FileResponse(
-                index_path, 
-                media_type="text/html",
-                headers={
-                    "Cache-Control": "no-cache, no-store, must-revalidate",
-                    "Pragma": "no-cache",
-                    "Expires": "0"
-                }
-            )
-        else:
-            logger.error(f"❌ index.html не найден по пути: {index_path}")
-            return JSONResponse(
-                status_code=404,
-                content={"error": "index.html not found", "path": index_path}
-            )
-    except Exception as e:
-        logger.error(f"❌ Ошибка при возврате index.html: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Internal server error"}
-        )
+    """Главная страница - возвращает информацию об API"""
+    return {
+        "name": "Фреди API",
+        "version": "9.6",
+        "status": "online",
+        "message": "API работает. Мини-приложение доступно по адресу: https://max-bot-miniapp.onrender.com",
+        "endpoints": {
+            "health": "/health",
+            "docs": "/docs",
+            "api": "/api/*",
+            "check_db": "/api/check-db"
+        }
+    }
 
 @api_app.get("/health")
 async def health_check():
