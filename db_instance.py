@@ -251,19 +251,47 @@ async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
     """
     for attempt in range(max_retries):
         try:
-            # Если пула нет - подключаемся
+            # Проверяем, существует ли пул и не закрыт ли он
             if db.pool is None:
                 logger.info(f"🔄 Пул соединений не инициализирован, подключаемся... (попытка {attempt + 1}/{max_retries})")
                 await db.connect()
                 logger.info("✅ Подключение к БД установлено")
                 return True
             
-            # Проверяем соединение
-            async with db.get_connection() as conn:
-                await conn.execute("SELECT 1")
+            # Проверяем, закрыт ли пул
+            if hasattr(db.pool, '_closed') and db.pool._closed:
+                logger.warning(f"⚠️ Пул соединений закрыт, переподключаемся... (попытка {attempt + 1}/{max_retries})")
+                await db.connect()
+                logger.info("✅ Переподключение к БД выполнено")
+                return True
             
-            logger.debug("✅ Соединение с БД работает")
-            return True
+            # Проверяем соединение с таймаутом
+            try:
+                async with asyncio.timeout(5.0):
+                    async with db.get_connection() as conn:
+                        await conn.execute("SELECT 1")
+                logger.debug("✅ Соединение с БД работает")
+                return True
+            except asyncio.TimeoutError:
+                logger.warning(f"⚠️ Таймаут при проверке соединения (попытка {attempt + 1}/{max_retries})")
+                # Пробуем переподключиться
+                try:
+                    await db.disconnect()
+                except:
+                    pass
+                await db.connect()
+                logger.info("✅ Переподключение выполнено")
+                return True
+            except Exception as conn_error:
+                logger.warning(f"⚠️ Ошибка при проверке соединения: {conn_error}")
+                # Пробуем переподключиться
+                try:
+                    await db.disconnect()
+                except:
+                    pass
+                await db.connect()
+                logger.info("✅ Переподключение выполнено")
+                return True
             
         except Exception as e:
             logger.warning(f"⚠️ Ошибка при проверке соединения (попытка {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
