@@ -73,13 +73,18 @@ class BotDatabase:
             logger.info("🔌 Пул соединений с PostgreSQL закрыт")
     
     @asynccontextmanager
-    async def get_connection(self):
-        """Контекстный менеджер для получения соединения из пула"""
-        if not self.pool:
-            error_msg = "Пул соединений не инициализирован. Вызовите connect()"
-            logger.error(f"❌ {error_msg}")
-            raise RuntimeError(error_msg)
-        
+async def get_connection(self):
+    """Контекстный менеджер для получения соединения из пула с блокировкой"""
+    if not self.pool:
+        error_msg = "Пул соединений не инициализирован. Вызовите connect()"
+        logger.error(f"❌ {error_msg}")
+        raise RuntimeError(error_msg)
+    
+    # Добавляем блокировку для предотвращения конкурентных операций
+    if not hasattr(self, '_connection_lock'):
+        self._connection_lock = asyncio.Lock()
+    
+    async with self._connection_lock:
         try:
             async with self.pool.acquire() as conn:
                 yield conn
