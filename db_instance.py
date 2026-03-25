@@ -248,70 +248,83 @@ async def close_db():
 async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
     """
     Проверяет соединение с БД через менеджер с повторными попытками
+    Исправлено: добавлена блокировка для предотвращения конкурентных операций
     """
-    for attempt in range(max_retries):
-        try:
-            # Проверяем, существует ли пул и не закрыт ли он
-            if db.pool is None:
-                logger.info(f"🔄 Пул соединений не инициализирован, подключаемся... (попытка {attempt + 1}/{max_retries})")
-                await db.connect()
-                logger.info("✅ Подключение к БД установлено")
-                return True
-            
-            # Проверяем, закрыт ли пул
-            if hasattr(db.pool, '_closed') and db.pool._closed:
-                logger.warning(f"⚠️ Пул соединений закрыт, переподключаемся... (попытка {attempt + 1}/{max_retries})")
-                await db.connect()
-                logger.info("✅ Переподключение к БД выполнено")
-                return True
-            
-            # Проверяем соединение с таймаутом
+    import asyncio
+    
+    # Глобальная блокировка для предотвращения одновременных проверок
+    if not hasattr(ensure_db_connection, '_lock'):
+        ensure_db_connection._lock = asyncio.Lock()
+    
+    async with ensure_db_connection._lock:
+        for attempt in range(max_retries):
             try:
-                async with asyncio.timeout(5.0):
-                    async with db.get_connection() as conn:
-                        await conn.execute("SELECT 1")
-                logger.debug("✅ Соединение с БД работает")
-                return True
-            except asyncio.TimeoutError:
-                logger.warning(f"⚠️ Таймаут при проверке соединения (попытка {attempt + 1}/{max_retries})")
-                # Пробуем переподключиться
-                try:
-                    await db.disconnect()
-                except:
-                    pass
-                await db.connect()
-                logger.info("✅ Переподключение выполнено")
-                return True
-            except Exception as conn_error:
-                logger.warning(f"⚠️ Ошибка при проверке соединения: {conn_error}")
-                # Пробуем переподключиться
-                try:
-                    await db.disconnect()
-                except:
-                    pass
-                await db.connect()
-                logger.info("✅ Переподключение выполнено")
-                return True
-            
-        except Exception as e:
-            logger.warning(f"⚠️ Ошибка при проверке соединения (попытка {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
-            
-            if attempt < max_retries - 1:
-                # Пробуем переподключиться
-                try:
-                    if db.pool:
-                        await db.disconnect()
-                        logger.info("🔌 Старый пул закрыт")
-                except Exception as disconnect_error:
-                    logger.warning(f"⚠️ Ошибка при закрытии пула: {disconnect_error}")
+                # Проверяем, существует ли пул
+                if db.pool is None:
+                    logger.info(f"🔄 Пул соединений не инициализирован, подключаемся... (попытка {attempt + 1}/{max_retries})")
+                    await db.connect()
+                    logger.info("✅ Подключение к БД установлено")
+                    return True
                 
-                # Ждем перед следующей попыткой (с экспоненциальной задержкой)
-                wait_time = delay * (2 ** attempt)
-                logger.info(f"⏳ Ждем {wait_time:.1f}с перед следующей попыткой...")
-                await asyncio.sleep(wait_time)
-            else:
-                logger.error(f"❌ Все попытки ({max_retries}) исчерпаны")
-                return False
+                # Проверяем, закрыт ли пул
+                if hasattr(db.pool, '_closed') and db.pool._closed:
+                    logger.warning(f"⚠️ Пул соединений закрыт, переподключаемся... (попытка {attempt + 1}/{max_retries})")
+                    await db.connect()
+                    logger.info("✅ Переподключение к БД выполнено")
+                    return True
+                
+                # Проверяем соединение - НЕ используем get_connection, чтобы не создавать новое
+                # Вместо этого используем метод _acquire для проверки
+                try:
+                    # Пытаемся получить соединение с таймаутом
+                    conn = await asyncio.wait_for(db.pool._acquire(), timeout=5.0)
+                    try:
+                        await conn.execute("SELECT 1")
+                        logger.debug("✅ Соединение с БД работает")
+                        return True
+                    finally:
+                        # Возвращаем соединение обратно в пул
+                        await db.pool._release(conn)
+                except asyncio.TimeoutError:
+                    logger.warning(f"⚠️ Таймаут при получении соединения (попытка {attempt + 1}/{max_retries})")
+                    # Пробуем переподключиться
+                    try:
+                        await db.disconnect()
+                    except:
+                        pass
+                    await db.connect()
+                    logger.info("✅ Переподключение выполнено")
+                    return True
+                except Exception as conn_error:
+                    logger.warning(f"⚠️ Ошибка при проверке соединения: {conn_error}")
+                    # Пробуем переподключиться
+                    try:
+                        await db.disconnect()
+                    except:
+                        pass
+                    await db.connect()
+                    logger.info("✅ Переподключение выполнено")
+                    return True
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка при проверке соединения (попытка {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
+                
+                if attempt < max_retries - 1:
+                    # Пробуем переподключиться
+                    try:
+                        if db.pool:
+                            await db.disconnect()
+                            logger.info("🔌 Старый пул закрыт")
+                    except Exception as disconnect_error:
+                        logger.warning(f"⚠️ Ошибка при закрытии пула: {disconnect_error}")
+                    
+                    # Ждем перед следующей попыткой
+                    wait_time = delay * (2 ** attempt)
+                    logger.info(f"⏳ Ждем {wait_time:.1f}с перед следующей попыткой...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"❌ Все попытки ({max_retries}) исчерпаны")
+                    return False
     
     return False
 
