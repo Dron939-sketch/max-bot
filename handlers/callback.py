@@ -543,7 +543,7 @@ async def handle_sync_callback(call: CallbackQuery):
             user_info = user_data.get(uid, {})
             return bool(user_info.get("profile_data") or user_info.get("ai_generated_profile"))
         
-        await show_smart_questions(call, user_id, user_data, context_obj, check_test_completed)
+        await show_smart_questions(call, user_id, context_obj, check_test_completed)
     
     elif data.startswith("ask_"):
         parts = data.split("_")
