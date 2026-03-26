@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик всех callback-запросов для MAX
-Версия 2.8 - ИСПРАВЛЕН ИМПОРТ show_mode_selection
+Версия 2.9 - ДОБАВЛЕНА ОБРАБОТКА smart_ask_*
 """
 
 import logging
@@ -169,7 +169,7 @@ async def async_callback_handler(call: CallbackQuery):
     
     logger.info(f"🔔 Асинхронный обратный вызов: {data} от пользователя {user_id}")
     
-    # 👇 ИСПРАВЛЕНО: отправляем непустой ответ
+    # Отправляем непустой ответ
     try:
         call.answer("⏳ Обрабатываю...", show_alert=False)
     except Exception as e:
@@ -545,6 +545,21 @@ async def handle_sync_callback(call: CallbackQuery):
         
         await show_smart_questions(call, user_id, context_obj, check_test_completed)
     
+    # ✅ ДОБАВЛЕНА ОБРАБОТКА smart_ask_*
+    elif data.startswith("smart_ask_"):
+        logger.info(f"🤔 smart_ask: {data} для пользователя {user_id}")
+        try:
+            question_num = int(data.replace("smart_ask_", ""))
+            context_obj = user_contexts.get(user_id)
+            await handle_smart_question(call, question_num, user_id, context_obj)
+        except ValueError as e:
+            logger.error(f"❌ Ошибка парсинга номера вопроса: {data}")
+            safe_send_message(
+                call.message,
+                "❓ Произошла ошибка. Пожалуйста, выберите вопрос снова.",
+                delete_previous=True
+            )
+    
     elif data.startswith("ask_"):
         parts = data.split("_")
         if len(parts) > 1 and parts[1].isdigit():
@@ -588,7 +603,7 @@ async def handle_sync_callback(call: CallbackQuery):
         logger.info(f"📊 profile_not_ready для пользователя {user_id}")
         
         text = """
-📊 **ПРОФИЛЬ ПОКА НЕ СОЗДАН**
+📊 <b>ПРОФИЛЬ ПОКА НЕ СОЗДАН</b>
 
 Твой психологический портрет появится после прохождения теста.
 
@@ -604,7 +619,7 @@ async def handle_sync_callback(call: CallbackQuery):
 ✅ Рекомендации по целям
 ✅ Доступ ко всем функциям бота
 
-👇 **Хочешь пройти тест прямо сейчас?**
+👇 <b>Хочешь пройти тест прямо сейчас?</b>
 """
         
         keyboard = InlineKeyboardMarkup()
@@ -615,7 +630,7 @@ async def handle_sync_callback(call: CallbackQuery):
             call.message,
             text,
             reply_markup=keyboard,
-            parse_mode=None,
+            parse_mode='HTML',
             delete_previous=True
         )
     
