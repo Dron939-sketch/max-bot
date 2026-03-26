@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 МОДУЛЬ 2: АНАЛИЗ ПЕТЕЛЬ (loop_analyzer.py)
-Анализирует рекурсивные петли в конфайнмент-модели
+Анализирует рекурсивные петли в конфайнтмент-модели
+ВЕРСИЯ 1.1 - ИСПРАВЛЕНЫ ОШИБКИ, ДОБАВЛЕНЫ НОВЫЕ МЕТОДЫ
 """
 
 from typing import List, Dict, Optional, Any, Set, Tuple
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 class LoopAnalyzer:
     """
-    Анализирует рекурсивные петли в конфайнмент-модели
+    Анализирует рекурсивные петли в конфайнтмент-модели
     """
     
     # Константы для типов петель
@@ -87,6 +88,23 @@ class LoopAnalyzer:
             # Это UserContext или другой объект
             self._init_from_context(model_or_context)
     
+    @classmethod
+    def from_context(cls, context) -> Optional['LoopAnalyzer']:
+        """
+        Создает анализатор из UserContext
+        
+        Args:
+            context: объект UserContext
+        
+        Returns:
+            LoopAnalyzer или None при ошибке
+        """
+        try:
+            return cls(context)
+        except Exception as e:
+            logger.error(f"Ошибка создания LoopAnalyzer из контекста: {e}")
+            return None
+    
     def _init_from_context(self, context):
         """
         Инициализирует модель из UserContext
@@ -142,6 +160,13 @@ class LoopAnalyzer:
             self.model.elements[2].causes = [3]
             self.model.elements[3].causes = [4]
             self.model.elements[4].causes = [1]
+            
+            self.model.links = [
+                {'from': 1, 'to': 2, 'strength': 0.7},
+                {'from': 2, 'to': 3, 'strength': 0.7},
+                {'from': 3, 'to': 4, 'strength': 0.7},
+                {'from': 4, 'to': 1, 'strength': 0.7}
+            ]
     
     def _fill_model_from_patterns(self, patterns: Dict):
         """
@@ -279,7 +304,7 @@ class LoopAnalyzer:
         
         if hasattr(element, 'causes') and element.causes:
             for next_id in element.causes:
-                if next_id in self.model.elements:  # проверяем, что элемент существует
+                if next_id in self.model.elements:
                     self._dfs(next_id, depth + 1)
         
         self._path.pop()
@@ -291,12 +316,12 @@ class LoopAnalyzer:
         Args:
             cycle: список ID элементов в цикле
         """
-        # Проверяем, что цикл уникальный
         cycle_set = set(cycle)
         for existing in self.significant_loops:
             if set(existing['cycle']) == cycle_set:
-                return  # цикл уже есть
-        
+                # Проверяем, что это тот же цикл (а не подцикл)
+                if len(existing['cycle']) == len(cycle):
+                    return
         self.significant_loops.append({
             'cycle': cycle.copy(),
             'length': len(cycle),
@@ -314,11 +339,15 @@ class LoopAnalyzer:
         Returns:
             float: сила цикла от 0 до 1
         """
-        strength = 1.0
+        if not cycle:
+            return 0.0
         
-        for i in range(len(cycle)-1):
+        strength = 1.0
+        n = len(cycle)
+        
+        for i in range(n):
             from_id = cycle[i]
-            to_id = cycle[i+1]
+            to_id = cycle[(i + 1) % n]  # замыкаем петлю
             
             # Ищем связь
             found = False
@@ -397,11 +426,95 @@ class LoopAnalyzer:
     
     def get_loops_by_type(self, loop_type: str) -> List[Dict[str, Any]]:
         """Возвращает петли определенного типа"""
+        if not self.significant_loops:
+            return []
         return [l for l in self.significant_loops if l.get('type') == loop_type]
     
     def get_loops_by_element(self, element_id: int) -> List[Dict[str, Any]]:
         """Возвращает все петли, содержащие указанный элемент"""
+        if not self.significant_loops:
+            return []
         return [l for l in self.significant_loops if element_id in l.get('cycle', [])]
+    
+    def get_key_element(self, loop: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Определяет ключевой (центральный) элемент петли
+        
+        Returns:
+            элемент с наибольшим количеством входящих/исходящих связей
+        """
+        elements = loop.get('cycle', [])
+        if not elements:
+            return None
+        
+        # Считаем степень узла (входящие + исходящие связи внутри петли)
+        degrees = {elem_id: 0 for elem_id in elements}
+        n = len(elements)
+        
+        for i in range(n):
+            from_id = elements[i]
+            to_id = elements[(i + 1) % n]
+            degrees[from_id] += 1
+            degrees[to_id] += 1
+        
+        # Находим элемент с максимальной степенью
+        max_degree = max(degrees.values()) if degrees else 0
+        for elem_id, degree in degrees.items():
+            if degree == max_degree:
+                elem = self.model.elements.get(elem_id)
+                if elem:
+                    return {
+                        'element_id': elem_id,
+                        'element': elem,
+                        'element_name': getattr(elem, 'name', f'Элемент {elem_id}'),
+                        'degree': degree,
+                        'is_center': degree >= 2
+                    }
+        
+        return None
+    
+    def visualize_loop(self, loop: Dict[str, Any]) -> str:
+        """
+        Возвращает текстовое представление петли для отображения
+        
+        Returns:
+            str: ASCII-схема петли
+        """
+        elements = loop.get('cycle', [])
+        if not elements:
+            return "Петля не содержит элементов"
+        
+        lines = []
+        lines.append("┌" + "─" * 50 + "┐")
+        lines.append("│ " + loop['description'] + " │")
+        lines.append("└" + "─" * 50 + "┘")
+        lines.append("")
+        
+        # Цепочка элементов
+        chain = []
+        for elem_id in elements:
+            elem = self.model.elements.get(elem_id)
+            name = getattr(elem, 'name', f'Элемент {elem_id}')[:20]
+            chain.append(name)
+        
+        lines.append("🔄 " + " → ".join(chain) + " →")
+        lines.append("")
+        
+        # Сила петли
+        impact = loop.get('impact', 0)
+        bar = "█" * int(impact * 10) + "░" * (10 - int(impact * 10))
+        lines.append(f"📊 Сила: {bar} {impact:.0%}")
+        
+        # Точки разрыва
+        points = self.get_intervention_points(loop)
+        if points:
+            lines.append("")
+            lines.append("🎯 Точки разрыва:")
+            for p in points[:3]:
+                difficulty_star = "⭐" * int(3 - p['difficulty'] * 2) + "☆" * int(p['difficulty'] * 2)
+                lines.append(f"   • {p['element_name']}: {difficulty_star} (потенциал {p['impact']:.0%})")
+        
+        return "\n".join(lines)
     
     def get_intervention_points(self, loop: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Определяет точки разрыва петли"""
