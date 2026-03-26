@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Сервисные функции для работы с API и генерации ответов
-Версия 9.8.6 - ДОБАВЛЕН УНИВЕРСАЛЬНЫЙ ДЕКОРАТОР ДЛЯ ЛОГИРОВАНИЯ
+Версия 9.8.7 - КРАСИВОЕ ЛОГИРОВАНИЕ (без огней)
 """
 
 import os
@@ -34,14 +34,14 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================
-# УНИВЕРСАЛЬНЫЙ ДЕКОРАТОР ДЛЯ ЛОГИРОВАНИЯ
+# КРАСИВЫЙ ДЕКОРАТОР ДЛЯ ЛОГИРОВАНИЯ (без огней)
 # ============================================
 
 def log_call(func):
-    """Декоратор для логирования всех вызовов функций"""
+    """Декоратор для логирования вызовов функций (красивая версия)"""
     @functools.wraps(func)
     async def async_wrapper(*args, **kwargs):
-        # Пытаемся извлечь user_id из аргументов
+        # Извлекаем user_id
         user_id = None
         if args and len(args) > 0:
             first_arg = args[0]
@@ -52,47 +52,39 @@ def log_call(func):
             elif isinstance(first_arg, dict) and 'user_id' in first_arg:
                 user_id = first_arg.get('user_id')
         
-        logger.error(f"")
-        logger.error(f"🔥🔥🔥 ========== {func.__name__} НАЧАЛО ========== 🔥🔥🔥")
-        logger.error(f"🔥🔥🔥 Время: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
-        if user_id:
-            logger.error(f"🔥🔥🔥 user_id: {user_id}")
+        logger.info(f"▶ {func.__name__} | user_id={user_id if user_id else 'n/a'}")
         
-        # Логируем аргументы (первые 300 символов)
-        args_str = str(args)[:300] if args else ""
-        kwargs_str = str(kwargs)[:300] if kwargs else ""
-        if args_str:
-            logger.error(f"🔥🔥🔥 args: {args_str}")
-        if kwargs_str:
-            logger.error(f"🔥🔥🔥 kwargs: {kwargs_str}")
+        # Логируем аргументы (только в DEBUG режиме)
+        if logger.isEnabledFor(logging.DEBUG):
+            args_str = str(args)[:300] if args else ""
+            kwargs_str = str(kwargs)[:300] if kwargs else ""
+            if args_str:
+                logger.debug(f"   args: {args_str}")
+            if kwargs_str:
+                logger.debug(f"   kwargs: {kwargs_str}")
         
         start = time.time()
         try:
             result = await func(*args, **kwargs)
             elapsed = time.time() - start
             
-            # Логируем результат
             result_type = type(result).__name__
             result_len = len(str(result)) if result else 0
             
-            logger.error(f"✅✅✅ {func.__name__} ЗАВЕРШЕН за {elapsed:.2f} сек")
-            logger.error(f"✅✅✅ Результат: {result_type}, длина: {result_len}")
+            logger.info(f"✓ {func.__name__} | завершён за {elapsed:.2f}с | результат: {result_type} ({result_len})")
             
-            # Если результат строка, показываем начало
-            if isinstance(result, str) and result:
-                logger.error(f"✅✅✅ Начало результата: {result[:200]}...")
-            
-            # Если результат словарь с ключевыми данными
-            if isinstance(result, dict):
-                logger.error(f"✅✅✅ Ключи результата: {list(result.keys())}")
+            if isinstance(result, str) and result and logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"   ответ: {result[:200]}...")
+            if isinstance(result, dict) and logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"   ключи: {list(result.keys())}")
             
             return result
             
         except Exception as e:
             elapsed = time.time() - start
-            logger.error(f"❌❌❌ {func.__name__} ОШИБКА через {elapsed:.2f} сек")
-            logger.error(f"❌❌❌ Ошибка: {type(e).__name__}: {e}")
-            traceback.print_exc()
+            logger.error(f"✗ {func.__name__} | ошибка через {elapsed:.2f}с: {type(e).__name__}: {e}")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(traceback.format_exc())
             raise
     
     @functools.wraps(func)
@@ -105,23 +97,17 @@ def log_call(func):
             elif hasattr(first_arg, 'from_user') and hasattr(first_arg.from_user, 'id'):
                 user_id = first_arg.from_user.id
         
-        logger.error(f"")
-        logger.error(f"🔥🔥🔥 ========== {func.__name__} НАЧАЛО (синхронный) ========== 🔥🔥🔥")
-        logger.error(f"🔥🔥🔥 Время: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
-        if user_id:
-            logger.error(f"🔥🔥🔥 user_id: {user_id}")
-        
+        logger.info(f"▶ {func.__name__} (синхр.) | user_id={user_id if user_id else 'n/a'}")
         start = time.time()
         try:
             result = func(*args, **kwargs)
             elapsed = time.time() - start
             result_len = len(str(result)) if result else 0
-            logger.error(f"✅✅✅ {func.__name__} ЗАВЕРШЕН за {elapsed:.2f} сек")
-            logger.error(f"✅✅✅ Результат: {type(result).__name__}, длина: {result_len}")
+            logger.info(f"✓ {func.__name__} | завершён за {elapsed:.2f}с | результат: {type(result).__name__} ({result_len})")
             return result
         except Exception as e:
             elapsed = time.time() - start
-            logger.error(f"❌❌❌ {func.__name__} ОШИБКА через {elapsed:.2f} сек: {e}")
+            logger.error(f"✗ {func.__name__} | ошибка через {elapsed:.2f}с: {e}")
             raise
     
     if asyncio.iscoroutinefunction(func):
