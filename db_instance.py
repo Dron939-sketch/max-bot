@@ -294,6 +294,79 @@ class DBLoopManager:
         logger.info("✅ Цикл БД остановлен")
 
 # ============================================
+# ФУНКЦИИ ДЛЯ ЦЕЛЕЙ ПОЛЬЗОВАТЕЛЯ
+# ============================================
+
+async def get_user_goals_async(user_id: int, limit: int = 10) -> List[Dict]:
+    """Асинхронное получение целей пользователя"""
+    try:
+        if not await ensure_db_connection():
+            return []
+        
+        async with db.get_connection() as conn:
+            rows = await conn.fetch("""
+                SELECT id, goal_text, status, completed_at, created_at 
+                FROM fredi_user_goals 
+                WHERE user_id = $1 
+                ORDER BY created_at DESC 
+                LIMIT $2
+            """, user_id, limit)
+            
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения целей: {e}")
+        return []
+
+
+def get_user_goals(user_id: int, limit: int = 10) -> List[Dict]:
+    """Синхронная обертка для получения целей"""
+    try:
+        result = db_loop_manager.run_coro(
+            get_user_goals_async,
+            user_id,
+            limit,
+            timeout=10
+        )
+        return result if result is not None else []
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_user_goals: {e}")
+        return []
+
+
+async def save_goal_async(user_id: int, goal_text: str) -> Optional[int]:
+    """Асинхронное сохранение цели"""
+    try:
+        if not await ensure_db_connection():
+            return None
+        
+        async with db.get_connection() as conn:
+            goal_id = await conn.fetchval("""
+                INSERT INTO fredi_user_goals (user_id, goal_text)
+                VALUES ($1, $2)
+                RETURNING id
+            """, user_id, goal_text)
+            
+            return goal_id
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения цели: {e}")
+        return None
+
+
+def save_goal(user_id: int, goal_text: str) -> Optional[int]:
+    """Синхронная обертка для сохранения цели"""
+    try:
+        result = db_loop_manager.run_coro(
+            save_goal_async,
+            user_id,
+            goal_text,
+            timeout=10
+        )
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_goal: {e}")
+        return None
+
+# ============================================
 # ГЛОБАЛЬНЫЕ ЭКЗЕМПЛЯРЫ
 # ============================================
 
@@ -1723,6 +1796,8 @@ __all__ = [
     'update_psychologist_thought',
     'get_thoughts_by_test_result',
     'get_psychologist_thoughts_stats',
+    'get_user_goals',      # ✅ ДОБАВИТЬ
+    'save_goal', 
 ]
 
 logger.info("✅ db_instance инициализирован (версия 3.9 - добавлена load_user_from_db, исправлен пул)")
