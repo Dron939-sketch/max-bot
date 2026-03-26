@@ -114,16 +114,34 @@ class BotDatabase:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
     
-    @asynccontextmanager
-    async def get_connection(self):
-        """
-        Контекстный менеджер для получения соединения из пула с блокировкой
-        и автоматической проверкой живости соединения
-        """
-        if not self.pool:
-            error_msg = "Пул соединений не инициализирован. Вызовите connect()"
-            logger.error(f"❌ {error_msg}")
-            raise RuntimeError(error_msg)
+   @asynccontextmanager
+async def get_connection(self):
+    if not self.pool:
+        error_msg = "Пул соединений не инициализирован. Вызовите connect()"
+        logger.error(f"❌ {error_msg}")
+        raise RuntimeError(error_msg)
+    
+    # ✅ УБИРАЕМ self._connection_lock - он убивает конкурентность!
+    # async with self._connection_lock:  # ← УДАЛИТЬ ЭТУ СТРОКУ
+    
+    try:
+        async with self.pool.acquire() as conn:
+            # Проверяем живо ли соединение
+            try:
+                await conn.execute("SELECT 1")
+            except (asyncpg.exceptions.ConnectionDoesNotExistError, 
+                    asyncpg.exceptions.ConnectionClosedError) as e:
+                logger.warning(f"⚠️ Соединение потеряно: {e}, пробуем переподключиться")
+                # Пересоздаем пул
+                await self.pool.close()
+                await self.connect()
+                async with self.pool.acquire() as new_conn:
+                    yield new_conn
+            else:
+                yield conn
+    except Exception as e:
+        logger.error(f"❌ Ошибка при получении соединения: {e}")
+        raise
         
         async with self._connection_lock:
             try:
