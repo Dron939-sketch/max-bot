@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики сбора контекста (город, возраст, пол) для MAX
-ВЕРСИЯ 2.3 - ВРЕМЕННО ОТКЛЮЧЕНО СОХРАНЕНИЕ В БД (ИСПРАВЛЕНИЕ ЗАВИСАНИЙ)
+ВЕРСИЯ 2.4 - ИСПРАВЛЕНО ЗАВИСАНИЕ НА ВОЗРАСТЕ И ДУБЛИРОВАНИЕ
 """
 
 import logging
@@ -86,15 +86,7 @@ def get_user_context_dict() -> Dict[int, UserContext]:
     return user_contexts
 
 def save_context_to_db(user_id: int):
-    """СИНХРОННО сохраняет контекст пользователя в БД"""
-    # ⚠️ ВРЕМЕННО ОТКЛЮЧЕНО: БД зависает
-    # context = get_user_context(user_id)
-    # if context:
-    #     try:
-    #         sync_db.save_user_to_db(user_id)
-    #         logger.debug(f"💾 Контекст пользователя {user_id} сохранен в БД")
-    #     except Exception as e:
-    #         logger.error(f"❌ Ошибка сохранения контекста {user_id}: {e}")
+    """Сохранение контекста в БД (ВРЕМЕННО ОТКЛЮЧЕНО)"""
     logger.debug(f"⚠️ Сохранение контекста в БД временно отключено для {user_id}")
 
 # ============================================
@@ -207,8 +199,6 @@ def handle_context_callback(call: CallbackQuery):
         context.gender = "male"
         context.awaiting_context = None
         
-        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
-        
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
         
@@ -229,8 +219,6 @@ def handle_context_callback(call: CallbackQuery):
         context.gender = "female"
         context.awaiting_context = None
         
-        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
-        
         question, keyboard = context.ask_for_context()
         
         if question:
@@ -250,8 +238,6 @@ def handle_context_callback(call: CallbackQuery):
         context.gender = "other"
         context.awaiting_context = None
         
-        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
-        
         question, keyboard = context.ask_for_context()
         
         if question:
@@ -269,8 +255,6 @@ def handle_context_callback(call: CallbackQuery):
     elif data == "skip_context":
         logger.info(f"⏭️ Пропускаем сбор контекста")
         context.awaiting_context = None
-        
-        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
         
         safe_send_message(
             call.message,
@@ -309,7 +293,7 @@ def handle_context_message(message: Message) -> bool:
     """
     Обрабатывает ответы на контекстные вопросы
     Возвращает True, если сообщение было обработано как контекстное
-    ✅ ИСПРАВЛЕНО: предотвращаем повторную обработку
+    ✅ ИСПРАВЛЕНО: предотвращаем повторную обработку и зависание на возрасте
     """
     user_id = message.from_user.id
     lock = _get_user_lock(user_id)
@@ -362,9 +346,6 @@ def handle_context_message(message: Message) -> bool:
                     context.detect_timezone_from_city()
                     logger.info(f"✅ Часовой пояс определен")
                     
-                    # Временно отключено
-                    # save_context_to_db(user_id)
-                    
                     question, keyboard = context.ask_for_context()
                     logger.info(f"📋 Следующий вопрос: '{question}'")
                     
@@ -408,15 +389,15 @@ def handle_context_message(message: Message) -> bool:
                 if 1 <= age <= 120:
                     logger.info(f"✅ [AGE] Возраст корректен: {age}")
                     
+                    # Сохраняем возраст
                     context.age = age
                     logger.info(f"✅ [AGE] Возраст сохранен в context.age = {context.age}")
                     
+                    # Сбрасываем состояние ожидания
                     context.awaiting_context = None
                     logger.info(f"✅ [AGE] context.awaiting_context сброшен в None")
                     
-                    # ✅ ВРЕМЕННО ОТКЛЮЧЕНО: сохранение в БД
-                    logger.info(f"⚠️ [AGE] Сохранение в БД временно отключено")
-                    
+                    # Получаем следующий вопрос
                     logger.info(f"❓ [AGE] Вызываем context.ask_for_context()...")
                     question, keyboard = context.ask_for_context()
                     logger.info(f"📋 [AGE] ask_for_context вернул: question='{question}'")
@@ -468,9 +449,6 @@ def handle_context_message(message: Message) -> bool:
             
             context.awaiting_context = None
             
-            # Временно отключено
-            # threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
-            
             logger.info(f"❓ Получаем следующий вопрос после пола...")
             question, keyboard = context.ask_for_context()
             logger.info(f"📋 Следующий вопрос: '{question}'")
@@ -495,6 +473,7 @@ def handle_context_message(message: Message) -> bool:
         
     finally:
         lock.release()
+        logger.info(f"🔓 Блокировка снята для user {user_id}")
 
 # ============================================
 # ЗАВЕРШЕНИЕ СБОРА КОНТЕКСТА
@@ -524,9 +503,6 @@ def show_context_complete(message: Message, context: UserContext):
         logger.info(f"🌤️ Обновляем погоду для итогового экрана...")
         context.update_weather()
         logger.info(f"✅ Погода обновлена")
-        
-        # Временно отключено
-        # threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
         
         # Отмечаем, что контекст завершен
         _mark_context_completed(user_id)
@@ -602,9 +578,6 @@ def cmd_context(message: Message):
     # Сбрасываем флаг завершения
     if user_id in _completed_flags:
         del _completed_flags[user_id]
-    
-    # Временно отключено
-    # threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
     
     safe_send_message(
         message,
@@ -741,9 +714,6 @@ def save_life_context(user_id: int, answers: dict):
     context.resistance_people = answers.get('resistance_people')
     context.energy_level = answers.get('energy_level')
     context.life_context_complete = True
-    
-    # Временно отключено
-    # threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
 
 def parse_life_context_from_text(text: str) -> dict:
     """
