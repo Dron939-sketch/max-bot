@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики команды /start и начальных экранов для MAX
-ВЕРСИЯ 2.8 - ИСПРАВЛЕНО: синхронный вызов bot.send_message
+ВЕРСИЯ 2.9 - УНИФИЦИРОВАНО HTML ФОРМАТИРОВАНИЕ
 """
 import logging
 import time
@@ -33,7 +33,7 @@ from state import (
     get_user_name, load_user_from_db
 )
 
-# ✅ ИСПРАВЛЕНО: используем sync_db вместо прямых вызовов
+# Используем sync_db вместо прямых вызовов
 from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,7 @@ class Stats:
     
     def register_start(self, user_id):
         self.starts[user_id] = time.time()
-        # ✅ ИСПРАВЛЕНО: используем sync_db
+        # Используем sync_db
         def run_log():
             sync_db.log_event(user_id, 'start', {'timestamp': time.time()})
         
@@ -165,10 +165,9 @@ def cmd_start(message: Message):
     user_names[user_id] = user_name
     clear_state(user_id)
     
-    # ✅ ИСПРАВЛЕНО: безопасно получаем атрибуты from_user
+    # Безопасно получаем атрибуты from_user
     def run_save_user():
         try:
-            # Безопасно получаем атрибуты, которые могут отсутствовать
             username = None
             last_name = None
             language_code = None
@@ -193,7 +192,7 @@ def cmd_start(message: Message):
     
     threading.Thread(target=run_save_user, daemon=True).start()
     
-    # ✅ ИСПРАВЛЕНО: упрощенная проверка загрузки
+    # Упрощенная проверка загрузки
     def run_load_check():
         try:
             loaded = ensure_user_loaded_sync(user_id, user_name)
@@ -281,29 +280,29 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
         
         db_status = "✅ из базы данных" if loaded_from_db else "✅ из памяти"
         
+        # ✅ HTML форматирование
         text = f"""
-🧠 {bold('ФРЕДИ: ВИРТУАЛЬНЫЙ ПСИХОЛОГ')}
+<b>🧠 ФРЕДИ: ВИРТУАЛЬНЫЙ ПСИХОЛОГ</b>
 
-👋 О, {user_name}, я вас помню {db_status}!
+👋 О, <b>{user_name}</b>, я вас помню {db_status}!
 (У меня, в отличие от людей, с памятью всё отлично)
 
-📊 {bold('ВАШ ПРОФИЛЬ:')} {profile_code}
+<b>📊 ВАШ ПРОФИЛЬ:</b> {profile_code}
 
-❓ {bold('ЧТО ДЕЛАЕМ?')}
+<b>❓ ЧТО ДЕЛАЕМ?</b>
 
 Вы можете:
 🔄 Пройти тест заново — вдруг вы изменились?
 📋 Посмотреть свой профиль
 🎯 Выбрать цель
 
-⬇️ {bold('ВЫБИРАЙТЕ:')}
+<b>⬇️ ВЫБИРАЙТЕ:</b>
 """
         
         keyboard = get_restart_keyboard()
         
-        # 👇👇👇 ИСПРАВЛЕНО: синхронный вызов bot.send_message
+        # Синхронный вызов bot.send_message
         try:
-            # bot.send_message — синхронная функция в maxibot
             bot.send_message(
                 message.chat.id,
                 text,
@@ -317,10 +316,11 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
     # Проверяем, заполнен ли контекст (город, пол, возраст)
     if not (context.city and context.gender and context.age):
         # Новый пользователь - показываем красивое приветствие
+        # ✅ HTML форматирование
         welcome_text = f"""
-{user_name}, привет! Ну, здравствуйте, дорогой человек! 👋
+<b>{user_name}</b>, привет! Ну, здравствуйте, дорогой человек! 👋
 
-🧠 {bold('Я — Фреди, виртуальный психолог.')}
+<b>🧠 Я — Фреди, виртуальный психолог.</b>
 Оцифрованная версия Андрея Мейстера, если хотите — его цифровой слепок.
 
 🎭 Короче, я — это он, только батарейка дольше держит и пожрать не прошу.
@@ -330,7 +330,7 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
 🧐 Чтобы я понимал, с кем имею дело и чем могу быть полезен —
 давайте-ка пройдём небольшой тест.
 
-📊 {bold('Всего 5 этапов:')}
+<b>📊 Всего 5 этапов:</b>
 
 1️⃣ Конфигурация восприятия — как вы фильтруете реальность
 2️⃣ Конфигурация мышления — как ваш мозг перерабатывает информацию
@@ -338,7 +338,7 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
 4️⃣ Точка роста — куда двигаться, чтобы не топтаться на месте
 5️⃣ Глубинные паттерны — что сформировало вас как личность
 
-⏱ {bold('15 минут')} — и я буду знать о вас больше, чем вы думаете.
+<b>⏱ 15 минут</b> — и я буду знать о вас больше, чем вы думаете.
 
 🚀 Ну что, начнём наше знакомство?
 """
@@ -362,7 +362,6 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
     
     # Если контекст уже заполнен, показываем меню
     try:
-        # ✅ ИСПРАВЛЕНО: используем правильное имя из context
         user_display_name = context.name if context.name else user_name
         
         context.update_weather()
@@ -370,7 +369,8 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
         mode_config = COMMUNICATION_MODES.get(context.communication_mode, COMMUNICATION_MODES["coach"])
         
         mode_display_name = mode_config["display_name"]
-        text = f"{mode_config['emoji']} {bold(f'РЕЖИМ {mode_display_name}')}\n\n"
+        # ✅ HTML форматирование
+        text = f"{mode_config['emoji']} <b>РЕЖИМ {mode_display_name}</b>\n\n"
         text += context.get_greeting(user_display_name) + "\n"
         text += f"📅 Сегодня {day_context['weekday']}, {day_context['day']} {day_context['month']}, {day_context['time_str']}\n"
         
@@ -378,7 +378,7 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
             weather = context.weather_cache
             text += f"{weather['icon']} {weather['description']}, {weather['temp']}°C\n\n"
         
-        text += f"🧠 {bold('ЧЕМ ЗАЙМЁМСЯ?')}\n\n"
+        text += f"🧠 <b>ЧЕМ ЗАЙМЁМСЯ?</b>\n\n"
         
         if context.communication_mode == "coach":
             text += "• Задать вопрос — я помогу найти ответ внутри себя\n"
@@ -405,7 +405,7 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
         from keyboards import get_main_menu_after_mode_keyboard
         keyboard = get_main_menu_after_mode_keyboard(has_profile)
         
-        # 👇👇👇 ИСПРАВЛЕНО: синхронный вызов
+        # Синхронный вызов
         bot.send_message(
             message.chat.id,
             text,
@@ -468,16 +468,16 @@ def callback_restart_test(call: CallbackQuery):
         if hasattr(context, 'confinement_model'):
             context.confinement_model = {}
     
-    # ✅ ИСПРАВЛЕНО: используем sync_db
+    # Используем sync_db
     def run_save():
         sync_db.save_user_to_db(user_id)
         sync_db.log_event(user_id, 'restart_test', {})
     
     threading.Thread(target=run_save, daemon=True).start()
     
-    # Показываем приветствие
+    # ✅ HTML форматирование
     text = f"""
-🔄 **ТЕСТ ПЕРЕЗАПУЩЕН**
+<b>🔄 ТЕСТ ПЕРЕЗАПУЩЕН</b>
 
 Хорошо, начнём с чистого листа.
 Давайте познакомимся заново.
@@ -494,7 +494,7 @@ def callback_restart_test(call: CallbackQuery):
         call.message, 
         text, 
         reply_markup=keyboard, 
-        parse_mode='Markdown',
+        parse_mode='HTML',
         delete_previous=True
     )
 
@@ -556,8 +556,9 @@ def show_why_details(call: CallbackQuery):
     """Показывает детальную информацию о боте"""
     user_id = call.from_user.id
     
+    # ✅ HTML форматирование
     text = f"""
-🎭 {bold('Ну, вопрос хороший. Давайте по существу.')}
+🎭 <b>Ну, вопрос хороший. Давайте по существу.</b>
 
 Видите ли, дорогой человек, я — экспериментальная модель.
 Андрей Мейстер однажды подумал: "А что, если я создам свою цифровую копию?
@@ -565,14 +566,14 @@ def show_why_details(call: CallbackQuery):
 
 Так я и появился. 🧠
 
-🧐 {bold('Что я умею:')}
+🧐 <b>Что я умею:</b>
 
 • Вижу паттерны там, где вы видите просто день сурка
 • Нахожу систему в ваших "случайных" решениях
 • Понимаю, почему вы выбираете одних и тех же "не тех" людей
 • Я реально беспристрастен — у меня нет плохого настроения
 
-🎯 {bold('Конкретно по тесту:')}
+🎯 <b>Конкретно по тесту:</b>
 
 1️⃣ Восприятие — поймём, какую линзу вы носите
 2️⃣ Мышление — узнаем, как вы пережёвываете реальность
@@ -580,7 +581,7 @@ def show_why_details(call: CallbackQuery):
 4️⃣ Точка роста — я скажу, куда вам двигаться
 5️⃣ Глубинные паттерны — заглянем в детство и подсознание
 
-⏱ {bold('15 минут')} — и я составлю ваш профиль.
+<b>⏱ 15 минут</b> — и я составлю ваш профиль.
 
 👌 Погнали?"""
     
@@ -594,7 +595,7 @@ def show_why_details(call: CallbackQuery):
         call.message, 
         text, 
         reply_markup=keyboard, 
-        parse_mode='Markdown',
+        parse_mode='HTML',
         delete_previous=True
     )
 
@@ -606,10 +607,11 @@ def show_intro(message: Message):
     user_id = message.from_user.id
     user_name = get_user_name_local(user_id)
     
+    # ✅ HTML форматирование
     text = f"""
-👋 {bold(f'Привет, {user_name}!')}
+👋 <b>Привет, {user_name}!</b>
 
-👇 {bold('Выберите, с какой интонацией будем общаться:')}
+👇 <b>Выберите, с какой интонацией будем общаться:</b>
 """
     
     keyboard = InlineKeyboardMarkup()
@@ -626,7 +628,7 @@ def show_intro(message: Message):
         message, 
         text, 
         reply_markup=keyboard, 
-        parse_mode='Markdown',
+        parse_mode='HTML',
         delete_previous=True
     )
 
@@ -640,7 +642,7 @@ def show_main_menu(message: Message, context: UserContext):
     
     day_context = context.get_day_context()
     
-    # ✅ ИСПРАВЛЕНО: используем имя из контекста
+    # Используем имя из контекста
     user_display_name = context.name if context.name else get_user_name_local(message.from_user.id)
     
     welcome_text = f"{context.get_greeting(user_display_name)}\n\n"
@@ -657,11 +659,12 @@ def show_main_menu(message: Message, context: UserContext):
     else:
         welcome_text += f"🏡 Личное время. Есть что обсудить?\n\n"
     
-    welcome_text += f"👇 {bold('Выберите действие:')}"
+    # ✅ HTML форматирование
+    welcome_text += f"👇 <b>Выберите действие:</b>"
     
     keyboard = get_main_menu_keyboard()
     
-    safe_send_message(message, welcome_text, reply_markup=keyboard)
+    safe_send_message(message, welcome_text, reply_markup=keyboard, parse_mode='HTML')
 
 
 # ============================================
