@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ 3.8 - ИСПРАВЛЕНА ПРОБЛЕМА С КОНКУРЕНТНЫМ ДОСТУПОМ И ПУЛОМ СОЕДИНЕНИЙ
+ВЕРСИЯ 3.9 - ИСПРАВЛЕНА ПРОБЛЕМА С ЗАКРЫТЫМ ПУЛОМ
 """
 
 import os
@@ -56,6 +56,7 @@ class DBLoopManager:
         self._running = False
         self._db_instance: Optional[BotDatabase] = None
         self._execution_lock = None
+        self._shutting_down = False
     
     def init(self, db_instance: BotDatabase):
         """Инициализирует цикл событий в отдельном потоке"""
@@ -65,6 +66,7 @@ class DBLoopManager:
                 return
             
             self._db_instance = db_instance
+            self._shutting_down = False
             
             # Создаем новый цикл
             self.loop = asyncio.new_event_loop()
@@ -105,7 +107,10 @@ class DBLoopManager:
             for task in pending:
                 task.cancel()
             if pending:
-                self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                try:
+                    self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                except Exception:
+                    pass
             self.loop.close()
             logger.info("🔒 Цикл БД остановлен")
     
@@ -123,12 +128,23 @@ class DBLoopManager:
         """Создает блокировку в цикле БД"""
         return asyncio.Lock()
     
+    def is_ready(self) -> bool:
+        """Проверяет, готов ли менеджер к работе"""
+        return (self.loop is not None and 
+                self.loop.is_running() and 
+                not self._shutting_down and
+                self._db_instance is not None and
+                self._db_instance.pool is not None)
+    
     def run_coro(self, coro_func: Callable[..., Awaitable], *args, timeout: int = 45, **kwargs):
         """
         Запускает корутину в цикле БД и возвращает результат.
         """
-        if self.loop is None:
-            raise RuntimeError("Цикл БД не инициализирован. Вызовите init()")
+        if not self.is_ready():
+            raise RuntimeError(f"Цикл БД не готов: loop={self.loop is not None}, "
+                             f"running={self.loop.is_running() if self.loop else False}, "
+                             f"shutting_down={self._shutting_down}, "
+                             f"db_pool={self._db_instance.pool is not None if self._db_instance else False}")
         
         # Проверяем тип переданного объекта
         is_coro_func = inspect.iscoroutinefunction(coro_func)
@@ -153,11 +169,19 @@ class DBLoopManager:
         
         async def _wrapped():
             try:
+                # Проверяем пул перед выполнением
+                if self._db_instance and self._db_instance.pool is None:
+                    logger.warning("⚠️ Пул закрыт, пробуем переподключиться")
+                    await self._db_instance.connect()
+                
                 async with self._execution_lock:
                     if is_coro:
                         return await coro_func
                     else:
                         return await coro_func(*args, **kwargs)
+            except asyncio.CancelledError:
+                logger.debug("Задача отменена")
+                raise
             except Exception as e:
                 logger.error(f"❌ Ошибка в _wrapped: {e}")
                 raise
@@ -178,8 +202,9 @@ class DBLoopManager:
         """
         Запускает корутину как фоновую задачу (fire-and-forget)
         """
-        if self.loop is None:
-            raise RuntimeError("Цикл БД не инициализирован")
+        if not self.is_ready():
+            logger.warning("⚠️ Цикл БД не готов, задача не будет запущена")
+            return None
         
         is_coro_func = inspect.iscoroutinefunction(coro_func)
         is_coro = inspect.iscoroutine(coro_func)
@@ -189,36 +214,84 @@ class DBLoopManager:
         
         async def _wrapped():
             try:
+                if self._db_instance and self._db_instance.pool is None:
+                    await self._db_instance.connect()
+                
                 if is_coro:
                     return await coro_func
                 else:
                     return await coro_func(*args, **kwargs)
+            except asyncio.CancelledError:
+                logger.debug(f"Фоновая задача отменена: {coro_func.__name__}")
             except Exception as e:
-                logger.error(f"❌ Ошибка в фоновой задаче: {e}")
-                return None
+                logger.error(f"❌ Ошибка в фоновой задаче {coro_func.__name__}: {e}")
+                logger.error(traceback.format_exc())
+            return None
         
         task = asyncio.run_coroutine_threadsafe(_wrapped(), self.loop)
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        
+        def _cleanup(t):
+            self._tasks.discard(t)
+            if t.exception() and not isinstance(t.exception(), asyncio.CancelledError):
+                logger.error(f"Фоновая задача завершилась с ошибкой: {t.exception()}")
+        
+        task.add_done_callback(_cleanup)
         return task
     
     def shutdown(self):
         """Корректное завершение работы"""
-        if self.loop and self.loop.is_running():
-            logger.info("🛑 Останавливаем цикл БД...")
-            
+        with self._lock:
+            if self._shutting_down:
+                return
+            self._shutting_down = True
+        
+        if not self.loop or not self.loop.is_running():
+            logger.info("Цикл БД уже остановлен")
+            return
+        
+        logger.info("🛑 Останавливаем цикл БД...")
+        
+        # Создаём задачу остановки в цикле
+        async def _shutdown():
             # Отменяем все задачи
             for task in list(self._tasks):
-                task.cancel()
+                if not task.done():
+                    task.cancel()
             
-            # Останавливаем цикл
-            self.loop.call_soon_threadsafe(self.loop.stop)
+            # Ждём завершения отмены с таймаутом
+            if self._tasks:
+                try:
+                    await asyncio.gather(*self._tasks, return_exceptions=True)
+                except asyncio.CancelledError:
+                    pass
             
-            # Ждем завершения потока
-            if self.thread and self.thread.is_alive():
-                self.thread.join(timeout=10)
-            
-            logger.info("✅ Цикл БД остановлен")
+            # Закрываем пул БД
+            if self._db_instance and self._db_instance.pool:
+                try:
+                    await self._db_instance.disconnect()
+                except Exception as e:
+                    logger.error(f"Ошибка при закрытии пула: {e}")
+        
+        # Запускаем shutdown в цикле
+        future = asyncio.run_coroutine_threadsafe(_shutdown(), self.loop)
+        try:
+            future.result(timeout=10)
+        except TimeoutError:
+            logger.warning("⚠️ Таймаут при остановке задач")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при остановке: {e}")
+        
+        # Останавливаем цикл
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        
+        # Ждем завершения потока
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=5)
+            if self.thread.is_alive():
+                logger.warning("⚠️ Поток БД не завершился")
+        
+        logger.info("✅ Цикл БД остановлен")
 
 # ============================================
 # ГЛОБАЛЬНЫЕ ЭКЗЕМПЛЯРЫ
@@ -245,12 +318,8 @@ async def init_db():
 async def close_db():
     """Закрытие подключения к БД"""
     try:
-        if db and db.pool:
-            db_loop_manager.run_coro(db.disconnect, timeout=10)
-            logger.info("🔒 Подключение к PostgreSQL закрыто")
-        
         db_loop_manager.shutdown()
-        
+        logger.info("🔒 Подключение к PostgreSQL закрыто")
     except Exception as e:
         logger.error(f"❌ Ошибка при закрытии подключения: {e}")
 
@@ -267,28 +336,34 @@ async def _get_ensure_lock():
     return _ensure_db_lock
 
 
-async def ensure_db_connection(max_retries: int = 2, delay: float = 0.5):
+async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
     """
     Проверяет соединение с БД с автоматическим восстановлением.
-    Упрощенная версия с минимальными блокировками.
     """
     lock = await _get_ensure_lock()
     
     async with lock:
         for attempt in range(max_retries):
             try:
+                # Проверяем, готов ли менеджер
+                if not db_loop_manager.is_ready():
+                    logger.info(f"🔄 Менеджер БД не готов, инициализация... (попытка {attempt + 1})")
+                    await init_db()
+                
                 # Если пула нет - подключаемся
                 if db.pool is None:
                     logger.info("🔄 Подключаемся к БД...")
-                    await db.connect()
+                    async with asyncio.timeout(10):
+                        await db.connect()
                     logger.info("✅ Подключение к БД установлено")
                     return True
                 
-                # Быстрая проверка соединения с таймаутом
+                # Быстрая проверка соединения
                 try:
-                    async with asyncio.timeout(2.0):
+                    async with asyncio.timeout(3.0):
                         async with db.get_connection() as conn:
                             await conn.execute("SELECT 1")
+                    logger.debug("✅ Соединение с БД активно")
                     return True
                 except asyncio.TimeoutError:
                     logger.warning("⚠️ Таймаут проверки соединения")
@@ -296,21 +371,28 @@ async def ensure_db_connection(max_retries: int = 2, delay: float = 0.5):
                     logger.warning(f"⚠️ Ошибка соединения: {conn_error}")
                 
                 # Если дошли сюда - соединение потеряно, переподключаемся
+                logger.info("🔄 Переподключаемся к БД...")
                 try:
-                    await db.disconnect()
+                    async with asyncio.timeout(5):
+                        await db.disconnect()
                 except:
                     pass
-                await db.connect()
+                
+                async with asyncio.timeout(15):
+                    await db.connect()
                 logger.info("✅ Переподключение к БД выполнено")
                 return True
                 
+            except asyncio.TimeoutError:
+                logger.warning(f"⚠️ Таймаут (попытка {attempt + 1}/{max_retries})")
             except Exception as e:
                 logger.warning(f"⚠️ Ошибка (попытка {attempt + 1}/{max_retries}): {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error("❌ Все попытки исчерпаны")
-                    return False
+            
+            if attempt < max_retries - 1:
+                await asyncio.sleep(delay)
+            else:
+                logger.error("❌ Все попытки исчерпаны")
+                return False
     
     return False
 
@@ -318,12 +400,18 @@ async def ensure_db_connection(max_retries: int = 2, delay: float = 0.5):
 # ВЫПОЛНЕНИЕ С ПОВТОРАМИ
 # ============================================
 
-async def execute_with_retry(coro_func, *args, max_retries=2, **kwargs):
+async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
     """Выполняет функцию с повторными попытками"""
     last_error = None
     
     for attempt in range(max_retries):
         try:
+            # Проверяем соединение перед выполнением
+            if not await ensure_db_connection(max_retries=1):
+                logger.warning(f"⚠️ Нет соединения с БД, попытка {attempt + 1}")
+                await asyncio.sleep(1)
+                continue
+            
             result = db_loop_manager.run_coro(
                 coro_func, *args, timeout=25, **kwargs
             )
@@ -337,7 +425,7 @@ async def execute_with_retry(coro_func, *args, max_retries=2, **kwargs):
             logger.warning(f"⚠️ Ошибка (попытка {attempt+1}/{max_retries}): {e}")
         
         if attempt < max_retries - 1:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.5 * (attempt + 1))
     
     logger.error(f"❌ Все попытки исчерпаны: {last_error}")
     return None
@@ -350,8 +438,56 @@ def sync_db_call(coro_func):
     """Декоратор для синхронных функций"""
     @wraps(coro_func)
     def wrapper(*args, **kwargs):
-        return db_loop_manager.run_coro(coro_func, *args, **kwargs)
+        try:
+            return db_loop_manager.run_coro(coro_func, *args, **kwargs)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в sync_db_call: {e}")
+            return None
     return wrapper
+
+# ============================================
+# ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ ПОЛЬЗОВАТЕЛЯ (ДОБАВЛЕНА!)
+# ============================================
+
+async def load_user_from_db_async(user_id: int) -> Optional[Dict[str, Any]]:
+    """Асинхронная загрузка пользователя из БД"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для загрузки пользователя {user_id}")
+            return None
+        
+        user_data = await db.load_user_data(user_id)
+        user_context = await db.load_user_context(user_id)
+        
+        if not user_data and not user_context:
+            return None
+        
+        return {
+            'user_data': user_data or {},
+            'user_context': user_context or {}
+        }
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки пользователя {user_id}: {e}")
+        return None
+
+
+def load_user_from_db(user_id: int) -> Optional[Dict[str, Any]]:
+    """Синхронная обертка для загрузки пользователя"""
+    try:
+        if not db_loop_manager.is_ready():
+            logger.warning(f"⚠️ Цикл БД не готов, пропускаем загрузку {user_id}")
+            return None
+        
+        result = db_loop_manager.run_coro(
+            load_user_from_db_async,
+            user_id,
+            timeout=15
+        )
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка load_user_from_db: {e}")
+        return None
+
 
 # ============================================
 # СОХРАНЕНИЕ ДАННЫХ
@@ -394,6 +530,10 @@ def save_telegram_user(
 ) -> bool:
     """СИНХРОННАЯ обертка для сохранения пользователя Telegram"""
     try:
+        if not db_loop_manager.is_ready():
+            logger.warning(f"⚠️ Цикл БД не готов, пропускаем сохранение {user_id}")
+            return False
+        
         result = db_loop_manager.run_coro(
             save_telegram_user_async,
             user_id,
@@ -427,7 +567,8 @@ async def log_event_async(user_id: int, event_type: str, event_data: Dict = None
             logger.error(f"❌ Нет соединения с БД для логирования {user_id}")
             return False
         
-        return await db.log_event(user_id, event_type, event_data or {})
+        await db.log_event(user_id, event_type, event_data or {})
+        return True
     except Exception as e:
         logger.error(f"❌ Ошибка логирования: {e}")
         return False
@@ -436,6 +577,10 @@ async def log_event_async(user_id: int, event_type: str, event_data: Dict = None
 def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
     """Синхронная обертка для логирования"""
     try:
+        if not db_loop_manager.is_ready():
+            logger.warning(f"⚠️ Цикл БД не готов, пропускаем логирование {user_id}")
+            return False
+        
         result = db_loop_manager.run_coro(
             log_event_async,
             user_id,
@@ -460,9 +605,9 @@ async def save_user_data_async(user_id: int, data: Dict[str, Any]) -> bool:
             logger.error(f"❌ Нет соединения с БД для сохранения данных пользователя {user_id}")
             return False
         
-        result = await db.save_user_data(user_id, data)
+        await db.save_user_data(user_id, data)
         logger.debug(f"💾 Данные пользователя {user_id} сохранены в БД")
-        return result
+        return True
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения данных пользователя {user_id}: {e}")
         return False
@@ -471,6 +616,9 @@ async def save_user_data_async(user_id: int, data: Dict[str, Any]) -> bool:
 def save_user_data(user_id: int, data: Dict[str, Any]) -> bool:
     """Синхронная обертка для сохранения данных пользователя"""
     try:
+        if not db_loop_manager.is_ready():
+            return False
+        
         result = db_loop_manager.run_coro(
             save_user_data_async,
             user_id,
@@ -490,7 +638,7 @@ async def get_user_data_async(user_id: int) -> Optional[Dict[str, Any]]:
             logger.error(f"❌ Нет соединения с БД для получения данных пользователя {user_id}")
             return None
         
-        data = await db.get_user_data(user_id)
+        data = await db.load_user_data(user_id)
         return data
     except Exception as e:
         logger.error(f"❌ Ошибка получения данных пользователя {user_id}: {e}")
@@ -500,6 +648,9 @@ async def get_user_data_async(user_id: int) -> Optional[Dict[str, Any]]:
 def get_user_data(user_id: int) -> Optional[Dict[str, Any]]:
     """Синхронная обертка для получения данных пользователя"""
     try:
+        if not db_loop_manager.is_ready():
+            return None
+        
         result = db_loop_manager.run_coro(
             get_user_data_async,
             user_id,
@@ -518,9 +669,9 @@ async def save_user_context_async(user_id: int, context: Dict[str, Any]) -> bool
             logger.error(f"❌ Нет соединения с БД для сохранения контекста пользователя {user_id}")
             return False
         
-        result = await db.save_user_context(user_id, context)
+        await db.save_user_context(user_id, context)
         logger.debug(f"💾 Контекст пользователя {user_id} сохранен в БД")
-        return result
+        return True
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения контекста пользователя {user_id}: {e}")
         return False
@@ -529,6 +680,9 @@ async def save_user_context_async(user_id: int, context: Dict[str, Any]) -> bool
 def save_user_context(user_id: int, context: Dict[str, Any]) -> bool:
     """Синхронная обертка для сохранения контекста пользователя"""
     try:
+        if not db_loop_manager.is_ready():
+            return False
+        
         result = db_loop_manager.run_coro(
             save_user_context_async,
             user_id,
@@ -548,7 +702,7 @@ async def get_user_context_async(user_id: int) -> Optional[Dict[str, Any]]:
             logger.error(f"❌ Нет соединения с БД для получения контекста пользователя {user_id}")
             return None
         
-        context = await db.get_user_context(user_id)
+        context = await db.load_user_context(user_id)
         return context
     except Exception as e:
         logger.error(f"❌ Ошибка получения контекста пользователя {user_id}: {e}")
@@ -558,6 +712,9 @@ async def get_user_context_async(user_id: int) -> Optional[Dict[str, Any]]:
 def get_user_context(user_id: int) -> Optional[Dict[str, Any]]:
     """Синхронная обертка для получения контекста пользователя"""
     try:
+        if not db_loop_manager.is_ready():
+            return None
+        
         result = db_loop_manager.run_coro(
             get_user_context_async,
             user_id,
@@ -576,14 +733,14 @@ async def save_route_data_async(user_id: int, route_data: Dict[str, Any]) -> boo
             logger.error(f"❌ Нет соединения с БД для сохранения маршрута пользователя {user_id}")
             return False
         
-        result = await db.save_user_route(
+        await db.save_user_route(
             user_id=user_id,
             route_data=route_data,
             current_step=route_data.get('current_step', 1),
             progress=route_data.get('progress', [])
         )
         logger.debug(f"💾 Маршрут пользователя {user_id} сохранен в БД")
-        return result
+        return True
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения маршрута пользователя {user_id}: {e}")
         return False
@@ -592,6 +749,9 @@ async def save_route_data_async(user_id: int, route_data: Dict[str, Any]) -> boo
 def save_route_data(user_id: int, route_data: Dict[str, Any]) -> bool:
     """Синхронная обертка для сохранения маршрута пользователя"""
     try:
+        if not db_loop_manager.is_ready():
+            return False
+        
         result = db_loop_manager.run_coro(
             save_route_data_async,
             user_id,
@@ -662,6 +822,10 @@ async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict
 def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None):
     """Синхронная обертка для сохранения"""
     try:
+        if not db_loop_manager.is_ready():
+            logger.warning(f"⚠️ Цикл БД не готов, пропускаем сохранение {user_id}")
+            return False
+        
         result = db_loop_manager.run_coro(
             save_user_to_db_async,
             user_id,
@@ -805,6 +969,9 @@ def save_psychologist_thought(
 ) -> Optional[int]:
     """Синхронная обертка для сохранения мысли психолога"""
     try:
+        if not db_loop_manager.is_ready():
+            return None
+        
         result = db_loop_manager.run_coro(
             save_psychologist_thought_async,
             user_id,
@@ -858,6 +1025,9 @@ def get_psychologist_thought(
 ) -> Optional[str]:
     """Синхронная обертка для получения мысли психолога"""
     try:
+        if not db_loop_manager.is_ready():
+            return None
+        
         result = db_loop_manager.run_coro(
             get_psychologist_thought_async,
             user_id,
@@ -925,6 +1095,9 @@ def get_psychologist_thought_history(
 ) -> List[Dict]:
     """Синхронная обертка для получения истории мыслей"""
     try:
+        if not db_loop_manager.is_ready():
+            return []
+        
         result = db_loop_manager.run_coro(
             get_psychologist_thought_history_async,
             user_id,
@@ -937,10 +1110,6 @@ def get_psychologist_thought_history(
         logger.error(f"❌ Ошибка get_psychologist_thought_history: {e}")
         return []
 
-
-# ============================================
-# ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ МЫСЛЕЙ
-# ============================================
 
 async def get_all_psychologist_thoughts_async(
     user_id: int,
@@ -997,6 +1166,9 @@ def get_all_psychologist_thoughts(
 ) -> List[Dict]:
     """Синхронная обертка"""
     try:
+        if not db_loop_manager.is_ready():
+            return []
+        
         result = db_loop_manager.run_coro(
             get_all_psychologist_thoughts_async,
             user_id,
@@ -1035,6 +1207,9 @@ async def delete_psychologist_thought_async(thought_id: int) -> bool:
 def delete_psychologist_thought(thought_id: int) -> bool:
     """Синхронная обертка"""
     try:
+        if not db_loop_manager.is_ready():
+            return False
+        
         result = db_loop_manager.run_coro(
             delete_psychologist_thought_async,
             thought_id,
@@ -1117,6 +1292,9 @@ def update_psychologist_thought(
 ) -> bool:
     """Синхронная обертка"""
     try:
+        if not db_loop_manager.is_ready():
+            return False
+        
         result = db_loop_manager.run_coro(
             update_psychologist_thought_async,
             thought_id,
@@ -1170,6 +1348,9 @@ async def get_thoughts_by_test_result_async(test_result_id: int) -> List[Dict]:
 def get_thoughts_by_test_result(test_result_id: int) -> List[Dict]:
     """Синхронная обертка"""
     try:
+        if not db_loop_manager.is_ready():
+            return []
+        
         result = db_loop_manager.run_coro(
             get_thoughts_by_test_result_async,
             test_result_id,
@@ -1232,6 +1413,9 @@ async def get_psychologist_thoughts_stats_async(user_id: int) -> Dict[str, Any]:
 def get_psychologist_thoughts_stats(user_id: int) -> Dict[str, Any]:
     """Синхронная обертка"""
     try:
+        if not db_loop_manager.is_ready():
+            return {}
+        
         result = db_loop_manager.run_coro(
             get_psychologist_thoughts_stats_async,
             user_id,
@@ -1345,6 +1529,9 @@ async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
 def save_test_result_to_db(user_id, test_type, user_data_dict=None):
     """Синхронная обертка"""
     try:
+        if not db_loop_manager.is_ready():
+            return None
+        
         result = db_loop_manager.run_coro(
             save_test_result_to_db_async,
             user_id,
@@ -1481,6 +1668,9 @@ def save_test_result_to_db_full(
 ) -> Optional[int]:
     """Синхронная обертка"""
     try:
+        if not db_loop_manager.is_ready():
+            return None
+        
         result = db_loop_manager.run_coro(
             save_test_result_full_async,
             user_id,
@@ -1512,6 +1702,7 @@ __all__ = [
     'save_telegram_user',
     'save_user',
     'save_user_to_db',
+    'load_user_from_db',
     'save_test_result_to_db',
     'save_test_result_to_db_full',
     'log_event',
@@ -1534,4 +1725,4 @@ __all__ = [
     'get_psychologist_thoughts_stats',
 ]
 
-logger.info("✅ db_instance инициализирован (версия 3.8)")
+logger.info("✅ db_instance инициализирован (версия 3.9 - добавлена load_user_from_db, исправлен пул)")
