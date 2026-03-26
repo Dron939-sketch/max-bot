@@ -297,7 +297,7 @@ def handle_help_category(call: CallbackQuery, category: str):
     base_text += f"\n\n👇 <b>Напишите своим текстом:</b>"
     
     keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton("◀️ Назад", callback_data="show_help"))
+    keyboard.row(InlineKeyboardButton("◀️ Назад", callback_data="back_to_help"))
     
     safe_send_message(
         call.message,
