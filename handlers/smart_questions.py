@@ -2,10 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 Модуль для умных вопросов на основе профиля пользователя
-Версия 1.2 - ИСПРАВЛЕНА ОБРАБОТКА ВОПРОСОВ, HTML ФОРМАТИРОВАНИЕ
+Версия 1.3 - ИСПРАВЛЕНО ДУБЛИРОВАНИЕ, ОЧИСТКА ДЛЯ ГОЛОСА
 """
 
 import logging
+import re
 import asyncio
 from typing import Dict, Any, List
 
@@ -22,6 +23,27 @@ from handlers.voice import send_voice_to_max
 from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
+
+
+def clean_text_for_tts(text: str) -> str:
+    """Очищает текст от Markdown и HTML для озвучивания"""
+    if not text:
+        return ""
+    
+    # Удаляем Markdown
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)  # **жирный** → жирный
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)      # *курсив* → курсив
+    text = re.sub(r'__([^_]+)__', r'\1', text)      # __подчеркнутый__ → подчеркнутый
+    text = re.sub(r'_([^_]+)_', r'\1', text)        # _курсив_ → курсив
+    text = re.sub(r'`([^`]+)`', r'\1', text)        # `код` → код
+    
+    # Удаляем HTML
+    text = re.sub(r'<[^>]+>', '', text)
+    
+    # Удаляем лишние пробелы
+    text = re.sub(r'\s+', ' ', text)
+    
+    return text.strip()
 
 
 def generate_smart_questions(scores: Dict[str, float]) -> List[str]:
@@ -110,8 +132,8 @@ async def show_smart_questions(
     
     # Проверяем, завершён ли тест
     if not is_test_completed_check_func(user_id):
-        text = f"""
-🧠 <b>ФРЕДИ: СНАЧАЛА ПРОЙДИ ТЕСТ</b>
+        text = """
+🧠 ФРЕДИ: СНАЧАЛА ПРОЙДИ ТЕСТ
 
 Чтобы я мог задавать точные вопросы, нужно знать твой профиль.
 
@@ -121,7 +143,7 @@ async def show_smart_questions(
         keyboard.row(InlineKeyboardButton("🚀 ПРОЙТИ ТЕСТ", callback_data="show_stage_1_intro"))
         keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="main_menu"))
         
-        safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+        safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
         return
     
     # Получаем scores
@@ -136,10 +158,10 @@ async def show_smart_questions(
     mode = context_obj.communication_mode if context_obj else "coach"
     mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
     
-    header = f"{mode_config['emoji']} <b>РЕЖИМ {mode_config['display_name']}</b>\n\n"
+    header = f"{mode_config['emoji']} РЕЖИМ {mode_config['display_name']}\n\n"
     header += mode_config.get("greeting", "Задайте ваш вопрос.") + "\n\n"
     
-    text = header + "👇 <b>Выберите вопрос или напишите свой:</b>"
+    text = header + "👇 Выберите вопрос или напишите свой:"
     
     keyboard = InlineKeyboardMarkup()
     
@@ -150,7 +172,7 @@ async def show_smart_questions(
     keyboard.row(InlineKeyboardButton("✏️ НАПИСАТЬ СВОЙ ВОПРОС", callback_data="ask_question"))
     keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="show_results"))
     
-    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
+    safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
 
 
 async def handle_smart_question(
@@ -161,6 +183,7 @@ async def handle_smart_question(
 ):
     """
     Обрабатывает выбранный умный вопрос
+    ✅ ИСПРАВЛЕНО: нет дублирования, очистка для голоса
     """
     data = get_state_data(user_id)
     questions = data.get("smart_questions", [])
@@ -171,10 +194,11 @@ async def handle_smart_question(
     
     question = questions[question_num - 1]
     
+    # Отправляем статус
     status_msg = safe_send_message(
         call.message,
-        "🤔 Думаю над ответом...\n\nЭто займёт около 10-15 секунд",
-        parse_mode='HTML',
+        "🤔 Думаю над ответом... Это займёт около 10-15 секунд",
+        parse_mode=None,
         delete_previous=True
     )
     
@@ -191,7 +215,7 @@ async def handle_smart_question(
     perception_type = user_data_dict.get("perception_type", "не определен")
     thinking_level = user_data_dict.get("thinking_level", 5)
     
-    # Формируем промпт
+    # Формируем промпт БЕЗ форматирования (для голоса)
     prompt = f"""
 Вопрос пользователя: {question}
 
@@ -203,11 +227,12 @@ async def handle_smart_question(
 
 Ответь пользователю в соответствии с твоей ролью ({mode_config['name']}).
 Используй живой, разговорный язык.
-Используй HTML теги для форматирования: <b>жирный</b>, <i>курсив</i>.
+НЕ используй Markdown (**, __, и т.д.) и НЕ используй HTML теги.
+НЕ используй эмодзи.
 Длина ответа: 3-5 предложений для простых вопросов.
 """
     
-    # Вызываем DeepSeek (асинхронно)
+    # Вызываем DeepSeek
     response = await call_deepseek(
         prompt=prompt,
         system_prompt=system_prompt,
@@ -226,8 +251,10 @@ async def handle_smart_question(
     # Сохраняем в БД
     sync_db.save_user_to_db(user_id)
     
+    # Очищаем ответ для безопасного отображения
     clean_response = clean_text_for_safe_display(response)
     
+    # Клавиатура
     keyboard = InlineKeyboardMarkup()
     keyboard.row(
         InlineKeyboardButton("❓ ЕЩЁ ВОПРОС", callback_data="smart_questions"),
@@ -235,23 +262,28 @@ async def handle_smart_question(
     )
     keyboard.row(InlineKeyboardButton("🎯 ЧЕМ ПОМОЧЬ", callback_data="show_help"))
     
+    # Удаляем статусное сообщение
     if status_msg:
         try:
             safe_delete_message(call.message.chat.id, status_msg.message_id)
         except:
             pass
     
+    # ✅ Отправляем ответ БЕЗ форматирования (только текст)
     safe_send_message(
         call.message,
-        f"❓ <b>{question}</b>\n\n{clean_response}",
+        f"❓ {question}\n\n{clean_response}",
         reply_markup=keyboard,
-        parse_mode='HTML',
+        parse_mode=None,  # Без форматирования
         delete_previous=True
     )
     
-    # Отправляем голосовой ответ
+    # ✅ Отправляем голосовой ответ (очищенный от символов)
     try:
-        audio_data = await text_to_speech(response, mode_name)
+        # Очищаем текст для озвучивания
+        clean_for_voice = clean_text_for_tts(response)
+        
+        audio_data = await text_to_speech(clean_for_voice, mode_name)
         if audio_data:
             success = send_voice_to_max(call.message.chat.id, audio_data)
             if success:
