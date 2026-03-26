@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики сбора контекста (город, возраст, пол) для MAX
-ВЕРСИЯ 2.4 - ИСПРАВЛЕНО ЗАВИСАНИЕ НА ВОЗРАСТЕ И ДУБЛИРОВАНИЕ
+ВЕРСИЯ 2.5 - ДОБАВЛЕНА ДИАГНОСТИКА ЗАВИСАНИЙ
 """
 
 import logging
@@ -100,6 +100,8 @@ def start_context(message: Message):
     user_id = message.chat.id
     lock = _get_user_lock(user_id)
     
+    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] start_context ВЫЗВАН для user {user_id}")
+    
     # Персональная блокировка
     if not lock.acquire(blocking=False):
         logger.info(f"⚠️ start_context уже выполняется для user {user_id}, пропускаем")
@@ -110,6 +112,8 @@ def start_context(message: Message):
         
         # Проверяем состояние
         current_state = user_states.get(user_id)
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Текущее состояние user {user_id}: {current_state}")
+        
         if current_state == TestStates.awaiting_context:
             logger.info(f"⚠️ Сбор контекста уже начат для user {user_id}, пропускаем")
             return
@@ -133,12 +137,12 @@ def start_context(message: Message):
         context.awaiting_context = None
         
         # Получаем первый вопрос
-        logger.info(f"❓ Получаем первый вопрос от ask_for_context()")
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Вызываем context.ask_for_context()...")
         question, keyboard = context.ask_for_context()
-        logger.info(f"📋 Первый вопрос: '{question}', клавиатура: {keyboard is not None}")
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Первый вопрос: '{question}'")
         
         if question:
-            logger.info(f"📤 Отправляем вопрос о городе...")
+            logger.info(f"📤 Отправляем вопрос: {question}")
             
             # Удаляем предыдущее сообщение
             try:
@@ -153,17 +157,18 @@ def start_context(message: Message):
                 parse_mode='Markdown',
                 delete_previous=True
             )
-            logger.info(f"✅ Вопрос о городе отправлен, устанавливаем состояние awaiting_context")
             
             # Устанавливаем состояние
             set_state(user_id, TestStates.awaiting_context)
-            logger.info(f"📊 Состояние пользователя {user_id} установлено на {TestStates.awaiting_context}")
+            logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Состояние установлено: {TestStates.awaiting_context}")
         else:
             logger.info(f"⚠️ Вопросов нет, показываем завершение")
             show_context_complete(message, context)
             
     finally:
         lock.release()
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] start_context завершен для user {user_id}")
+
 
 # ============================================
 # ОБРАБОТЧИКИ CALLBACK'ОВ ДЛЯ КОНТЕКСТА
@@ -172,18 +177,17 @@ def start_context(message: Message):
 def handle_context_callback(call: CallbackQuery):
     """
     Единый обработчик для всех callback'ов контекста (пол, возраст, пропуск)
-    ✅ ИСПРАВЛЕНО: отвечаем на callback сразу, предотвращаем дублирование
     """
     user_id = call.from_user.id
     data = call.data
     
-    # ✅ Сразу отвечаем на callback, чтобы предотвратить повторные вызовы
+    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] handle_context_callback ВЫЗВАН: {data} для user {user_id}")
+    
+    # Сразу отвечаем на callback, чтобы предотвратить повторные вызовы
     try:
         call.answer("✅", show_alert=False)
     except Exception as e:
         logger.warning(f"⚠️ Не удалось ответить на callback: {e}")
-    
-    logger.info(f"🔔 handle_context_callback: {data} для пользователя {user_id}")
     
     # Получаем контекст
     context = get_user_context(user_id)
@@ -201,6 +205,7 @@ def handle_context_callback(call: CallbackQuery):
         
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] После пола следующий вопрос: '{question}'")
         
         if question:
             safe_send_message(
@@ -220,6 +225,7 @@ def handle_context_callback(call: CallbackQuery):
         context.awaiting_context = None
         
         question, keyboard = context.ask_for_context()
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] После пола следующий вопрос: '{question}'")
         
         if question:
             safe_send_message(
@@ -239,6 +245,7 @@ def handle_context_callback(call: CallbackQuery):
         context.awaiting_context = None
         
         question, keyboard = context.ask_for_context()
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] После пола следующий вопрос: '{question}'")
         
         if question:
             safe_send_message(
@@ -274,15 +281,12 @@ def handle_context_callback(call: CallbackQuery):
         logger.warning(f"⚠️ Неизвестный callback в handle_context_callback: {data}")
 
 def set_gender_male(call: CallbackQuery):
-    """Устанавливает пол: мужской (для обратной совместимости)"""
     handle_context_callback(call)
 
 def set_gender_female(call: CallbackQuery):
-    """Устанавливает пол: женский (для обратной совместимости)"""
     handle_context_callback(call)
 
 def skip_context(call: CallbackQuery):
-    """Пропускает сбор контекста (для обратной совместимости)"""
     handle_context_callback(call)
 
 # ============================================
@@ -293,9 +297,14 @@ def handle_context_message(message: Message) -> bool:
     """
     Обрабатывает ответы на контекстные вопросы
     Возвращает True, если сообщение было обработано как контекстное
-    ✅ ИСПРАВЛЕНО: предотвращаем повторную обработку и зависание на возрасте
     """
     user_id = message.from_user.id
+    
+    # КРИТИЧЕСКИЙ ЛОГ ДЛЯ ОТЛАДКИ
+    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] handle_context_message ВЫЗВАН для user {user_id}")
+    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Текст сообщения: '{message.text}'")
+    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Текущее состояние: {get_state(user_id)}")
+    
     lock = _get_user_lock(user_id)
     
     # Проверяем, не обрабатывается ли уже сообщение
@@ -304,18 +313,13 @@ def handle_context_message(message: Message) -> bool:
         return False
     
     try:
-        logger.info(f"📥 handle_context_message вызван для user {user_id}, текст: {message.text}")
-        
-        current_state = get_state(user_id)
-        logger.info(f"📊 Текущее состояние из get_state: {current_state}")
-        
         context = get_user_context(user_id)
         
         if not context:
             logger.warning(f"❌ Контекст не найден для user {user_id}")
             return False
         
-        logger.info(f"📊 context.awaiting_context = {context.awaiting_context}")
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] context.awaiting_context = {context.awaiting_context}")
         
         if not context.awaiting_context:
             logger.info(f"⏭️ Не ожидается контекст, выходим")
@@ -347,7 +351,7 @@ def handle_context_message(message: Message) -> bool:
                     logger.info(f"✅ Часовой пояс определен")
                     
                     question, keyboard = context.ask_for_context()
-                    logger.info(f"📋 Следующий вопрос: '{question}'")
+                    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] После города следующий вопрос: '{question}'")
                     
                     if question:
                         safe_send_message(
@@ -379,31 +383,25 @@ def handle_context_message(message: Message) -> bool:
         
         elif context.awaiting_context == "age":
             # ========== ОБРАБОТКА ВОЗРАСТА ==========
-            logger.info(f"📅 [AGE] Начинаем обработку возраста для user {user_id}")
-            logger.info(f"📅 [AGE] Получен текст: '{text}'")
+            logger.error(f"🔥🔥🔥 [DIAGNOSTIC] НАЧАЛО ОБРАБОТКИ ВОЗРАСТА для user {user_id}")
+            logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Получен возраст: '{text}'")
             
             try:
                 age = int(text)
-                logger.info(f"📅 [AGE] Преобразовано в число: {age}")
+                logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Возраст преобразован в число: {age}")
                 
                 if 1 <= age <= 120:
-                    logger.info(f"✅ [AGE] Возраст корректен: {age}")
+                    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Возраст корректен, сохраняем...")
                     
-                    # Сохраняем возраст
                     context.age = age
-                    logger.info(f"✅ [AGE] Возраст сохранен в context.age = {context.age}")
-                    
-                    # Сбрасываем состояние ожидания
                     context.awaiting_context = None
-                    logger.info(f"✅ [AGE] context.awaiting_context сброшен в None")
                     
-                    # Получаем следующий вопрос
-                    logger.info(f"❓ [AGE] Вызываем context.ask_for_context()...")
+                    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Возраст сохранен, вызываем ask_for_context...")
                     question, keyboard = context.ask_for_context()
-                    logger.info(f"📋 [AGE] ask_for_context вернул: question='{question}'")
+                    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] После возраста следующий вопрос: '{question}'")
                     
                     if question:
-                        logger.info(f"📤 [AGE] Есть следующий вопрос, отправляем...")
+                        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Отправляем следующий вопрос...")
                         safe_send_message(
                             message,
                             f"📝 **Давайте познакомимся**\n\n{question}",
@@ -411,9 +409,9 @@ def handle_context_message(message: Message) -> bool:
                             parse_mode='Markdown',
                             delete_previous=True
                         )
-                        logger.info(f"✅ [AGE] Вопрос отправлен")
+                        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Вопрос отправлен")
                     else:
-                        logger.info(f"🎉 [AGE] Вопросов больше нет, вызываем show_context_complete")
+                        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Вопросов больше нет, вызываем show_context_complete")
                         show_context_complete(message, context)
                 else:
                     logger.warning(f"⚠️ [AGE] Возраст вне диапазона: {age}")
@@ -451,7 +449,7 @@ def handle_context_message(message: Message) -> bool:
             
             logger.info(f"❓ Получаем следующий вопрос после пола...")
             question, keyboard = context.ask_for_context()
-            logger.info(f"📋 Следующий вопрос: '{question}'")
+            logger.error(f"🔥🔥🔥 [DIAGNOSTIC] После пола следующий вопрос: '{question}'")
             
             if question:
                 logger.info(f"📤 Отправляем следующий вопрос...")
@@ -473,7 +471,7 @@ def handle_context_message(message: Message) -> bool:
         
     finally:
         lock.release()
-        logger.info(f"🔓 Блокировка снята для user {user_id}")
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] handle_context_message завершен для user {user_id}")
 
 # ============================================
 # ЗАВЕРШЕНИЕ СБОРА КОНТЕКСТА
@@ -482,10 +480,11 @@ def handle_context_message(message: Message) -> bool:
 def show_context_complete(message: Message, context: UserContext):
     """
     Показывает итоговый экран после сбора контекста
-    ✅ ИСПРАВЛЕНО: проверяем, не было ли уже показано
     """
     user_id = message.chat.id
     lock = _get_user_lock(user_id)
+    
+    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] show_context_complete ВЫЗВАН для user {user_id}")
     
     # Проверяем, не показывается ли уже итоговый экран
     if not lock.acquire(blocking=False):
@@ -493,7 +492,7 @@ def show_context_complete(message: Message, context: UserContext):
         return
     
     try:
-        # ✅ Проверяем, не был ли уже завершен контекст
+        # Проверяем, не был ли уже завершен контекст
         if _is_context_completed(user_id):
             logger.info(f"⚠️ Контекст уже был завершен для user {user_id}, пропускаем")
             return
@@ -551,6 +550,8 @@ def show_context_complete(message: Message, context: UserContext):
         traceback.print_exc()
     finally:
         lock.release()
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] show_context_complete завершен для user {user_id}")
+
 
 # ============================================
 # ПРИНУДИТЕЛЬНЫЙ СБОР КОНТЕКСТА (КОМАНДА)
