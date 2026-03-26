@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 Модуль для форматирования текста для МАКС
-Использует Markdown-форматирование (**жирный**, *курсив*)
+Использует HTML-форматирование (<b>жирный</b>, <i>курсив</i>)
 
-ВЕРСИЯ 2.4 - ПРИНУДИТЕЛЬНАЯ ОЧИСТКА ВСЕХ СООБЩЕНИЙ
+ВЕРСИЯ 3.0 - ПЕРЕВОД НА HTML ФОРМАТИРОВАНИЕ
 """
 
 import re
@@ -12,17 +12,17 @@ from typing import List
 
 
 def bold(text: str) -> str:
-    """Жирный текст для МАКС (Markdown)"""
+    """Жирный текст для МАКС (HTML)"""
     if not text:
         return ""
-    return f"**{text}**"
+    return f"<b>{text}</b>"
 
 
 def italic(text: str) -> str:
-    """Курсив для МАКС (Markdown)"""
+    """Курсив для МАКС (HTML)"""
     if not text:
         return ""
-    return f"*{text}*"
+    return f"<i>{text}</i>"
 
 
 def emoji_text(emoji: str, text: str, bold_text: bool = True) -> str:
@@ -57,12 +57,12 @@ def calculate_progress(current: int, total: int) -> str:
 
 
 def clean_text_for_safe_display(text: str) -> str:
-    """Очищает текст от лишних символов, сохраняя Markdown-форматирование"""
+    """Очищает текст от лишних символов, сохраняя HTML-форматирование"""
     if not text:
         return text
     
-    # Удаляем HTML-теги (они не работают в МАКС)
-    text = re.sub(r'<[^>]+>', '', text)
+    # Удаляем HTML-теги? НЕТ — оставляем, они нужны
+    # text = re.sub(r'<[^>]+>', '', text)  # ← НЕ УДАЛЯТЬ!
     
     # Удаляем множественные переводы строк
     text = re.sub(r'\n{3,}', '\n\n', text)
@@ -217,16 +217,16 @@ def format_profile_text(text: str) -> str:
     if not text:
         return text
     
-    # Очищаем от HTML
-    text = re.sub(r'<[^>]+>', '', text)
+    # Очищаем от HTML? НЕТ — оставляем
+    # text = re.sub(r'<[^>]+>', '', text)
     
-    # Карта замены заголовков с эмодзи
+    # Карта замены заголовков с эмодзи (HTML формат)
     header_map = [
-        (r'БЛОК\s*1:?\s*', '🔑 **КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА**'),
-        (r'БЛОК\s*2:?\s*', '💪 **СИЛЬНЫЕ СТОРОНЫ**'),
-        (r'БЛОК\s*3:?\s*', '🎯 **ЗОНЫ РОСТА**'),
-        (r'БЛОК\s*4:?\s*', '🌱 **КАК ЭТО СФОРМИРОВАЛОСЬ**'),
-        (r'БЛОК\s*5:?\s*', '⚠️ **ГЛАВНАЯ ЛОВУШКА**'),
+        (r'БЛОК\s*1:?\s*', '🔑 <b>КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА</b>'),
+        (r'БЛОК\s*2:?\s*', '💪 <b>СИЛЬНЫЕ СТОРОНЫ</b>'),
+        (r'БЛОК\s*3:?\s*', '🎯 <b>ЗОНЫ РОСТА</b>'),
+        (r'БЛОК\s*4:?\s*', '🌱 <b>КАК ЭТО СФОРМИРОВАЛОСЬ</b>'),
+        (r'БЛОК\s*5:?\s*', '⚠️ <b>ГЛАВНАЯ ЛОВУШКА</b>'),
     ]
     
     # Заменяем "БЛОК X:" на правильные заголовки
@@ -235,8 +235,8 @@ def format_profile_text(text: str) -> str:
     
     # Убираем дублирование заголовков
     for _, header in header_map:
-        # Убираем дубли: заголовок + такой же заголовок (без **)
-        clean_header = header.replace('**', '')
+        # Убираем дубли: заголовок + такой же заголовок (без тегов)
+        clean_header = re.sub(r'<[^>]+>', '', header)
         pattern = rf'({re.escape(header)})\s*\n\s*{re.escape(clean_header)}'
         text = re.sub(pattern, r'\1', text, flags=re.IGNORECASE)
     
@@ -250,10 +250,9 @@ def format_profile_text(text: str) -> str:
     ]
     
     for section in sections:
-        # Ищем заголовок с эмодзи и жирным
-        pattern = rf'(🔑|💪|🎯|🌱|⚠️)\s+\*\*{re.escape(section)}\*\*'
+        # Ищем заголовок с эмодзи и жирным (HTML)
+        pattern = rf'(🔑|💪|🎯|🌱|⚠️)\s+<b>{re.escape(section)}</b>'
         
-        # Добавляем пустую строку перед заголовком, если её нет
         def add_newline_before(match):
             return f"\n\n{match.group(0)}"
         
@@ -276,8 +275,8 @@ def format_psychologist_text(text: str, user_name: str = "") -> str:
     if not text:
         return text
     
-    # Очищаем от HTML
-    text = re.sub(r'<[^>]+>', '', text)
+    # Очищаем от HTML? НЕТ — оставляем
+    # text = re.sub(r'<[^>]+>', '', text)
     
     # Убираем нумерацию
     text = re.sub(r'###\s*\d+\.?\s*', '', text)
@@ -295,12 +294,12 @@ def format_psychologist_text(text: str, user_name: str = "") -> str:
     text = re.sub(r'🚪\s*🚪', '🚪', text)
     text = re.sub(r'📊\s*📊', '📊', text)
     
-    # Карта замены заголовков
+    # Карта замены заголовков (HTML формат)
     header_map = [
-        (r'🔐\s*КЛЮЧЕВОЙ\s*ЭЛЕМЕНТ', '🔐 **КЛЮЧЕВОЙ ЭЛЕМЕНТ**'),
-        (r'🔄\s*ПЕТЛЯ', '🔄 **ПЕТЛЯ**'),
-        (r'🚪\s*ТОЧКА\s*ВХОДА', '🚪 **ТОЧКА ВХОДА**'),
-        (r'📊\s*ПРОГНОЗ', '📊 **ПРОГНОЗ**'),
+        (r'🔐\s*КЛЮЧЕВОЙ\s*ЭЛЕМЕНТ', '🔐 <b>КЛЮЧЕВОЙ ЭЛЕМЕНТ</b>'),
+        (r'🔄\s*ПЕТЛЯ', '🔄 <b>ПЕТЛЯ</b>'),
+        (r'🚪\s*ТОЧКА\s*ВХОДА', '🚪 <b>ТОЧКА ВХОДА</b>'),
+        (r'📊\s*ПРОГНОЗ', '📊 <b>ПРОГНОЗ</b>'),
     ]
     
     # Применяем форматирование к заголовкам
@@ -316,7 +315,7 @@ def format_psychologist_text(text: str, user_name: str = "") -> str:
     ]
     
     for section in sections:
-        pattern = rf'(🔐|🔄|🚪|📊)\s+\*\*{re.escape(section)}\*\*'
+        pattern = rf'(🔐|🔄|🚪|📊)\s+<b>{re.escape(section)}</b>'
         
         def add_newline_before(match):
             return f"\n\n{match.group(0)}"
@@ -353,6 +352,7 @@ def html_to_markdown(text: str) -> str:
     Преобразует HTML-форматирование в Markdown для МАКС
     <b>текст</b> -> **текст**
     <i>текст</i> -> *текст*
+    (Оставлена для обратной совместимости)
     """
     if not text:
         return text
