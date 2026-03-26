@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Модуль для умных вопросов на основе профиля пользователя
-Версия 1.0 - вынесено из handlers/questions.py
+Версия 1.1 - исправлена обработка вопросов
 """
 
 import logging
@@ -13,11 +13,11 @@ from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 
 from config import COMMUNICATION_MODES
 from message_utils import safe_send_message, safe_delete_message
-from formatters import clean_text_for_safe_display
-from state import get_state_data, update_state_data
+from formatters import clean_text_for_safe_display, bold
+from state import get_state_data, update_state_data, user_data as global_user_data, user_contexts
 from confinement_model import level
 from profiles import VECTORS
-from services import text_to_speech
+from services import call_deepseek, text_to_speech
 from handlers.voice import send_voice_to_max
 from db_sync import sync_db
 
@@ -99,14 +99,17 @@ def generate_smart_questions(scores: Dict[str, float]) -> List[str]:
 async def show_smart_questions(
     call: CallbackQuery,
     user_id: int,
-    user_data_dict: Dict[str, Any],
     context_obj,
     is_test_completed_check_func
 ):
     """
     Показывает умные вопросы на основе профиля
     """
-    if not is_test_completed_check_func(user_data_dict):
+    # Получаем данные пользователя
+    user_data_dict = global_user_data.get(user_id, {})
+    
+    # Проверяем, завершён ли тест
+    if not is_test_completed_check_func(user_id):
         text = f"""
 🧠 **ФРЕДИ: СНАЧАЛА ПРОЙДИ ТЕСТ**
 
@@ -121,6 +124,7 @@ async def show_smart_questions(
         safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
         return
     
+    # Получаем scores
     scores = {}
     for k in VECTORS:
         levels = user_data_dict.get("behavioral_levels", {}).get(k, [])
@@ -132,17 +136,8 @@ async def show_smart_questions(
     mode = context_obj.communication_mode if context_obj else "coach"
     mode_config = COMMUNICATION_MODES.get(mode, COMMUNICATION_MODES["coach"])
     
-    if mode == "coach":
-        header = f"{mode_config['emoji']} **ЗАДАЙТЕ ВОПРОС (КОУЧ)**\n\n"
-        header += "Я буду задавать открытые вопросы, помогая вам найти ответы внутри себя.\n\n"
-    elif mode == "psychologist":
-        header = f"{mode_config['emoji']} **РАССКАЖИТЕ МНЕ (ПСИХОЛОГ)**\n\n"
-        header += "Я здесь, чтобы помочь исследовать глубинные паттерны.\n\n"
-    elif mode == "trainer":
-        header = f"{mode_config['emoji']} **ПОСТАВЬТЕ ЗАДАЧУ (ТРЕНЕР)**\n\n"
-        header += "Чётко сформулируйте, что хотите решить. Я дам конкретные шаги.\n\n"
-    else:
-        header = f"❓ **ЗАДАЙТЕ ВОПРОС**\n\n"
+    header = f"{mode_config['emoji']} {bold(f'РЕЖИМ {mode_config["display_name"]}')}\n\n"
+    header += mode_config.get("greeting", "Задайте ваш вопрос.") + "\n\n"
     
     text = header + "👇 **Выберите вопрос или напишите свой:**"
     
@@ -150,22 +145,9 @@ async def show_smart_questions(
     
     for i, q in enumerate(questions, 1):
         q_short = q[:40] + "..." if len(q) > 40 else q
-        keyboard.add(InlineKeyboardButton(text=f"{q_short}", callback_data=f"ask_{i}"))
+        keyboard.add(InlineKeyboardButton(text=f"{i}. {q_short}", callback_data=f"smart_ask_{i}"))
     
-    keyboard.row(
-        InlineKeyboardButton("🗣 Отношения", callback_data="help_cat_relations"),
-        InlineKeyboardButton("💰 Деньги", callback_data="help_cat_money")
-    )
-    keyboard.row(
-        InlineKeyboardButton("🧠 Самоощущение", callback_data="help_cat_self"),
-        InlineKeyboardButton("📚 Знания", callback_data="help_cat_knowledge")
-    )
-    keyboard.row(
-        InlineKeyboardButton("💪 Поддержка", callback_data="help_cat_support"),
-        InlineKeyboardButton("🎨 Муза", callback_data="help_cat_muse")
-    )
-    keyboard.row(InlineKeyboardButton("🍏 Забота о себе", callback_data="help_cat_care"))
-    keyboard.row(InlineKeyboardButton("✏️ Написать самому", callback_data="ask_question"))
+    keyboard.row(InlineKeyboardButton("✏️ НАПИСАТЬ СВОЙ ВОПРОС", callback_data="ask_question"))
     keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="show_results"))
     
     safe_send_message(call.message, text, reply_markup=keyboard, parse_mode=None, delete_previous=True)
@@ -175,9 +157,7 @@ async def handle_smart_question(
     call: CallbackQuery,
     question_num: int,
     user_id: int,
-    user_data_dict: Dict[str, Any],
-    context_obj,
-    get_mode_func
+    context_obj
 ):
     """
     Обрабатывает выбранный умный вопрос
@@ -198,30 +178,68 @@ async def handle_smart_question(
         delete_previous=True
     )
     
+    # Получаем данные пользователя
+    user_data_dict = global_user_data.get(user_id, {})
     mode_name = context_obj.communication_mode if context_obj else "coach"
-    mode = get_mode_func(mode_name, user_id, user_data_dict, context_obj)
     
-    result = mode.process_question(question)
-    response = result["response"]
+    # Получаем system_prompt из конфига
+    mode_config = COMMUNICATION_MODES.get(mode_name, COMMUNICATION_MODES["coach"])
+    system_prompt = mode_config.get("system_prompt", "")
     
-    if "history" not in user_data_dict:
-        user_data_dict["history"] = []
-    user_data_dict["history"] = mode.history
+    # Получаем профиль
+    profile_code = user_data_dict.get("profile_data", {}).get("display_name", "не определен")
+    perception_type = user_data_dict.get("perception_type", "не определен")
+    thinking_level = user_data_dict.get("thinking_level", 5)
     
+    # Формируем промпт
+    prompt = f"""
+Вопрос пользователя: {question}
+
+Информация о пользователе:
+Профиль: {profile_code}
+Тип восприятия: {perception_type}
+Уровень мышления: {thinking_level}/9
+Режим: {mode_name}
+
+Ответь пользователю в соответствии с твоей ролью ({mode_config['name']}).
+Используй живой, разговорный язык.
+Не используй Markdown (**, __, и т.д.).
+Используй эмодзи для эмоциональной окраски.
+Длина ответа: 3-5 предложений для простых вопросов.
+"""
+    
+    # Вызываем DeepSeek
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        response = loop.run_until_complete(call_deepseek(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            max_tokens=1000
+        ))
+    finally:
+        loop.close()
+    
+    if not response:
+        response = "Извините, я немного задумался. Можете повторить вопрос?"
+    
+    # Сохраняем в историю
+    history = user_data_dict.get('history', [])
+    history.append({"role": "user", "content": question})
+    history.append({"role": "assistant", "content": response})
+    user_data_dict["history"] = history
+    
+    # Сохраняем в БД
     sync_db.save_user_to_db(user_id)
     
     clean_response = clean_text_for_safe_display(response)
     
     keyboard = InlineKeyboardMarkup()
     keyboard.row(
-        InlineKeyboardButton("❓ Ещё вопрос", callback_data="smart_questions"),
+        InlineKeyboardButton("❓ ЕЩЁ ВОПРОС", callback_data="smart_questions"),
         InlineKeyboardButton("🧠 К ПОРТРЕТУ", callback_data="show_results")
     )
     keyboard.row(InlineKeyboardButton("🎯 ЧЕМ ПОМОЧЬ", callback_data="show_help"))
-    
-    suggestions_text = ""
-    if result.get("suggestions"):
-        suggestions_text = "\n\n" + "\n".join(result["suggestions"])
     
     if status_msg:
         try:
@@ -231,22 +249,34 @@ async def handle_smart_question(
     
     safe_send_message(
         call.message,
-        f"❓ **{question}**\n\n{clean_response}{suggestions_text}",
+        f"❓ **{question}**\n\n{clean_response}",
         reply_markup=keyboard,
         parse_mode=None,
         delete_previous=True
     )
     
+    # Отправляем голосовой ответ
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
             audio_data = loop.run_until_complete(text_to_speech(response, mode_name))
             if audio_data:
-                success = loop.run_until_complete(send_voice_to_max(call.message.chat.id, audio_data))
+                success = send_voice_to_max(call.message.chat.id, audio_data)
                 if success:
                     logger.info(f"🎙 Голосовой ответ отправлен пользователю {user_id}")
         finally:
             loop.close()
     except Exception as e:
         logger.error(f"❌ Ошибка при отправке голоса: {e}")
+
+
+# ============================================
+# ЭКСПОРТ
+# ============================================
+
+__all__ = [
+    'generate_smart_questions',
+    'show_smart_questions',
+    'handle_smart_question'
+]
