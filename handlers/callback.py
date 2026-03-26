@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчик всех callback-запросов для MAX
-Версия 2.9 - ДОБАВЛЕНА ОБРАБОТКА smart_ask_*
+Версия 3.0 - ДОБАВЛЕНА ОБРАБОТКА help_cat_* И back_to_help
 """
 
 import logging
@@ -74,7 +74,7 @@ from handlers.questions import (
 )
 
 # Импорты обработчиков помощи
-from handlers.help import show_help, show_benefits, show_weekend_ideas
+from handlers.help import show_help, show_benefits, show_weekend_ideas, handle_help_category
 from handlers.tales import show_tale
 
 # Импорты обработчиков профиля
@@ -526,6 +526,12 @@ async def handle_sync_callback(call: CallbackQuery):
         logger.info(f"📖 show_benefits для пользователя {user_id}")
         show_benefits(call)
     
+    # ✅ ДОБАВЛЕНА ОБРАБОТКА КАТЕГОРИЙ ПОМОЩИ
+    elif data.startswith("help_cat_"):
+        logger.info(f"❓ help_cat: {data} для пользователя {user_id}")
+        category = data.replace("help_cat_", "")
+        handle_help_category(call, category)
+    
     elif data == "show_tale" or data == "ask_tale":
         logger.info(f"📚 show_tale для пользователя {user_id}")
         show_tale(call)
@@ -545,7 +551,6 @@ async def handle_sync_callback(call: CallbackQuery):
         
         await show_smart_questions(call, user_id, context_obj, check_test_completed)
     
-    # ✅ ДОБАВЛЕНА ОБРАБОТКА smart_ask_*
     elif data.startswith("smart_ask_"):
         logger.info(f"🤔 smart_ask: {data} для пользователя {user_id}")
         try:
@@ -646,6 +651,11 @@ async def handle_sync_callback(call: CallbackQuery):
     elif data == "back_to_results":
         logger.info(f"◀️ back_to_results для пользователя {user_id}")
         show_profile(call.message, user_id)
+    
+    # ✅ ДОБАВЛЕН ВОЗВРАТ В МЕНЮ ПОМОЩИ
+    elif data == "back_to_help":
+        logger.info(f"◀️ back_to_help для пользователя {user_id}")
+        show_help(call)
     
     elif data == "back_to_intro":
         logger.info(f"◀️ back_to_intro для пользователя {user_id}")
