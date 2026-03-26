@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ 3.9 - ИСПРАВЛЕНА ПРОБЛЕМА С ЗАКРЫТЫМ ПУЛОМ
+ВЕРСИЯ 3.10 - ИСПРАВЛЕНА ПРОБЛЕМА С АСИНХРОННЫМ ВЫЗОВОМ В save_psychologist_thought_async
 """
 
 import os
@@ -134,7 +134,8 @@ class DBLoopManager:
                 self.loop.is_running() and 
                 not self._shutting_down and
                 self._db_instance is not None and
-                self._db_instance.pool is not None)
+                self._db_instance.pool is not None and
+                not self._db_instance.pool._closed)
     
     def run_coro(self, coro_func: Callable[..., Awaitable], *args, timeout: int = 45, **kwargs):
         """
@@ -170,7 +171,7 @@ class DBLoopManager:
         async def _wrapped():
             try:
                 # Проверяем пул перед выполнением
-                if self._db_instance and self._db_instance.pool is None:
+                if self._db_instance and (self._db_instance.pool is None or self._db_instance.pool._closed):
                     logger.warning("⚠️ Пул закрыт, пробуем переподключиться")
                     await self._db_instance.connect()
                 
@@ -214,7 +215,7 @@ class DBLoopManager:
         
         async def _wrapped():
             try:
-                if self._db_instance and self._db_instance.pool is None:
+                if self._db_instance and (self._db_instance.pool is None or self._db_instance.pool._closed):
                     await self._db_instance.connect()
                 
                 if is_coro:
@@ -424,7 +425,7 @@ async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
                     await init_db()
                 
                 # Если пула нет - подключаемся
-                if db.pool is None:
+                if db.pool is None or db.pool._closed:
                     logger.info("🔄 Подключаемся к БД...")
                     async with asyncio.timeout(10):
                         await db.connect()
@@ -519,7 +520,7 @@ def sync_db_call(coro_func):
     return wrapper
 
 # ============================================
-# ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ ПОЛЬЗОВАТЕЛЯ (ДОБАВЛЕНА!)
+# ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ ПОЛЬЗОВАТЕЛЯ
 # ============================================
 
 async def load_user_from_db_async(user_id: int) -> Optional[Dict[str, Any]]:
@@ -1013,6 +1014,7 @@ async def save_psychologist_thought_async(
             
             thought_id = row['id']
             
+            # ✅ ИСПРАВЛЕНО: используем асинхронный вызов save_user_data_async
             try:
                 from state import user_data
                 if user_id in user_data:
@@ -1020,7 +1022,8 @@ async def save_psychologist_thought_async(
                     user_data[user_id]['psychologist_thought_id'] = thought_id
                     user_data[user_id]['psychologist_thought_type'] = thought_type
                     user_data[user_id]['psychologist_thought_metadata'] = metadata
-                    save_user_data(user_id, user_data[user_id])
+                    # Асинхронный вызов вместо синхронного
+                    await save_user_data_async(user_id, user_data[user_id])
             except Exception as e:
                 logger.warning(f"⚠️ Не удалось сохранить мысль в user_data: {e}")
             
@@ -1796,8 +1799,8 @@ __all__ = [
     'update_psychologist_thought',
     'get_thoughts_by_test_result',
     'get_psychologist_thoughts_stats',
-    'get_user_goals',      # ✅ ДОБАВИТЬ
+    'get_user_goals',
     'save_goal', 
 ]
 
-logger.info("✅ db_instance инициализирован (версия 3.9 - добавлена load_user_from_db, исправлен пул)")
+logger.info("✅ db_instance инициализирован (версия 3.10 - исправлен асинхронный вызов в save_psychologist_thought_async)")
