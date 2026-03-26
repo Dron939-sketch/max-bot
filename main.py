@@ -196,6 +196,7 @@ async def init_database():
         setup_auto_save(interval_seconds=300)
         asyncio.create_task(periodic_save_to_db())
         asyncio.create_task(periodic_cleanup_db())
+        asyncio.create_task(keep_db_alive())
         logger.info("✅ База данных инициализирована")
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации БД: {e}")
@@ -338,6 +339,17 @@ async def periodic_cleanup_db():
             logger.info("🧹 Очистка старых данных выполнена")
         except Exception as e:
             logger.error(f"❌ Ошибка при очистке данных: {e}")
+
+sync def keep_db_alive():
+    """Поддерживает соединение с БД живым (периодический пинг)"""
+    while True:
+        await asyncio.sleep(25)  # Каждые 25 секунд
+        try:
+            from db_instance import ensure_db_connection
+            await ensure_db_connection()
+            logger.debug("💓 Пинг БД выполнен")
+        except Exception as e:
+            logger.error(f"❌ Пинг БД failed: {e}")
 
 # ============================================
 # FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ (ИСПРАВЛЕННЫЙ)
