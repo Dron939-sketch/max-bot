@@ -340,7 +340,7 @@ async def periodic_cleanup_db():
         except Exception as e:
             logger.error(f"❌ Ошибка при очистке данных: {e}")
 
-sync def keep_db_alive():
+async def keep_db_alive():
     """Поддерживает соединение с БД живым (периодический пинг)"""
     while True:
         await asyncio.sleep(25)  # Каждые 25 секунд
