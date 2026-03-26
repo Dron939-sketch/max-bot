@@ -3494,5 +3494,541 @@ async def force_load_user(request: Request):
             content={"success": False, "error": str(e)}
         )
 
+# ============================================
+# API ЭНДПОИНТЫ ДЛЯ КОНФАЙНТМЕНТ-МОДЕЛИ
+# ============================================
+
+from confinement_model import ConfinementModel9, VECTORS, LEVEL_PROFILES
+import asyncio
+import threading
+
+@api_app.get("/api/confinement-model")
+async def get_confinement_model(user_id: int):
+    """
+    Получить 9-элементную конфайнтмент-модель пользователя
+    """
+    try:
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        # Проверяем, есть ли уже построенная модель
+        existing_model = user_info.get('confinement_model')
+        
+        if existing_model:
+            # Восстанавливаем модель из словаря
+            if isinstance(existing_model, dict):
+                model = ConfinementModel9.from_dict(existing_model)
+            else:
+                model = existing_model
+        else:
+            # Строим новую модель
+            scores = {}
+            for k in VECTORS:
+                levels = user_info.get("behavioral_levels", {}).get(k, [])
+                scores[k] = sum(levels) / len(levels) if levels else 3.0
+            
+            # Получаем историю диалогов
+            history = user_info.get('history', [])
+            
+            # Строим модель
+            model = ConfinementModel9(user_id)
+            model.build_from_profile(scores, history)
+            
+            # Сохраняем в user_data
+            user_info['confinement_model'] = model.to_dict()
+            sync_db.save_user_to_db(user_id)
+        
+        # Формируем ответ для фронтенда
+        response = {
+            "success": True,
+            "user_id": user_id,
+            "elements": {},
+            "links": model.links,
+            "loops": model.loops,
+            "key_confinement": model.key_confinement,
+            "is_closed": model.is_closed,
+            "closure_score": model.closure_score,
+            "vectors": {
+                k: {
+                    "name": VECTORS.get(k, {}).get('name', k),
+                    "emoji": VECTORS.get(k, {}).get('emoji', '🔍'),
+                    "level": model.elements.get(pos).level if model.elements.get(pos) else 3
+                }
+                for pos, k in [(2, 'СБ'), (3, 'ТФ'), (4, 'УБ')]
+                if model.elements.get(pos)
+            }
+        }
+        
+        # Добавляем каждый элемент
+        for i in range(1, 10):
+            elem = model.elements.get(i)
+            if elem:
+                response["elements"][i] = {
+                    "id": elem.id,
+                    "name": elem.name,
+                    "description": elem.description,
+                    "type": elem.element_type,
+                    "vector": elem.vector,
+                    "level": elem.level,
+                    "archetype": elem.archetype,
+                    "strength": elem.strength,
+                    "vak": elem.vak,
+                    "causes": elem.causes,
+                    "caused_by": elem.caused_by,
+                    "amplifies": elem.amplifies
+                }
+        
+        return JSONResponse(response)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_confinement_model: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.post("/api/confinement-model/rebuild")
+async def rebuild_confinement_model(request: Request):
+    """
+    Принудительно перестроить конфайнтмент-модель
+    """
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id required")
+        
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        # Строим новую модель
+        scores = {}
+        for k in VECTORS:
+            levels = user_info.get("behavioral_levels", {}).get(k, [])
+            scores[k] = sum(levels) / len(levels) if levels else 3.0
+        
+        history = user_info.get('history', [])
+        
+        model = ConfinementModel9(user_id)
+        model.build_from_profile(scores, history)
+        
+        # Сохраняем
+        user_info['confinement_model'] = model.to_dict()
+        sync_db.save_user_to_db(user_id)
+        
+        return JSONResponse({
+            "success": True,
+            "message": "Модель перестроена",
+            "closure_score": model.closure_score,
+            "is_closed": model.is_closed
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in rebuild_confinement_model: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/goals/with-confinement")
+async def get_goals_with_confinement(user_id: int, mode: str = "coach"):
+    """
+    Получить цели с учётом конфайнтмент-модели
+    """
+    try:
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        # Получаем конфайнтмент-модель
+        existing_model = user_info.get('confinement_model')
+        if existing_model:
+            if isinstance(existing_model, dict):
+                model = ConfinementModel9.from_dict(existing_model)
+            else:
+                model = existing_model
+        else:
+            # Строим модель
+            scores = {}
+            for k in VECTORS:
+                levels = user_info.get("behavioral_levels", {}).get(k, [])
+                scores[k] = sum(levels) / len(levels) if levels else 3.0
+            
+            model = ConfinementModel9(user_id)
+            model.build_from_profile(scores, [])
+        
+        # Получаем профиль
+        profile_data = user_info.get("profile_data", {})
+        profile_code = profile_data.get("display_name", "СБ-4_ТФ-4_УБ-4_ЧВ-4")
+        
+        scores = {
+            "СБ": profile_data.get("sb_level", 4),
+            "ТФ": profile_data.get("tf_level", 4),
+            "УБ": profile_data.get("ub_level", 4),
+            "ЧВ": profile_data.get("chv_level", 4)
+        }
+        
+        weakest = min(scores.items(), key=lambda x: x[1])[0] if scores else "СБ"
+        
+        # База целей
+        goals_db = {
+            "coach": {
+                "weak": {
+                    "СБ": [
+                        {"id": "fear_work", "name": "Проработать страхи", "time": "3-4 недели", "difficulty": "medium", "emoji": "🛡️"},
+                        {"id": "boundaries", "name": "Научиться защищать границы", "time": "2-3 недели", "difficulty": "medium", "emoji": "🔒"}
+                    ],
+                    "ТФ": [
+                        {"id": "money_blocks", "name": "Проработать денежные блоки", "time": "3-4 недели", "difficulty": "medium", "emoji": "💰"},
+                        {"id": "income_growth", "name": "Увеличить доход", "time": "4-6 недель", "difficulty": "hard", "emoji": "📈"}
+                    ],
+                    "УБ": [
+                        {"id": "meaning", "name": "Найти смысл", "time": "4-6 недель", "difficulty": "hard", "emoji": "🎯"},
+                        {"id": "system_thinking", "name": "Развить системное мышление", "time": "3-5 недель", "difficulty": "medium", "emoji": "🧩"}
+                    ],
+                    "ЧВ": [
+                        {"id": "relations", "name": "Улучшить отношения", "time": "4-6 недель", "difficulty": "hard", "emoji": "💕"},
+                        {"id": "attachment", "name": "Проработать привязанность", "time": "5-7 недель", "difficulty": "hard", "emoji": "🪢"}
+                    ]
+                },
+                "general": [
+                    {"id": "purpose", "name": "Найти предназначение", "time": "5-7 недель", "difficulty": "hard", "emoji": "🌟"},
+                    {"id": "balance", "name": "Обрести баланс", "time": "4-6 недель", "difficulty": "medium", "emoji": "⚖️"}
+                ]
+            },
+            "psychologist": {
+                "weak": {
+                    "СБ": [
+                        {"id": "fear_origin", "name": "Найти источник страхов", "time": "4-6 недель", "difficulty": "hard", "emoji": "🔍"},
+                        {"id": "trauma", "name": "Проработать травму", "time": "6-8 недель", "difficulty": "hard", "emoji": "🩹"}
+                    ],
+                    "ТФ": [
+                        {"id": "money_psychology", "name": "Понять психологию денег", "time": "4-5 недель", "difficulty": "medium", "emoji": "🧠💰"},
+                        {"id": "worth", "name": "Проработать чувство ценности", "time": "5-7 недель", "difficulty": "hard", "emoji": "💎"}
+                    ],
+                    "УБ": [
+                        {"id": "core_beliefs", "name": "Найти глубинные убеждения", "time": "5-7 недель", "difficulty": "hard", "emoji": "🏛️"},
+                        {"id": "schemas", "name": "Проработать жизненные сценарии", "time": "6-8 недель", "difficulty": "hard", "emoji": "📜"}
+                    ],
+                    "ЧВ": [
+                        {"id": "attachment_style", "name": "Проработать тип привязанности", "time": "6-8 недель", "difficulty": "hard", "emoji": "🪢"},
+                        {"id": "inner_child", "name": "Исцелить внутреннего ребёнка", "time": "5-7 недель", "difficulty": "hard", "emoji": "🧸"}
+                    ]
+                },
+                "general": [
+                    {"id": "self_discovery", "name": "Глубинное самопознание", "time": "7-9 недель", "difficulty": "hard", "emoji": "🔮"},
+                    {"id": "healing", "name": "Исцеление внутренних ран", "time": "8-10 недель", "difficulty": "hard", "emoji": "💖"}
+                ]
+            },
+            "trainer": {
+                "weak": {
+                    "СБ": [
+                        {"id": "assertiveness", "name": "Развить ассертивность", "time": "3-4 недели", "difficulty": "medium", "emoji": "💪"},
+                        {"id": "conflict_skills", "name": "Освоить навыки конфликта", "time": "4-5 недель", "difficulty": "medium", "emoji": "⚔️"}
+                    ],
+                    "ТФ": [
+                        {"id": "money_skills", "name": "Освоить навыки управления деньгами", "time": "3-4 недели", "difficulty": "easy", "emoji": "💰"},
+                        {"id": "income_skills", "name": "Навыки увеличения дохода", "time": "4-6 недель", "difficulty": "medium", "emoji": "📊"}
+                    ],
+                    "УБ": [
+                        {"id": "thinking_tools", "name": "Освоить инструменты мышления", "time": "4-5 недель", "difficulty": "medium", "emoji": "🧠"},
+                        {"id": "decision_making", "name": "Навыки принятия решений", "time": "3-4 недели", "difficulty": "easy", "emoji": "✅"}
+                    ],
+                    "ЧВ": [
+                        {"id": "communication_skills", "name": "Развить навыки общения", "time": "3-4 недели", "difficulty": "easy", "emoji": "💬"},
+                        {"id": "negotiation", "name": "Навыки переговоров", "time": "4-6 недель", "difficulty": "medium", "emoji": "🤝"}
+                    ]
+                },
+                "general": [
+                    {"id": "productivity", "name": "Повысить продуктивность", "time": "4-6 недель", "difficulty": "medium", "emoji": "⚡"},
+                    {"id": "habit_building", "name": "Сформировать полезные привычки", "time": "3-5 недель", "difficulty": "easy", "emoji": "🔄"}
+                ]
+            }
+        }
+        
+        mode_db = goals_db.get(mode, goals_db["coach"])
+        goals = []
+        
+        # Добавляем цели для слабого вектора
+        if weakest in mode_db["weak"]:
+            goals.extend(mode_db["weak"][weakest])
+        
+        # Добавляем общие цели
+        goals.extend(mode_db["general"])
+        
+        # Добавляем рекомендации на основе конфайнтмент-модели
+        if model.key_confinement:
+            key_elem = model.key_confinement.get('element')
+            if key_elem:
+                goals.insert(0, {
+                    "id": "key_confinement_work",
+                    "name": f"Работа с ключевым ограничением: {key_elem.name[:30]}",
+                    "time": "3-5 недель",
+                    "difficulty": "hard",
+                    "emoji": "🔐",
+                    "description": model.key_confinement.get('description', 'Работа с главным ограничением системы'),
+                    "is_priority": True
+                })
+        
+        return JSONResponse({
+            "success": True,
+            "goals": goals[:7],
+            "profile_code": profile_code,
+            "key_confinement": model.key_confinement,
+            "closure_score": model.closure_score
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_goals_with_confinement: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.post("/api/route/build-with-confinement")
+async def build_route_with_confinement(request: Request):
+    """
+    Построить маршрут с учётом конфайнтмент-модели
+    """
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        goal = data.get('goal', {})
+        
+        if not user_id or not goal:
+            raise HTTPException(status_code=400, detail="user_id and goal required")
+        
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        # Получаем конфайнтмент-модель
+        existing_model = user_info.get('confinement_model')
+        if existing_model:
+            if isinstance(existing_model, dict):
+                model = ConfinementModel9.from_dict(existing_model)
+            else:
+                model = existing_model
+        else:
+            # Строим модель
+            scores = {}
+            for k in VECTORS:
+                levels = user_info.get("behavioral_levels", {}).get(k, [])
+                scores[k] = sum(levels) / len(levels) if levels else 3.0
+            
+            model = ConfinementModel9(user_id)
+            model.build_from_profile(scores, [])
+        
+        # Получаем режим
+        context = user_contexts.get(user_id)
+        mode = context.communication_mode if context else "coach"
+        
+        # Формируем промпт с учётом конфайнтмент-модели
+        profile_code = user_info.get('profile_data', {}).get('display_name', 'СБ-4_ТФ-4_УБ-4_ЧВ-4')
+        
+        # Строим текст модели для промпта
+        model_text = ""
+        if model.key_confinement:
+            key_elem = model.key_confinement.get('element')
+            if key_elem:
+                model_text += f"\n🔐 **КЛЮЧЕВОЕ ОГРАНИЧЕНИЕ:** {key_elem.name} - {model.key_confinement.get('description', '')[:100]}\n"
+        
+        if model.loops:
+            main_loop = model.loops[0] if model.loops else None
+            if main_loop:
+                model_text += f"\n🔄 **ОСНОВНАЯ ПЕТЛЯ:** {main_loop.get('description', '')}\n"
+        
+        from services import call_deepseek
+        
+        system_prompt = f"""Ты — Фреди, виртуальный психолог. Помоги пользователю построить маршрут к его цели с учётом его психологического профиля и выявленных ограничений.
+
+ПРОФИЛЬ: {profile_code}
+
+{model_text}
+
+Твоя задача — создать пошаговый маршрут из 3-4 этапов, который:
+1. Учитывает ключевое ограничение пользователя
+2. Помогает разорвать петлю самоподдержания
+3. Даёт конкретные, выполнимые шаги
+
+Используй стиль, соответствующий режиму {mode}."""
+        
+        prompt = f"""
+Цель пользователя: {goal.get('name', 'цель')}
+Время: {goal.get('time', '3-6 месяцев')}
+Сложность: {goal.get('difficulty', 'medium')}
+
+Создай пошаговый маршрут:
+
+📍 ЭТАП 1: [НАЗВАНИЕ]
+   • Что делаем: [конкретные действия]
+   • 📝 Домашнее задание: [задание между сессиями]
+   • ✅ Критерий выполнения: [как понять, что этап пройден]
+
+📍 ЭТАП 2: [НАЗВАНИЕ]
+   • Что делаем: [конкретные действия]
+   • 📝 Домашнее задание: [задание]
+   • ✅ Критерий: [критерий]
+
+📍 ЭТАП 3: [НАЗВАНИЕ]
+   • Что делаем: [конкретные действия]
+   • 📝 Домашнее задание: [задание]
+   • ✅ Критерий: [критерий]
+
+📍 ЭТАП 4: [НАЗВАНИЕ] (если нужно для закрепления)
+   • Что делаем: [конкретные действия]
+   • 📝 Домашнее задание: [задание]
+   • ✅ Критерий: [критерий]
+"""
+        
+        response = await call_deepseek(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            max_tokens=2000,
+            temperature=0.7
+        )
+        
+        if response:
+            # Сохраняем маршрут
+            route = {
+                "full_text": response,
+                "steps": response.split("\n\n"),
+                "goal": goal,
+                "mode": mode,
+                "created_at": datetime.now().isoformat()
+            }
+            
+            if 'routes' not in user_info:
+                user_info['routes'] = []
+            user_info['routes'].append(route)
+            sync_db.save_user_to_db(user_id)
+            
+            return JSONResponse({
+                "success": True,
+                "route": route,
+                "key_confinement": model.key_confinement
+            })
+        else:
+            return JSONResponse({
+                "success": False,
+                "error": "Не удалось сгенерировать маршрут"
+            })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in build_route_with_confinement: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.post("/api/reality-check/with-confinement")
+async def reality_check_with_confinement(request: Request):
+    """
+    Проверка реальности с учётом конфайнтмент-модели
+    """
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        goal = data.get('goal', {})
+        life_context = data.get('life_context', {})
+        goal_context = data.get('goal_context', {})
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id required")
+        
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        # Получаем конфайнтмент-модель
+        existing_model = user_info.get('confinement_model')
+        if existing_model:
+            if isinstance(existing_model, dict):
+                model = ConfinementModel9.from_dict(existing_model)
+            else:
+                model = existing_model
+        else:
+            scores = {}
+            for k in VECTORS:
+                levels = user_info.get("behavioral_levels", {}).get(k, [])
+                scores[k] = sum(levels) / len(levels) if levels else 3.0
+            model = ConfinementModel9(user_id)
+            model.build_from_profile(scores, [])
+        
+        # Теоретические требования для цели
+        theoretical_time = 10  # часов в неделю по умолчанию
+        theoretical_energy = 7  # уровень энергии 1-10
+        
+        if goal.get('difficulty') == 'easy':
+            theoretical_time = 5
+            theoretical_energy = 5
+        elif goal.get('difficulty') == 'hard':
+            theoretical_time = 15
+            theoretical_energy = 8
+        
+        # Доступные ресурсы
+        available_time = goal_context.get('time_per_week', 5)
+        available_energy = life_context.get('energy_level', 5)
+        
+        # Расчёт дефицита
+        time_deficit = max(0, (theoretical_time - available_time) / theoretical_time * 100) if theoretical_time > 0 else 0
+        energy_deficit = max(0, (theoretical_energy - available_energy) / theoretical_energy * 100) if theoretical_energy > 0 else 0
+        
+        total_deficit = (time_deficit + energy_deficit) / 2
+        
+        # Учитываем конфайнтмент-модель
+        if model.is_closed:
+            total_deficit += 15  # закрытая система требует больше ресурсов
+        if model.key_confinement:
+            total_deficit += 10  # ключевое ограничение увеличивает сложность
+        
+        total_deficit = min(total_deficit, 100)
+        
+        # Статус
+        if total_deficit < 30:
+            status = "✅ ДОСТИЖИМО"
+            status_emoji = "✅"
+            recommendation = "Цель реалистична. Начните с первого шага."
+        elif total_deficit < 60:
+            status = "⚠️ СЛОЖНО, НО ВОЗМОЖНО"
+            status_emoji = "⚠️"
+            recommendation = "Цель достижима, но потребует усилий. Рекомендуется увеличить срок или снизить планку."
+        else:
+            status = "❌ НЕРЕАЛИСТИЧНО"
+            status_emoji = "❌"
+            recommendation = "Цель требует пересмотра. Увеличьте срок или выберите более простую цель."
+        
+        # Добавляем рекомендацию на основе конфайнтмент-модели
+        if model.key_confinement:
+            key_elem = model.key_confinement.get('element')
+            if key_elem:
+                recommendation += f"\n\n🔐 **КЛЮЧЕВОЕ ОГРАНИЧЕНИЕ:** {key_elem.name}. Работа с ним критически важна для достижения цели."
+        
+        return JSONResponse({
+            "success": True,
+            "deficit": round(total_deficit, 1),
+            "status": status,
+            "status_emoji": status_emoji,
+            "recommendation": recommendation,
+            "requirements": {
+                "time_per_week": theoretical_time,
+                "energy_level": theoretical_energy
+            },
+            "available": {
+                "time_per_week": available_time,
+                "energy_level": available_energy
+            },
+            "key_confinement": model.key_confinement
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in reality_check_with_confinement: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
 if __name__ == "__main__":
     main()
