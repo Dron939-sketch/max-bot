@@ -3,7 +3,7 @@
 """
 ОБЪЕДИНЕННЫЙ ФАЙЛ: Обработчики вопросов тестирования И умных вопросов
 Версия для MAX - ПОЛНАЯ с голосовой поддержкой
-ИСПРАВЛЕНО: добавлена передача system_prompt в DeepSeek
+ИСПРАВЛЕНО: удалены дублирующиеся блокировки
 """
 
 import logging
@@ -28,7 +28,8 @@ from formatters import bold, italic, calculate_progress, clean_text_for_safe_dis
 # Импорты из state.py
 from state import (
     user_data, user_names, user_contexts,
-    get_state, set_state, get_state_data, update_state_data, TestStates
+    get_state, set_state, get_state_data, update_state_data, TestStates,
+    is_voice_processing, set_voice_processing
 )
 
 # ✅ ИСПРАВЛЕНО: используем sync_db
@@ -65,10 +66,9 @@ from .smart_questions import generate_smart_questions, show_smart_questions, han
 logger = logging.getLogger(__name__)
 
 # ============================================
-# 👇👇👇 СЮДА ВСТАВИТЬ БЛОКИРОВКУ 👇👇👇
+# БЛОКИРОВКА ДЛЯ ПРЕДОТВРАЩЕНИЯ ДВОЙНОЙ ОБРАБОТКИ
 # ============================================
 
-# БЛОКИРОВКА ДЛЯ ПРЕДОТВРАЩЕНИЯ ДВОЙНОЙ ОБРАБОТКИ
 _processing_lock = {}
 
 def is_processing(user_id: int) -> bool:
@@ -104,22 +104,6 @@ def save_answer_to_db_sync(user_id: int, answer_data: Dict[str, Any]):
         logger.debug(f"💾 Ответ этапа {answer_data.get('stage')} для {user_id} сохранен в БД")
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения ответа для {user_id}: {e}")
-
-
-# ============================================
-# БЛОКИРОВКА ДЛЯ ПРЕДОТВРАЩЕНИЯ ДВОЙНОЙ ОБРАБОТКИ
-# ============================================
-
-# Словарь для блокировки одновременной обработки запросов одного пользователя
-_processing_lock = {}
-
-def is_processing(user_id: int) -> bool:
-    """Проверяет, обрабатывается ли уже запрос пользователя"""
-    return _processing_lock.get(user_id, False)
-
-def set_processing(user_id: int, value: bool):
-    """Устанавливает флаг обработки"""
-    _processing_lock[user_id] = value
 
 
 # ============================================
@@ -1450,43 +1434,66 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
     """
     Асинхронная обработка голосового сообщения пользователя
     """
-    # ✅ ПРОВЕРКА ФЛАГА - ЕСЛИ ГОЛОС УЖЕ ОБРАБАТЫВАЕТСЯ, ПРОПУСКАЕМ
-    from state import is_voice_processing
-    
+    # ✅ Проверка флага - если голос уже обрабатывается, пропускаем
     if is_voice_processing(user_id):
-        logger.info(f"⏳ Голос для {user_id} уже обрабатывается в voice.py, пропускаем обработку в questions.py")
+        logger.info(f"⏳ Голос для {user_id} уже обрабатывается, пропускаем")
         return
     
-    # 🔥🔥🔥 МАРКЕР ДЛЯ ОТЛАДКИ 🔥🔥🔥
-    logger.info("=" * 80)
-    logger.info("🔥🔥🔥 ВЫЗВАНА ФУНКЦИЯ process_voice_message_async ИЗ ФАЙЛА questions.py 🔥🔥🔥")
-    logger.info("=" * 80)
-    
-    user_data_dict = get_user_data_dict(user_id)
-    
-    # Проверяем, завершен ли тест
-    if not is_test_completed_check(user_data_dict):
-        await safe_send_message(
-            message,
-            "🎙 Голосовые сообщения доступны только после завершения теста",
-            delete_previous=True
-        )
-        return
-    
-    # Отправляем статусное сообщение
-    status_msg = await safe_send_message(
-        message,
-        "🎤 Распознаю речь...",
-        delete_previous=True
-    )
+    # Устанавливаем флаг
+    set_voice_processing(user_id, True)
     
     try:
-        # Распознаём речь
-        recognized_text = await speech_to_text(file_path)
+        user_data_dict = get_user_data_dict(user_id)
         
-        logger.info(f"🎤 process_voice_message_async: распознанный текст = '{recognized_text}'")
+        # Проверяем, завершен ли тест
+        if not is_test_completed_check(user_data_dict):
+            await safe_send_message(
+                message,
+                "🎙 Голосовые сообщения доступны только после завершения теста",
+                delete_previous=True
+            )
+            return
         
-        if not recognized_text:
+        # Отправляем статусное сообщение
+        status_msg = await safe_send_message(
+            message,
+            "🎤 Распознаю речь...",
+            delete_previous=True
+        )
+        
+        try:
+            # Распознаём речь
+            recognized_text = await speech_to_text(file_path)
+            
+            logger.info(f"🎤 process_voice_message_async: распознанный текст = '{recognized_text}'")
+            
+            if not recognized_text:
+                if status_msg:
+                    try:
+                        await safe_delete_message(message.chat.id, status_msg.message_id)
+                    except:
+                        pass
+                
+                await safe_send_message(
+                    message,
+                    "❌ Не удалось распознать речь\n\nПопробуйте еще раз или напишите текстом.",
+                    delete_previous=True
+                )
+                return
+            
+            # Удаляем статусное сообщение
+            if status_msg:
+                try:
+                    await safe_delete_message(message.chat.id, status_msg.message_id)
+                except:
+                    pass
+            
+            # Обрабатываем как обычный вопрос, но НЕ показываем текст вопроса повторно
+            await process_text_question_async(message, user_id, recognized_text, show_question_text=False)
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обработке голосового сообщения: {e}")
+            
             if status_msg:
                 try:
                     await safe_delete_message(message.chat.id, status_msg.message_id)
@@ -1495,35 +1502,12 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
             
             await safe_send_message(
                 message,
-                "❌ Не удалось распознать речь\n\nПопробуйте еще раз или напишите текстом.",
+                "❌ Произошла ошибка при обработке голоса",
                 delete_previous=True
             )
-            return
-        
-        # Удаляем статусное сообщение
-        if status_msg:
-            try:
-                await safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
-                pass
-        
-        # Обрабатываем как обычный вопрос, но НЕ показываем текст вопроса повторно
-        await process_text_question_async(message, user_id, recognized_text, show_question_text=False)
-        
-    except Exception as e:
-        logger.error(f"Ошибка при обработке голосового сообщения: {e}")
-        
-        if status_msg:
-            try:
-                await safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
-                pass
-        
-        await safe_send_message(
-            message,
-            "❌ Произошла ошибка при обработке голоса",
-            delete_previous=True
-        )
+    finally:
+        # ✅ Снимаем флаг в любом случае
+        set_voice_processing(user_id, False)
 
 
 # ============================================
