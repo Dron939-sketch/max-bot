@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики команды /start и начальных экранов для MAX
-ВЕРСИЯ 2.7 - ИСПРАВЛЕНО: корректное имя пользователя через get_user_name
+ВЕРСИЯ 2.8 - ИСПРАВЛЕНО: синхронный вызов bot.send_message
 """
 import logging
 import time
@@ -301,12 +301,14 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
         
         keyboard = get_restart_keyboard()
         
+        # 👇👇👇 ИСПРАВЛЕНО: синхронный вызов bot.send_message
         try:
+            # bot.send_message — синхронная функция в maxibot
             bot.send_message(
                 message.chat.id,
                 text,
                 reply_markup=keyboard,
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
         except Exception as e:
             logger.error(f"❌ Ошибка отправки сообщения: {e}")
@@ -352,7 +354,7 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
                 message.chat.id,
                 welcome_text,
                 reply_markup=keyboard,
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
         except Exception as e:
             logger.error(f"❌ Ошибка отправки сообщения: {e}")
@@ -403,11 +405,12 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
         from keyboards import get_main_menu_after_mode_keyboard
         keyboard = get_main_menu_after_mode_keyboard(has_profile)
         
+        # 👇👇👇 ИСПРАВЛЕНО: синхронный вызов
         bot.send_message(
             message.chat.id,
             text,
             reply_markup=keyboard,
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     except Exception as e:
         logger.error(f"❌ Ошибка при показе меню: {e}")
