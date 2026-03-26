@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 Модуль для форматирования текста для МАКС
-Использует HTML-форматирование (<b>жирный</b>, <i>курсив</i>)
+Использует Markdown-форматирование (**жирный**, *курсив*)
 
-ВЕРСИЯ 3.0 - ПЕРЕВОД НА HTML ФОРМАТИРОВАНИЕ
+ВЕРСИЯ 3.1 - ВОЗВРАТ К MARKDOWN (MAX НЕ ПОДДЕРЖИВАЕТ HTML)
 """
 
 import re
@@ -12,17 +12,17 @@ from typing import List
 
 
 def bold(text: str) -> str:
-    """Жирный текст для МАКС (HTML)"""
+    """Жирный текст для МАКС (Markdown)"""
     if not text:
         return ""
-    return f"<b>{text}</b>"
+    return f"**{text}**"
 
 
 def italic(text: str) -> str:
-    """Курсив для МАКС (HTML)"""
+    """Курсив для МАКС (Markdown)"""
     if not text:
         return ""
-    return f"<i>{text}</i>"
+    return f"*{text}*"
 
 
 def emoji_text(emoji: str, text: str, bold_text: bool = True) -> str:
@@ -35,127 +35,84 @@ def emoji_text(emoji: str, text: str, bold_text: bool = True) -> str:
 
 
 def calculate_progress(current: int, total: int) -> str:
-    """
-    Возвращает прогресс-бар для отображения в вопросах теста
-    
-    Args:
-        current: текущий номер вопроса (начиная с 1)
-        total: общее количество вопросов
-    
-    Returns:
-        строка с прогресс-баром, например: "▸ Вопрос 3/8 • ███░░░░░░░"
-    """
+    """Возвращает прогресс-бар"""
     if total <= 0:
         return ""
-    
-    # Убеждаемся, что current не превышает total
     current = min(current, total)
-    
     percent = int((current / total) * 10)
     bar = "█" * percent + "░" * (10 - percent)
     return f"▸ Вопрос {current}/{total} • {bar}"
 
 
 def clean_text_for_safe_display(text: str) -> str:
-    """Очищает текст от лишних символов, сохраняя HTML-форматирование"""
+    """Очищает текст от лишних символов, сохраняя Markdown-форматирование"""
     if not text:
         return text
     
-    # Удаляем HTML-теги? НЕТ — оставляем, они нужны
-    # text = re.sub(r'<[^>]+>', '', text)  # ← НЕ УДАЛЯТЬ!
+    # Удаляем HTML-теги (они не работают в MAX)
+    text = re.sub(r'<[^>]+>', '', text)
     
     # Удаляем множественные переводы строк
     text = re.sub(r'\n{3,}', '\n\n', text)
     
-    # Убираем пробелы в начале и конце каждой строки
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
-        # Сохраняем пустые строки как есть
         if not line.strip():
             cleaned_lines.append('')
         else:
-            # Убираем пробелы в начале и конце строки
             cleaned_lines.append(line.strip())
     
     text = '\n'.join(cleaned_lines)
-    
     return text.strip()
 
 
 def ensure_full_width(text: str) -> str:
-    """
-    ГАРАНТИРУЕТ, что сообщение будет на всю ширину.
-    Убирает все пробелы в начале каждой строки.
-    """
+    """Убирает пробелы в начале каждой строки"""
     if not text:
         return text
     
-    # Разбиваем на строки
     lines = text.split('\n')
     cleaned_lines = []
-    
     for line in lines:
         if not line.strip():
-            # Пустые строки оставляем как есть (для абзацев)
             cleaned_lines.append('')
         else:
-            # Убираем ВСЕ пробелы и табуляции в начале строки
-            cleaned = line.lstrip()
-            cleaned_lines.append(cleaned)
+            cleaned_lines.append(line.lstrip())
     
     return '\n'.join(cleaned_lines)
 
 
 def split_long_message(text: str, max_length: int = 3500) -> List[str]:
-    """
-    Разбивает длинное сообщение на части, стараясь не разрывать абзацы.
-    
-    Args:
-        text: исходный текст
-        max_length: максимальная длина одной части (по умолчанию 3500)
-    
-    Returns:
-        список строк, каждая не длиннее max_length
-    """
+    """Разбивает длинное сообщение на части"""
     if not text:
         return []
     
-    # Сначала применяем очистку ширины
     text = ensure_full_width(text)
     
-    # Если текст короткий, возвращаем как есть
     if len(text) <= max_length:
         return [text]
     
     parts = []
     current_part = ""
-    
-    # Разбиваем по абзацам (двойной перенос строки)
     paragraphs = text.split('\n\n')
     
     for para in paragraphs:
-        # Если абзац пустой, пропускаем
         if not para.strip():
             continue
         
-        # Проверяем, влезет ли абзац в текущую часть
         if len(current_part) + len(para) + 2 <= max_length:
             if current_part:
                 current_part += "\n\n" + para
             else:
                 current_part = para
         else:
-            # Если текущая часть не пустая, сохраняем её
             if current_part:
                 parts.append(current_part)
             
-            # Если абзац сам по себе слишком длинный, разбиваем его
             if len(para) > max_length:
-                # Разбиваем длинный абзац на предложения
                 sentences = re.split(r'(?<=[.!?])\s+', para)
                 temp_part = ""
-                
                 for sent in sentences:
                     if len(temp_part) + len(sent) + 1 <= max_length:
                         if temp_part:
@@ -165,7 +122,6 @@ def split_long_message(text: str, max_length: int = 3500) -> List[str]:
                     else:
                         if temp_part:
                             parts.append(temp_part)
-                        # Если предложение слишком длинное, режем по словам
                         if len(sent) > max_length:
                             words = sent.split()
                             word_part = ""
@@ -184,7 +140,6 @@ def split_long_message(text: str, max_length: int = 3500) -> List[str]:
                                 temp_part = ""
                         else:
                             temp_part = sent
-                
                 if temp_part:
                     current_part = temp_part
                 else:
@@ -192,51 +147,42 @@ def split_long_message(text: str, max_length: int = 3500) -> List[str]:
             else:
                 current_part = para
     
-    # Добавляем последнюю часть
     if current_part:
         parts.append(current_part)
     
-    # ✅ ФИНАЛЬНАЯ ОЧИСТКА: Применяем ensure_full_width к каждой части
     cleaned_parts = []
     for i, part in enumerate(parts):
-        # Очищаем от пробелов в начале каждой строки
         cleaned = ensure_full_width(part)
-        
-        # Для всех частей, кроме первой, добавляем маркер начала обычного текста
         if i > 0:
-            # Символ-невидимка для сброса форматирования
             cleaned = "⠀" + cleaned
-        
         cleaned_parts.append(cleaned)
     
     return cleaned_parts
 
 
 def format_profile_text(text: str) -> str:
-    """Форматирует текст профиля с жирными заголовками и эмодзи, убирает дубли"""
+    """Форматирует текст профиля с жирными заголовками (Markdown)"""
     if not text:
         return text
     
-    # Очищаем от HTML? НЕТ — оставляем
-    # text = re.sub(r'<[^>]+>', '', text)
+    # Удаляем HTML-теги
+    text = re.sub(r'<[^>]+>', '', text)
     
-    # Карта замены заголовков с эмодзи (HTML формат)
+    # Карта замены заголовков (Markdown)
     header_map = [
-        (r'БЛОК\s*1:?\s*', '🔑 <b>КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА</b>'),
-        (r'БЛОК\s*2:?\s*', '💪 <b>СИЛЬНЫЕ СТОРОНЫ</b>'),
-        (r'БЛОК\s*3:?\s*', '🎯 <b>ЗОНЫ РОСТА</b>'),
-        (r'БЛОК\s*4:?\s*', '🌱 <b>КАК ЭТО СФОРМИРОВАЛОСЬ</b>'),
-        (r'БЛОК\s*5:?\s*', '⚠️ <b>ГЛАВНАЯ ЛОВУШКА</b>'),
+        (r'БЛОК\s*1:?\s*', '🔑 **КЛЮЧЕВАЯ ХАРАКТЕРИСТИКА**'),
+        (r'БЛОК\s*2:?\s*', '💪 **СИЛЬНЫЕ СТОРОНЫ**'),
+        (r'БЛОК\s*3:?\s*', '🎯 **ЗОНЫ РОСТА**'),
+        (r'БЛОК\s*4:?\s*', '🌱 **КАК ЭТО СФОРМИРОВАЛОСЬ**'),
+        (r'БЛОК\s*5:?\s*', '⚠️ **ГЛАВНАЯ ЛОВУШКА**'),
     ]
     
-    # Заменяем "БЛОК X:" на правильные заголовки
     for pattern, replacement in header_map:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     
     # Убираем дублирование заголовков
     for _, header in header_map:
-        # Убираем дубли: заголовок + такой же заголовок (без тегов)
-        clean_header = re.sub(r'<[^>]+>', '', header)
+        clean_header = header.replace('**', '')
         pattern = rf'({re.escape(header)})\s*\n\s*{re.escape(clean_header)}'
         text = re.sub(pattern, r'\1', text, flags=re.IGNORECASE)
     
@@ -250,33 +196,23 @@ def format_profile_text(text: str) -> str:
     ]
     
     for section in sections:
-        # Ищем заголовок с эмодзи и жирным (HTML)
-        pattern = rf'(🔑|💪|🎯|🌱|⚠️)\s+<b>{re.escape(section)}</b>'
-        
-        def add_newline_before(match):
-            return f"\n\n{match.group(0)}"
-        
-        text = re.sub(pattern, add_newline_before, text)
+        pattern = rf'(🔑|💪|🎯|🌱|⚠️)\s+\*\*{re.escape(section)}\*\*'
+        text = re.sub(pattern, lambda m: f"\n\n{m.group(0)}", text)
     
-    # Убираем лишние пустые строки в начале
     text = re.sub(r'^\n+', '', text)
-    
-    # Нормализуем пустые строки (не больше двух подряд)
     text = re.sub(r'\n{3,}', '\n\n', text)
-    
-    # ✅ Принудительная очистка ширины
     text = ensure_full_width(text)
     
     return text.strip()
 
 
 def format_psychologist_text(text: str, user_name: str = "") -> str:
-    """Форматирует мысли психолога с жирными заголовками и эмодзи"""
+    """Форматирует мысли психолога (Markdown)"""
     if not text:
         return text
     
-    # Очищаем от HTML? НЕТ — оставляем
-    # text = re.sub(r'<[^>]+>', '', text)
+    # Удаляем HTML-теги
+    text = re.sub(r'<[^>]+>', '', text)
     
     # Убираем нумерацию
     text = re.sub(r'###\s*\d+\.?\s*', '', text)
@@ -294,80 +230,50 @@ def format_psychologist_text(text: str, user_name: str = "") -> str:
     text = re.sub(r'🚪\s*🚪', '🚪', text)
     text = re.sub(r'📊\s*📊', '📊', text)
     
-    # Карта замены заголовков (HTML формат)
+    # Карта замены заголовков (Markdown)
     header_map = [
-        (r'🔐\s*КЛЮЧЕВОЙ\s*ЭЛЕМЕНТ', '🔐 <b>КЛЮЧЕВОЙ ЭЛЕМЕНТ</b>'),
-        (r'🔄\s*ПЕТЛЯ', '🔄 <b>ПЕТЛЯ</b>'),
-        (r'🚪\s*ТОЧКА\s*ВХОДА', '🚪 <b>ТОЧКА ВХОДА</b>'),
-        (r'📊\s*ПРОГНОЗ', '📊 <b>ПРОГНОЗ</b>'),
+        (r'🔐\s*КЛЮЧЕВОЙ\s*ЭЛЕМЕНТ', '🔐 **КЛЮЧЕВОЙ ЭЛЕМЕНТ**'),
+        (r'🔄\s*ПЕТЛЯ', '🔄 **ПЕТЛЯ**'),
+        (r'🚪\s*ТОЧКА\s*ВХОДА', '🚪 **ТОЧКА ВХОДА**'),
+        (r'📊\s*ПРОГНОЗ', '📊 **ПРОГНОЗ**'),
     ]
     
-    # Применяем форматирование к заголовкам
     for pattern, replacement in header_map:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     
     # Добавляем пустые строки между разделами
-    sections = [
-        'КЛЮЧЕВОЙ ЭЛЕМЕНТ',
-        'ПЕТЛЯ',
-        'ТОЧКА ВХОДА',
-        'ПРОГНОЗ'
-    ]
-    
+    sections = ['КЛЮЧЕВОЙ ЭЛЕМЕНТ', 'ПЕТЛЯ', 'ТОЧКА ВХОДА', 'ПРОГНОЗ']
     for section in sections:
-        pattern = rf'(🔐|🔄|🚪|📊)\s+<b>{re.escape(section)}</b>'
-        
-        def add_newline_before(match):
-            return f"\n\n{match.group(0)}"
-        
-        text = re.sub(pattern, add_newline_before, text)
+        pattern = rf'(🔐|🔄|🚪|📊)\s+\*\*{re.escape(section)}\*\*'
+        text = re.sub(pattern, lambda m: f"\n\n{m.group(0)}", text)
     
-    # Убираем лишние символы в конце
     text = re.sub(r'И вот:\s*$', '', text)
-    
-    # Нормализуем пустые строки
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = re.sub(r'^\n+', '', text)
-    
-    # ✅ Принудительная очистка ширины
     text = ensure_full_width(text)
     
     return text.strip()
 
 
 def strip_html(text: str) -> str:
-    """Полностью удаляет все HTML-теги из текста"""
+    """Удаляет HTML-теги"""
     if not text:
         return text
-    # Удаляем все теги
     text = re.sub(r'<[^>]+>', '', text)
-    # Заменяем HTML-сущности
     text = text.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
     text = text.replace('&quot;', '"').replace('&#39;', "'")
     return text
 
 
 def html_to_markdown(text: str) -> str:
-    """
-    Преобразует HTML-форматирование в Markdown для МАКС
-    <b>текст</b> -> **текст**
-    <i>текст</i> -> *текст*
-    (Оставлена для обратной совместимости)
-    """
+    """Преобразует HTML в Markdown"""
     if not text:
         return text
-    
-    # Жирный
     text = re.sub(r'<b>(.*?)</b>', r'**\1**', text, flags=re.DOTALL)
     text = re.sub(r'<strong>(.*?)</strong>', r'**\1**', text, flags=re.DOTALL)
-    
-    # Курсив
     text = re.sub(r'<i>(.*?)</i>', r'*\1*', text, flags=re.DOTALL)
     text = re.sub(r'<em>(.*?)</em>', r'*\1*', text, flags=re.DOTALL)
-    
-    # Остальные теги удаляем
     text = re.sub(r'<[^>]+>', '', text)
-    
     return text
 
 
