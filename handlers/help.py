@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики помощи для MAX
-ВЕРСИЯ 2.4 - ДОБАВЛЕНЫ АСИНХРОННЫЕ ВЕРСИИ ДЛЯ СОВМЕСТИМОСТИ
+ВЕРСИЯ 2.5 - УНИФИЦИРОВАН HTML ФОРМАТИРОВАНИЕ
 """
 
 import logging
@@ -26,7 +26,7 @@ from state import (
     get_state, set_state, get_state_data, update_state_data, clear_state
 )
 
-# ✅ ИСПРАВЛЕНО: используем sync_db
+# Используем sync_db
 from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
@@ -153,7 +153,7 @@ def show_help(call: CallbackQuery):
     user_id = call.from_user.id
     context = get_user_context_obj(user_id)
     
-    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    # Синхронный вызов
     threading.Thread(target=log_help_event, args=(user_id, 'menu_opened'), daemon=True).start()
     
     # Проверяем, есть ли контекст для персонализации
@@ -198,17 +198,17 @@ def handle_help_category(call: CallbackQuery, category: str):
     user_id = call.from_user.id
     context = get_user_context_obj(user_id)
     
-    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    # Синхронный вызов
     threading.Thread(target=log_help_event, args=(user_id, 'category_selected', category), daemon=True).start()
     
-    # Тексты для разных категорий
+    # Тексты для разных категорий (HTML форматирование)
     category_texts = {
         "relations": """
 🗣 <b>Отношения</b>
 
 Расскажите, что происходит в ваших отношениях. Я помогу разобраться в чувствах и найти новые перспективы.
 
-Возможные темы:
+<b>Возможные темы:</b>
 • Конфликты с близкими
 • Трудности в общении
 • Поиск партнёра
@@ -220,7 +220,7 @@ def handle_help_category(call: CallbackQuery, category: str):
 
 Что беспокоит в финансовой сфере? Вместе исследуем ваши паттерны и найдём пути к изобилию.
 
-Возможные темы:
+<b>Возможные темы:</b>
 • Нехватка денег
 • Страхи, связанные с финансами
 • Карьерный рост
@@ -232,7 +232,7 @@ def handle_help_category(call: CallbackQuery, category: str):
 
 Расскажите о том, что чувствуете. Я помогу разобраться в себе и найти внутреннюю опору.
 
-Возможные темы:
+<b>Возможные темы:</b>
 • Тревога и беспокойство
 • Апатия и усталость
 • Поиск себя
@@ -244,7 +244,7 @@ def handle_help_category(call: CallbackQuery, category: str):
 
 Что хотите понять или освоить? Вместе построим путь к новым знаниям.
 
-Возможные темы:
+<b>Возможные темы:</b>
 • Выбор направления обучения
 • Преодоление учебных трудностей
 • Развитие навыков
@@ -263,7 +263,7 @@ def handle_help_category(call: CallbackQuery, category: str):
 
 Творческий блок? Расскажите, что мешает творить. Вместе поищем вдохновение.
 
-Возможные темы:
+<b>Возможные темы:</b>
 • Страх чистого листа
 • Поиск идей
 • Самовыражение
@@ -275,7 +275,7 @@ def handle_help_category(call: CallbackQuery, category: str):
 
 Как вы заботитесь о себе? Поделитесь, что получается, а что хотелось бы улучшить.
 
-Возможные темы:
+<b>Возможные темы:</b>
 • Отдых и восстановление
 • Здоровье и тело
 • Энергия и ресурсы
@@ -307,7 +307,7 @@ def handle_help_category(call: CallbackQuery, category: str):
         delete_previous=True
     )
     
-    # ✅ ИСПРАВЛЕНО: используем state
+    # Используем state
     user_states[user_id] = "awaiting_question"
     
     if user_id not in user_state_data:
@@ -315,7 +315,7 @@ def handle_help_category(call: CallbackQuery, category: str):
     user_state_data[user_id]["question_context"] = category
 
 # ============================================
-# ПОКАЗ ПРЕИМУЩЕСТВ ТЕСТА
+# ПОКАЗ ПРЕИМУЩЕСТВ ТЕСТА (ИСПРАВЛЕНО - HTML)
 # ============================================
 
 def show_benefits(call: CallbackQuery):
@@ -324,28 +324,29 @@ def show_benefits(call: CallbackQuery):
     """
     user_id = call.from_user.id
     
-    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    # Синхронный вызов
     threading.Thread(target=log_benefits_view, args=(user_id,), daemon=True).start()
     
+    # ✅ ИСПРАВЛЕНО: HTML форматирование вместо Markdown
     text = f"""
-🔍 **ЧТО ВЫ УЗНАЕТЕ О СЕБЕ:**
+🔍 <b>ЧТО ВЫ УЗНАЕТЕ О СЕБЕ:</b>
 
-🧠 **ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ**
+🧠 <b>ЭТАП 1: КОНФИГУРАЦИЯ ВОСПРИЯТИЯ</b>
 Линза, через которую вы смотрите на мир.
 
-🧠 **ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ**
+🧠 <b>ЭТАП 2: КОНФИГУРАЦИЯ МЫШЛЕНИЯ</b>
 Как вы обрабатываете информацию.
 
-🧠 **ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ**
+🧠 <b>ЭТАП 3: КОНФИГУРАЦИЯ ПОВЕДЕНИЯ</b>
 Ваши автоматические реакции.
 
-🧠 **ЭТАП 4: ТОЧКА РОСТА**
+🧠 <b>ЭТАП 4: ТОЧКА РОСТА</b>
 Где находится рычаг изменений.
 
-🧠 **ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ**
+🧠 <b>ЭТАП 5: ГЛУБИННЫЕ ПАТТЕРНЫ</b>
 Тип привязанности, защитные механизмы, базовые убеждения.
 
-⚡ **ПОСЛЕ ТЕСТА ВЫ ПОЛУЧИТЕ:**
+⚡ <b>ПОСЛЕ ТЕСТА ВЫ ПОЛУЧИТЕ:</b>
 
 ✅ Полный психологический портрет
 ✅ Глубинный анализ подсознательных паттернов
@@ -353,9 +354,9 @@ def show_benefits(call: CallbackQuery):
 ✅ Индивидуальный навигатор по целям
 ✅ Напоминания и поддержка на пути
 
-⏱ **Всего 15 минут**
+⏱ <b>Всего 15 минут</b>
 
-👇 **Начинаем прямо сейчас?**
+👇 <b>Начинаем прямо сейчас?</b>
 """
     
     keyboard = InlineKeyboardMarkup()
@@ -365,7 +366,7 @@ def show_benefits(call: CallbackQuery):
         call.message,
         text,
         reply_markup=keyboard,
-        parse_mode='Markdown', 
+        parse_mode='HTML',  # ✅ ИСПРАВЛЕНО: HTML
         delete_previous=True
     )
 
@@ -381,7 +382,7 @@ def show_weekend_ideas(call: CallbackQuery):
     user_name = get_user_name(user_id)
     user_data_dict = get_user_data_dict(user_id)
     
-    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    # Синхронный вызов
     threading.Thread(target=log_weekend_ideas_view, args=(user_id,), daemon=True).start()
     
     # Проверяем, есть ли профиль
@@ -394,11 +395,11 @@ def show_weekend_ideas(call: CallbackQuery):
         return
     
     text = f"""
-🎨 {bold('ИДЕИ НА ВЫХОДНЫЕ')}
+🎨 <b>ИДЕИ НА ВЫХОДНЫЕ</b>
 
 {user_name}, я подготовил для тебя несколько идей, как провести выходные с пользой и удовольствием.
 
-Выбери, что тебя интересует:
+<b>Выбери, что тебя интересует:</b>
 """
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -435,7 +436,7 @@ def process_help_question(message: Message, user_id: int, text: str, category: s
     """
     user_data_dict = get_user_data_dict(user_id)
     
-    # ✅ ИСПРАВЛЕНО: синхронный вызов
+    # Синхронный вызов
     threading.Thread(target=log_help_event, args=(user_id, 'question_asked', category), daemon=True).start()
     
     # Проверяем, завершен ли тест
@@ -489,9 +490,7 @@ async def show_help_async(
 ):
     """
     Асинхронная версия show_help для callback.py
-    Принимает 4 параметра как требуется в callback.py
     """
-    # Вызываем существующую функцию show_help
     show_help(call)
 
 
@@ -503,9 +502,7 @@ async def show_benefits_async(
 ):
     """
     Асинхронная версия show_benefits для callback.py
-    Принимает 4 параметра как требуется в callback.py
     """
-    # Вызываем существующую функцию show_benefits
     show_benefits(call)
 
 
@@ -517,9 +514,7 @@ async def show_weekend_ideas_async(
 ):
     """
     Асинхронная версия show_weekend_ideas для callback.py
-    Принимает 4 параметра как требуется в callback.py
     """
-    # Вызываем существующую функцию show_weekend_ideas
     show_weekend_ideas(call)
 
 
