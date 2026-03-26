@@ -29,6 +29,11 @@ from fastapi.responses import JSONResponse, FileResponse
 import uvicorn
 import requests
 # =========================================
+from confinement_model import ConfinementModel9
+from loop_analyzer import LoopAnalyzer
+from key_confinement import KeyConfinementDetector
+from intervention_library import InterventionLibrary
+from hypno_module import HypnoOrchestrator, TherapeuticTales, Anchoring
 
 # ========== ИМПОРТЫ ДЛЯ БАЗЫ ДАННЫХ ==========
 from db_instance import db, init_db, close_db, ensure_db_connection, execute_with_retry
@@ -4033,99 +4038,6 @@ async def reality_check_with_confinement(request: Request):
 # ============================================
 # API ЭНДПОИНТЫ ДЛЯ КОНФАЙНТМЕНТ-МОДЕЛИ И ГИПНОЗА
 # ============================================
-
-from confinement_model import ConfinementModel9
-from loop_analyzer import LoopAnalyzer
-from key_confinement import KeyConfinementDetector
-from intervention_library import InterventionLibrary
-from hypno_module import HypnoOrchestrator, TherapeuticTales, Anchoring
-
-
-@api_app.get("/api/confinement/model/{user_id}")
-async def get_confinement_model(user_id: int):
-    """
-    Получить 9-элементную конфайнтмент-модель пользователя
-    """
-    try:
-        user_id = int(user_id)
-        user_info = user_data.get(user_id, {})
-        
-        # Проверяем, есть ли уже построенная модель
-        existing_model = user_info.get('confinement_model')
-        
-        if existing_model:
-            # Восстанавливаем модель из словаря
-            if isinstance(existing_model, dict):
-                model = ConfinementModel9.from_dict(existing_model)
-            else:
-                model = existing_model
-        else:
-            # Строим новую модель
-            scores = {}
-            for k in VECTORS:
-                levels = user_info.get("behavioral_levels", {}).get(k, [])
-                scores[k] = sum(levels) / len(levels) if levels else 3.0
-            
-            # Получаем историю диалогов
-            history = user_info.get('history', [])
-            
-            # Строим модель
-            model = ConfinementModel9(user_id)
-            model.build_from_profile(scores, history)
-            
-            # Сохраняем в user_data
-            user_info['confinement_model'] = model.to_dict()
-            sync_db.save_user_to_db(user_id)
-        
-        # Формируем ответ для фронтенда
-        response = {
-            "success": True,
-            "user_id": user_id,
-            "elements": {},
-            "links": model.links,
-            "loops": model.loops,
-            "key_confinement": model.key_confinement,
-            "is_closed": model.is_closed,
-            "closure_score": model.closure_score,
-            "vectors": {
-                k: {
-                    "name": VECTORS.get(k, {}).get('name', k),
-                    "emoji": VECTORS.get(k, {}).get('emoji', '🔍'),
-                    "level": model.elements.get(pos).level if model.elements.get(pos) else 3
-                }
-                for pos, k in [(2, 'СБ'), (3, 'ТФ'), (4, 'УБ')]
-                if model.elements.get(pos)
-            }
-        }
-        
-        # Добавляем каждый элемент
-        for i in range(1, 10):
-            elem = model.elements.get(i)
-            if elem:
-                response["elements"][i] = {
-                    "id": elem.id,
-                    "name": elem.name,
-                    "description": elem.description,
-                    "type": elem.element_type,
-                    "vector": elem.vector,
-                    "level": elem.level,
-                    "archetype": elem.archetype,
-                    "strength": elem.strength,
-                    "vak": elem.vak,
-                    "causes": elem.causes,
-                    "caused_by": elem.caused_by,
-                    "amplifies": elem.amplifies
-                }
-        
-        return JSONResponse(response)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in get_confinement_model: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
-
 
 @api_app.get("/api/confinement/model/{user_id}/loops")
 async def get_confinement_loops(user_id: int):
