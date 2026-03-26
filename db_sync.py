@@ -267,7 +267,7 @@ class SyncDB:
                 logger.warning(f"⚠️ Менеджер БД не готов, пропускаем сохранение мысли {user_id}")
                 return None
             
-            from db_instance import save_psychologist_thought as async_save_thought
+            from db_instance import save_psychologist_thought_async as async_save_thought
             
             result = db_loop_manager.run_coro(
                 async_save_thought,
