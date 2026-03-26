@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики сбора контекста (город, возраст, пол) для MAX
-ВЕРСИЯ 2.5 - ДОБАВЛЕНА ДИАГНОСТИКА ЗАВИСАНИЙ
+ВЕРСИЯ 2.6 - ИСПРАВЛЕНО ДУБЛИРОВАНИЕ И ДОБАВЛЕНА ДИАГНОСТИКА
 """
 
 import logging
@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 _context_locks = {}  # Отдельные блокировки для каждого пользователя
 _completed_flags = {}  # Флаги завершения контекста для каждого пользователя
+_processing_messages = {}  # Флаги обработки сообщений для предотвращения дублирования
 
 def _get_user_lock(user_id: int):
     """Получает или создает блокировку для пользователя"""
@@ -54,6 +55,14 @@ def _is_context_completed(user_id: int) -> bool:
 def _mark_context_completed(user_id: int):
     """Отмечает, что контекст завершен"""
     _completed_flags[user_id] = True
+
+def _is_processing_message(user_id: int) -> bool:
+    """Проверяет, обрабатывается ли уже сообщение для пользователя"""
+    return _processing_messages.get(user_id, False)
+
+def _set_processing_message(user_id: int, value: bool):
+    """Устанавливает флаг обработки сообщения"""
+    _processing_messages[user_id] = value
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -300,26 +309,30 @@ def handle_context_message(message: Message) -> bool:
     """
     user_id = message.from_user.id
     
-    # КРИТИЧЕСКИЙ ЛОГ ДЛЯ ОТЛАДКИ
-    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] handle_context_message ВЫЗВАН для user {user_id}")
-    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Текст сообщения: '{message.text}'")
-    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Текущее состояние: {get_state(user_id)}")
-    
-    lock = _get_user_lock(user_id)
-    
-    # Проверяем, не обрабатывается ли уже сообщение
-    if not lock.acquire(blocking=False):
-        logger.info(f"⚠️ handle_context_message уже выполняется для user {user_id}, пропускаем")
+    # ✅ ПРОВЕРКА: если сообщение уже обрабатывается, пропускаем
+    if _is_processing_message(user_id):
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Сообщение уже обрабатывается для user {user_id}, пропускаем")
         return False
     
+    _set_processing_message(user_id, True)
+    
     try:
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] handle_context_message ВЫЗВАН для user {user_id}")
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Текст сообщения: '{message.text}'")
+        
+        current_state = get_state(user_id)
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Текущее состояние: {current_state}")
+        
+        # Если не в состоянии ожидания контекста, пропускаем
+        if current_state != TestStates.awaiting_context:
+            logger.info(f"⏭️ Не в состоянии awaiting_context, выходим")
+            return False
+        
         context = get_user_context(user_id)
         
         if not context:
             logger.warning(f"❌ Контекст не найден для user {user_id}")
             return False
-        
-        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] context.awaiting_context = {context.awaiting_context}")
         
         if not context.awaiting_context:
             logger.info(f"⏭️ Не ожидается контекст, выходим")
@@ -334,6 +347,7 @@ def handle_context_message(message: Message) -> bool:
             context.city = text
             context.awaiting_context = None
             
+            # Отправляем сообщение о загрузке
             safe_send_message(
                 message,
                 "🔄 Получаю данные о погоде и часовом поясе...\nЭто займёт несколько секунд.",
@@ -341,44 +355,27 @@ def handle_context_message(message: Message) -> bool:
                 delete_previous=True
             )
             
-            def update_weather_and_continue():
-                try:
-                    logger.info(f"🌤️ Обновляем погоду для города {text}...")
-                    context.update_weather()
-                    logger.info(f"✅ Погода обновлена")
-                    
-                    context.detect_timezone_from_city()
-                    logger.info(f"✅ Часовой пояс определен")
-                    
-                    question, keyboard = context.ask_for_context()
-                    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] После города следующий вопрос: '{question}'")
-                    
-                    if question:
-                        safe_send_message(
-                            message,
-                            f"📝 **Давайте познакомимся**\n\n{question}",
-                            reply_markup=keyboard,
-                            parse_mode='Markdown',
-                            delete_previous=True
-                        )
-                    else:
-                        show_context_complete(message, context)
-                        
-                except Exception as e:
-                    logger.error(f"❌ Ошибка при обновлении погоды: {e}")
-                    question, keyboard = context.ask_for_context()
-                    if question:
-                        safe_send_message(
-                            message,
-                            f"📝 **Давайте познакомимся**\n\n{question}",
-                            reply_markup=keyboard,
-                            parse_mode='Markdown',
-                            delete_previous=True
-                        )
-                    else:
-                        show_context_complete(message, context)
+            # Обновляем погоду
+            try:
+                context.update_weather()
+                context.detect_timezone_from_city()
+            except Exception as e:
+                logger.error(f"❌ Ошибка при обновлении погоды: {e}")
             
-            threading.Thread(target=update_weather_and_continue, daemon=True).start()
+            # Получаем следующий вопрос
+            question, keyboard = context.ask_for_context()
+            logger.error(f"🔥🔥🔥 [DIAGNOSTIC] После города следующий вопрос: '{question}'")
+            
+            if question:
+                safe_send_message(
+                    message,
+                    f"📝 **Давайте познакомимся**\n\n{question}",
+                    reply_markup=keyboard,
+                    parse_mode='Markdown',
+                    delete_previous=True
+                )
+            else:
+                show_context_complete(message, context)
             return True
         
         elif context.awaiting_context == "age":
@@ -470,8 +467,14 @@ def handle_context_message(message: Message) -> bool:
         return False
         
     finally:
-        lock.release()
+        _set_processing_message(user_id, False)
+        lock = _get_user_lock(user_id)
+        try:
+            lock.release()
+        except:
+            pass
         logger.error(f"🔥🔥🔥 [DIAGNOSTIC] handle_context_message завершен для user {user_id}")
+
 
 # ============================================
 # ЗАВЕРШЕНИЕ СБОРА КОНТЕКСТА
@@ -482,61 +485,63 @@ def show_context_complete(message: Message, context: UserContext):
     Показывает итоговый экран после сбора контекста
     """
     user_id = message.chat.id
-    lock = _get_user_lock(user_id)
     
     logger.error(f"🔥🔥🔥 [DIAGNOSTIC] show_context_complete ВЫЗВАН для user {user_id}")
+    logger.error(f"🔥🔥🔥 [DIAGNOSTIC] context.city={context.city}, context.gender={context.gender}, context.age={context.age}")
     
-    # Проверяем, не показывается ли уже итоговый экран
-    if not lock.acquire(blocking=False):
-        logger.info(f"⚠️ show_context_complete уже выполняется для user {user_id}, пропускаем")
+    # Проверяем, не был ли уже завершен контекст
+    if _is_context_completed(user_id):
+        logger.info(f"⚠️ Контекст уже был завершен для user {user_id}, пропускаем")
         return
     
     try:
-        # Проверяем, не был ли уже завершен контекст
-        if _is_context_completed(user_id):
-            logger.info(f"⚠️ Контекст уже был завершен для user {user_id}, пропускаем")
-            return
-        
         logger.info(f"🎉 show_context_complete вызван для user {user_id}")
         
-        logger.info(f"🌤️ Обновляем погоду для итогового экрана...")
-        context.update_weather()
-        logger.info(f"✅ Погода обновлена")
+        # Обновляем погоду
+        try:
+            context.update_weather()
+            logger.info(f"✅ Погода обновлена: {context.weather_cache}")
+        except Exception as weather_error:
+            logger.error(f"❌ Ошибка при обновлении погоды: {weather_error}")
         
         # Отмечаем, что контекст завершен
         _mark_context_completed(user_id)
         
-        # Формируем сводку
-        summary = f"✅ **Отлично! Теперь я знаю о вас:**\n\n"
+        # Формируем сводку (БЕЗ форматирования Markdown)
+        summary = f"✅ Отлично! Теперь я знаю о вас:\n\n"
         
         if context.city:
-            summary += f"📍 **Город:** {context.city}\n"
+            summary += f"📍 Город: {context.city}\n"
         if context.gender:
             gender_str = "Мужчина" if context.gender == "male" else "Женщина" if context.gender == "female" else "Другое"
-            summary += f"👤 **Пол:** {gender_str}\n"
+            summary += f"👤 Пол: {gender_str}\n"
         if context.age:
-            summary += f"📅 **Возраст:** {context.age}\n"
+            summary += f"📅 Возраст: {context.age}\n"
         if context.weather_cache:
             weather = context.weather_cache
-            summary += f"{weather['icon']} **Погода:** {weather['description']}, {weather['temp']}°C\n"
+            summary += f"{weather['icon']} Погода: {weather['description']}, {weather['temp']}°C\n"
         
         summary += f"\n🎯 Теперь я буду учитывать это в наших разговорах!\n\n"
-        summary += f"🧠 **ЧТО ДАЛЬШЕ?**\n\n"
+        summary += f"🧠 ЧТО ДАЛЬШЕ?\n\n"
         summary += "Чтобы я мог помочь по-настоящему, нужно пройти тест (15 минут).\n"
         summary += "Он определит ваш психологический профиль по 4 векторам и глубинным паттернам.\n\n"
-        summary += f"👇 **Начинаем?**"
+        summary += f"👇 Начинаем?"
         
         keyboard = InlineKeyboardMarkup()
         keyboard.row(InlineKeyboardButton("🚀 НАЧАТЬ ТЕСТ", callback_data="start_stage_1_direct"))
         keyboard.row(InlineKeyboardButton("📖 ЧТО ДАЕТ ТЕСТ", callback_data="show_benefits"))
         
-        safe_send_message(
-            message,
-            summary,
-            reply_markup=keyboard,
-            parse_mode='Markdown',
-            delete_previous=True
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Отправляем итоговый экран...")
+        
+        # Отправляем сообщение
+        from bot_instance import bot
+        sent = bot.send_message(
+            chat_id=message.chat.id,
+            text=summary,
+            reply_markup=keyboard
         )
+        
+        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] Сообщение отправлено: {sent is not None}")
         
         # Очищаем состояние
         if user_id in user_states:
@@ -548,9 +553,6 @@ def show_context_complete(message: Message, context: UserContext):
         logger.error(f"❌ Ошибка в show_context_complete: {e}")
         import traceback
         traceback.print_exc()
-    finally:
-        lock.release()
-        logger.error(f"🔥🔥🔥 [DIAGNOSTIC] show_context_complete завершен для user {user_id}")
 
 
 # ============================================
