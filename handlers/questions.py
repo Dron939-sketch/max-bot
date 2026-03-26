@@ -64,6 +64,21 @@ from .smart_questions import generate_smart_questions, show_smart_questions, han
 
 logger = logging.getLogger(__name__)
 
+# ============================================
+# 👇👇👇 СЮДА ВСТАВИТЬ БЛОКИРОВКУ 👇👇👇
+# ============================================
+
+# БЛОКИРОВКА ДЛЯ ПРЕДОТВРАЩЕНИЯ ДВОЙНОЙ ОБРАБОТКИ
+_processing_lock = {}
+
+def is_processing(user_id: int) -> bool:
+    """Проверяет, обрабатывается ли уже запрос пользователя"""
+    return _processing_lock.get(user_id, False)
+
+def set_processing(user_id: int, value: bool):
+    """Устанавливает флаг обработки"""
+    _processing_lock[user_id] = value
+
 
 def save_answer_to_db_sync(user_id: int, answer_data: Dict[str, Any]):
     """Синхронное сохранение отдельного ответа в БД"""
