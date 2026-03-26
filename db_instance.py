@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ ДЛЯ PYTHON 3.11 - ПОЛНАЯ ВЕРСИЯ С ВСЕМИ ФУНКЦИЯМИ
-ВЕРСИЯ 3.6 - ИСПРАВЛЕНА ОШИБКА С ЦИКЛАМИ И КОНКУРЕНТНЫМ ДОСТУПОМ
+ВЕРСИЯ 3.7 - ИСПРАВЛЕНА ПРОБЛЕМА С ЦИКЛАМИ СОБЫТИЙ
 """
 
 import os
@@ -17,8 +16,6 @@ import traceback
 from typing import Dict, Any, Optional, Callable, Awaitable, List
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from functools import wraps
-import signal
-import sys
 from datetime import datetime
 
 from database import BotDatabase
@@ -58,7 +55,7 @@ class DBLoopManager:
         self._tasks = set()
         self._running = False
         self._db_instance: Optional[BotDatabase] = None
-        self._execution_lock = None  # Будет создан в цикле
+        self._execution_lock = None
     
     def init(self, db_instance: BotDatabase):
         """Инициализирует цикл событий в отдельном потоке"""
@@ -129,7 +126,6 @@ class DBLoopManager:
     def run_coro(self, coro_func: Callable[..., Awaitable], *args, timeout: int = 60, **kwargs):
         """
         Запускает корутину в цикле БД и возвращает результат.
-        Это основной метод для вызова из любого потока.
         """
         if self.loop is None:
             raise RuntimeError("Цикл БД не инициализирован. Вызовите init()")
@@ -143,25 +139,30 @@ class DBLoopManager:
         
         # Создаем блокировку в цикле, если её нет
         if self._execution_lock is None:
-            future = asyncio.run_coroutine_threadsafe(
-                self._create_lock(),
-                self.loop
-            )
             try:
+                future = asyncio.run_coroutine_threadsafe(
+                    self._create_lock(),
+                    self.loop
+                )
                 self._execution_lock = future.result(timeout=5)
+                logger.debug("✅ Блокировка создана в цикле БД")
             except Exception as e:
                 logger.error(f"❌ Ошибка создания блокировки: {e}")
-                # Создаем блокировку прямо в этом потоке (обходное решение)
+                # Создаем блокировку прямо в этом потоке (запасной вариант)
                 self._execution_lock = asyncio.Lock()
+                logger.warning("⚠️ Используется блокировка из основного потока")
         
         async def _wrapped():
-            async with self._execution_lock:
-                if is_coro:
-                    return await coro_func
-                else:
-                    return await coro_func(*args, **kwargs)
+            try:
+                async with self._execution_lock:
+                    if is_coro:
+                        return await coro_func
+                    else:
+                        return await coro_func(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"❌ Ошибка в _wrapped: {e}")
+                raise
         
-        # ✅ ВСЕГДА выполняем в потоке БД, чтобы избежать конфликта циклов
         future = asyncio.run_coroutine_threadsafe(_wrapped(), self.loop)
         
         try:
@@ -224,10 +225,7 @@ class DBLoopManager:
 # ГЛОБАЛЬНЫЕ ЭКЗЕМПЛЯРЫ
 # ============================================
 
-# Создаем экземпляр БД
 db = BotDatabase(DATABASE_URL)
-
-# Создаем менеджер цикла
 db_loop_manager = DBLoopManager()
 
 # ============================================
@@ -249,99 +247,72 @@ async def close_db():
     """Закрытие подключения к БД"""
     try:
         if db and db.pool:
-            # Используем run_coro для закрытия
             db_loop_manager.run_coro(db.disconnect, timeout=10)
             logger.info("🔒 Подключение к PostgreSQL закрыто")
         
-        # Останавливаем менеджер
         db_loop_manager.shutdown()
         
     except Exception as e:
         logger.error(f"❌ Ошибка при закрытии подключения: {e}")
 
 # ============================================
-# ГЛОБАЛЬНАЯ БЛОКИРОВКА ДЛЯ ПРОВЕРКИ СОЕДИНЕНИЯ
+# ПРОВЕРКА СОЕДИНЕНИЯ (УПРОЩЕННАЯ)
 # ============================================
 
 _ensure_db_lock = None
 
 async def _get_ensure_lock():
-    """Получает глобальную блокировку для ensure_db_connection"""
     global _ensure_db_lock
     if _ensure_db_lock is None:
         _ensure_db_lock = asyncio.Lock()
     return _ensure_db_lock
 
 
-async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
+async def ensure_db_connection(max_retries: int = 2, delay: float = 0.5):
     """
-    Проверяет соединение с БД с блокировкой, предотвращающей конкурентные вызовы
+    Упрощенная проверка соединения с БД с блокировкой
     """
     lock = await _get_ensure_lock()
     
     async with lock:
         for attempt in range(max_retries):
             try:
-                # Проверяем, существует ли пул
                 if db.pool is None:
-                    logger.info(f"🔄 Пул соединений не инициализирован, подключаемся... (попытка {attempt + 1}/{max_retries})")
+                    logger.info(f"🔄 Подключаемся к БД...")
                     await db.connect()
                     logger.info("✅ Подключение к БД установлено")
                     return True
                 
-                # Проверяем, закрыт ли пул
-                if hasattr(db.pool, '_closed') and db.pool._closed:
-                    logger.warning(f"⚠️ Пул соединений закрыт, переподключаемся... (попытка {attempt + 1}/{max_retries})")
-                    await db.connect()
-                    logger.info("✅ Переподключение к БД выполнено")
-                    return True
-                
-                # Проверяем соединение простым запросом с таймаутом
                 try:
-                    async with asyncio.timeout(5.0):
+                    async with asyncio.timeout(3.0):
                         async with db.get_connection() as conn:
                             await conn.execute("SELECT 1")
                     logger.debug("✅ Соединение с БД работает")
                     return True
                 except asyncio.TimeoutError:
-                    logger.warning(f"⚠️ Таймаут при проверке соединения (попытка {attempt + 1}/{max_retries})")
-                    # Пробуем переподключиться
+                    logger.warning("⚠️ Таймаут проверки соединения")
                     try:
                         await db.disconnect()
                     except:
                         pass
                     await db.connect()
-                    logger.info("✅ Переподключение выполнено")
                     return True
                 except Exception as conn_error:
-                    logger.warning(f"⚠️ Ошибка при проверке соединения: {conn_error}")
-                    # Пробуем переподключиться
+                    logger.warning(f"⚠️ Ошибка соединения: {conn_error}")
                     try:
                         await db.disconnect()
                     except:
                         pass
                     await db.connect()
-                    logger.info("✅ Переподключение выполнено")
                     return True
-                
+                    
             except Exception as e:
-                logger.warning(f"⚠️ Ошибка при проверке соединения (попытка {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
+                logger.warning(f"⚠️ Ошибка (попытка {attempt + 1}/{max_retries}): {e}")
                 
                 if attempt < max_retries - 1:
-                    # Пробуем переподключиться
-                    try:
-                        if db.pool:
-                            await db.disconnect()
-                            logger.info("🔌 Старый пул закрыт")
-                    except Exception as disconnect_error:
-                        logger.warning(f"⚠️ Ошибка при закрытии пула: {disconnect_error}")
-                    
-                    # Ждем перед следующей попыткой
-                    wait_time = delay * (2 ** attempt)
-                    logger.info(f"⏳ Ждем {wait_time:.1f}с перед следующей попыткой...")
-                    await asyncio.sleep(wait_time)
+                    await asyncio.sleep(delay)
                 else:
-                    logger.error(f"❌ Все попытки ({max_retries}) исчерпаны")
+                    logger.error("❌ Все попытки исчерпаны")
                     return False
     
     return False
@@ -351,14 +322,11 @@ async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
 # ============================================
 
 async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
-    """
-    Выполняет функцию с повторными попытками через менеджер цикла
-    """
+    """Выполняет функцию с повторными попытками"""
     last_error = None
     
     for attempt in range(max_retries):
         try:
-            # Используем менеджер для выполнения
             result = db_loop_manager.run_coro(
                 coro_func, *args, timeout=30, **kwargs
             )
@@ -367,14 +335,12 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
         except TimeoutError as e:
             last_error = e
             logger.warning(f"⚠️ Таймаут (попытка {attempt+1}/{max_retries})")
-            
         except Exception as e:
             last_error = e
             logger.warning(f"⚠️ Ошибка (попытка {attempt+1}/{max_retries}): {e}")
         
         if attempt < max_retries - 1:
-            wait_time = 1 * (attempt + 1)
-            await asyncio.sleep(wait_time)
+            await asyncio.sleep(1 * (attempt + 1))
     
     logger.error(f"❌ Все попытки исчерпаны: {last_error}")
     return None
@@ -384,9 +350,7 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
 # ============================================
 
 def sync_db_call(coro_func):
-    """
-    Декоратор для синхронных функций, которые нужно выполнить в цикле БД
-    """
+    """Декоратор для синхронных функций"""
     @wraps(coro_func)
     def wrapper(*args, **kwargs):
         return db_loop_manager.run_coro(coro_func, *args, **kwargs)
@@ -403,16 +367,12 @@ async def save_telegram_user_async(
     last_name: str = None,
     language_code: str = None
 ) -> bool:
-    """
-    Асинхронная версия сохранения пользователя Telegram
-    """
+    """Асинхронная версия сохранения пользователя Telegram"""
     try:
-        # Проверяем соединение с повторными попытками
         if not await ensure_db_connection():
             logger.error(f"❌ Нет соединения с БД для сохранения пользователя {user_id}")
             return False
         
-        # Сохраняем пользователя
         result = await db.save_telegram_user(
             user_id=user_id,
             username=username,
@@ -435,9 +395,7 @@ def save_telegram_user(
     last_name: str = None,
     language_code: str = None
 ) -> bool:
-    """
-    СИНХРОННАЯ обертка для сохранения пользователя Telegram
-    """
+    """СИНХРОННАЯ обертка для сохранения пользователя Telegram"""
     try:
         result = db_loop_manager.run_coro(
             save_telegram_user_async,
@@ -461,9 +419,7 @@ def save_user(
     last_name: str = None,
     language_code: str = None
 ) -> bool:
-    """
-    Алиас для save_telegram_user (для совместимости с другими модулями)
-    """
+    """Алиас для save_telegram_user"""
     return save_telegram_user(user_id, username, first_name, last_name, language_code)
 
 
@@ -652,16 +608,12 @@ def save_route_data(user_id: int, route_data: Dict[str, Any]) -> bool:
 
 
 async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None):
-    """
-    Асинхронная версия сохранения (для вызова через менеджер)
-    """
+    """Асинхронная версия сохранения"""
     try:
-        # Проверяем соединение с повторными попытками
         if not await ensure_db_connection():
             logger.error(f"❌ Нет соединения с БД для сохранения {user_id}")
             return False
         
-        # Импортируем глобальные словари, если параметры не переданы
         if user_data_dict is None:
             from state import user_data as global_user_data
             user_data_dict = global_user_data
@@ -674,7 +626,6 @@ async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict
             from state import user_routes as global_user_routes
             user_routes_dict = global_user_routes
         
-        # Сохраняем пользователя
         if user_id in user_data_dict:
             user_info = user_data_dict[user_id]
             first_name = user_info.get('first_name') or user_info.get('name')
@@ -686,17 +637,14 @@ async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict
                 first_name=first_name
             )
         
-        # Сохраняем user_data
         if user_id in user_data_dict:
             await db.save_user_data(user_id, user_data_dict[user_id])
         
-        # Сохраняем контекст
         if user_id in user_contexts_dict:
             context = user_contexts_dict[user_id]
             await db.save_user_context(user_id, context)
             await db.save_pickled_context(user_id, context)
         
-        # Сохраняем маршрут
         if user_id in user_routes_dict:
             route = user_routes_dict[user_id]
             await db.save_user_route(
@@ -717,9 +665,7 @@ async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict
 
 
 def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None):
-    """
-    Синхронная обертка для сохранения (вызывается из любого потока)
-    """
+    """Синхронная обертка для сохранения"""
     try:
         result = db_loop_manager.run_coro(
             save_user_to_db_async,
@@ -736,7 +682,7 @@ def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_
 
 
 # ============================================
-# НОВАЯ ФУНКЦИЯ ДЛЯ СОХРАНЕНИЯ МЫСЛЕЙ ПСИХОЛОГА
+# ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
 # ============================================
 
 async def create_psychologist_thoughts_table():
@@ -762,7 +708,6 @@ async def create_psychologist_thoughts_table():
                 )
             """)
             
-            # Индексы
             await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_thoughts_user_id 
                 ON fredi_psychologist_thoughts(user_id)
@@ -779,8 +724,6 @@ async def create_psychologist_thoughts_table():
                 CREATE INDEX IF NOT EXISTS idx_thoughts_created 
                 ON fredi_psychologist_thoughts(created_at)
             """)
-            
-            # GIN индекс для полнотекстового поиска
             await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_thoughts_text_gin 
                 ON fredi_psychologist_thoughts 
@@ -803,19 +746,15 @@ async def save_psychologist_thought_async(
     thought_summary: str = None,
     metadata: Dict = None
 ) -> Optional[int]:
-    """
-    Сохраняет мысль психолога в отдельную таблицу
-    """
+    """Сохраняет мысль психолога"""
     try:
         if not await ensure_db_connection():
             logger.error(f"❌ Нет соединения с БД")
             return None
         
-        # Убеждаемся, что таблица существует
         await create_psychologist_thoughts_table()
         
         async with db.get_connection() as conn:
-            # Если test_result_id не передан, получаем последний
             if test_result_id is None:
                 row = await conn.fetchrow("""
                     SELECT id FROM fredi_test_results 
@@ -825,14 +764,12 @@ async def save_psychologist_thought_async(
                 if row:
                     test_result_id = row['id']
             
-            # Деактивируем предыдущие мысли того же типа
             await conn.execute("""
                 UPDATE fredi_psychologist_thoughts 
                 SET is_active = FALSE 
                 WHERE user_id = $1 AND thought_type = $2 AND is_active = TRUE
             """, user_id, thought_type)
             
-            # Сохраняем новую мысль
             row = await conn.fetchrow("""
                 INSERT INTO fredi_psychologist_thoughts (
                     user_id, test_result_id, thought_type, thought_text, 
@@ -844,7 +781,6 @@ async def save_psychologist_thought_async(
             
             thought_id = row['id']
             
-            # ОБРАТНАЯ СОВМЕСТИМОСТЬ: сохраняем также в user_data
             try:
                 from state import user_data
                 if user_id in user_data:
@@ -889,10 +825,6 @@ def save_psychologist_thought(
         logger.error(f"❌ Ошибка save_psychologist_thought: {e}")
         return None
 
-
-# ============================================
-# ФУНКЦИИ ДЛЯ ПОЛУЧЕНИЯ МЫСЛЕЙ
-# ============================================
 
 async def get_psychologist_thought_async(
     user_id: int,
@@ -1012,7 +944,7 @@ def get_psychologist_thought_history(
 
 
 # ============================================
-# ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С МЫСЛЯМИ
+# ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ МЫСЛЕЙ
 # ============================================
 
 async def get_all_psychologist_thoughts_async(
@@ -1020,9 +952,7 @@ async def get_all_psychologist_thoughts_async(
     limit: int = 50,
     include_inactive: bool = False
 ) -> List[Dict]:
-    """
-    Получает все мысли психолога для пользователя (с пагинацией)
-    """
+    """Получает все мысли психолога для пользователя"""
     try:
         if not await ensure_db_connection():
             return []
@@ -1070,7 +1000,7 @@ def get_all_psychologist_thoughts(
     limit: int = 50,
     include_inactive: bool = False
 ) -> List[Dict]:
-    """Синхронная обертка для получения всех мыслей психолога"""
+    """Синхронная обертка"""
     try:
         result = db_loop_manager.run_coro(
             get_all_psychologist_thoughts_async,
@@ -1086,9 +1016,7 @@ def get_all_psychologist_thoughts(
 
 
 async def delete_psychologist_thought_async(thought_id: int) -> bool:
-    """
-    Удаляет мысль психолога по ID
-    """
+    """Удаляет мысль психолога по ID"""
     try:
         if not await ensure_db_connection():
             return False
@@ -1110,7 +1038,7 @@ async def delete_psychologist_thought_async(thought_id: int) -> bool:
 
 
 def delete_psychologist_thought(thought_id: int) -> bool:
-    """Синхронная обертка для удаления мысли"""
+    """Синхронная обертка"""
     try:
         result = db_loop_manager.run_coro(
             delete_psychologist_thought_async,
@@ -1130,9 +1058,7 @@ async def update_psychologist_thought_async(
     is_active: bool = None,
     metadata: Dict = None
 ) -> bool:
-    """
-    Обновляет мысль психолога
-    """
+    """Обновляет мысль психолога"""
     try:
         if not await ensure_db_connection():
             return False
@@ -1194,7 +1120,7 @@ def update_psychologist_thought(
     is_active: bool = None,
     metadata: Dict = None
 ) -> bool:
-    """Синхронная обертка для обновления мысли"""
+    """Синхронная обертка"""
     try:
         result = db_loop_manager.run_coro(
             update_psychologist_thought_async,
@@ -1212,9 +1138,7 @@ def update_psychologist_thought(
 
 
 async def get_thoughts_by_test_result_async(test_result_id: int) -> List[Dict]:
-    """
-    Получает все мысли, связанные с конкретным результатом теста
-    """
+    """Получает мысли по результату теста"""
     try:
         if not await ensure_db_connection():
             return []
@@ -1249,7 +1173,7 @@ async def get_thoughts_by_test_result_async(test_result_id: int) -> List[Dict]:
 
 
 def get_thoughts_by_test_result(test_result_id: int) -> List[Dict]:
-    """Синхронная обертка для получения мыслей по тесту"""
+    """Синхронная обертка"""
     try:
         result = db_loop_manager.run_coro(
             get_thoughts_by_test_result_async,
@@ -1263,27 +1187,22 @@ def get_thoughts_by_test_result(test_result_id: int) -> List[Dict]:
 
 
 async def get_psychologist_thoughts_stats_async(user_id: int) -> Dict[str, Any]:
-    """
-    Получает статистику по мыслям психолога для пользователя
-    """
+    """Получает статистику по мыслям"""
     try:
         if not await ensure_db_connection():
             return {}
         
         async with db.get_connection() as conn:
-            # Общее количество мыслей
             total = await conn.fetchval("""
                 SELECT COUNT(*) FROM fredi_psychologist_thoughts 
                 WHERE user_id = $1
             """, user_id)
             
-            # Активные мысли
             active = await conn.fetchval("""
                 SELECT COUNT(*) FROM fredi_psychologist_thoughts 
                 WHERE user_id = $1 AND is_active = TRUE
             """, user_id)
             
-            # По типам
             by_type = await conn.fetch("""
                 SELECT thought_type, COUNT(*) as count 
                 FROM fredi_psychologist_thoughts 
@@ -1291,7 +1210,6 @@ async def get_psychologist_thoughts_stats_async(user_id: int) -> Dict[str, Any]:
                 GROUP BY thought_type
             """, user_id)
             
-            # Последняя мысль
             last = await conn.fetchrow("""
                 SELECT thought_text, thought_type, created_at 
                 FROM fredi_psychologist_thoughts 
@@ -1312,12 +1230,12 @@ async def get_psychologist_thoughts_stats_async(user_id: int) -> Dict[str, Any]:
             }
             
     except Exception as e:
-        logger.error(f"❌ Ошибка получения статистики мыслей: {e}")
+        logger.error(f"❌ Ошибка получения статистики: {e}")
         return {}
 
 
 def get_psychologist_thoughts_stats(user_id: int) -> Dict[str, Any]:
-    """Синхронная обертка для получения статистики мыслей"""
+    """Синхронная обертка"""
     try:
         result = db_loop_manager.run_coro(
             get_psychologist_thoughts_stats_async,
@@ -1335,11 +1253,8 @@ def get_psychologist_thoughts_stats(user_id: int) -> Dict[str, Any]:
 # ============================================
 
 async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
-    """
-    Асинхронная версия сохранения результатов теста (простая версия)
-    """
+    """Асинхронная версия сохранения результатов теста"""
     try:
-        # Проверяем соединение с повторными попытками
         if not await ensure_db_connection():
             logger.error(f"❌ Нет соединения с БД для сохранения результатов {user_id}")
             return None
@@ -1354,7 +1269,6 @@ async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
             logger.warning(f"⚠️ Нет данных для пользователя {user_id}")
             return None
         
-        # Получаем profile_code
         profile_code = None
         if data.get("profile_data"):
             profile_code = data["profile_data"].get("display_name")
@@ -1364,7 +1278,6 @@ async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
             if match:
                 profile_code = match.group(0)
         
-        # Сохраняем результат теста
         test_id = await db.save_test_result(
             user_id=user_id,
             test_type=test_type,
@@ -1377,7 +1290,6 @@ async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
             confinement_model=data.get("confinement_model")
         )
         
-        # Сохраняем все ответы
         all_answers = data.get("all_answers", [])
         if all_answers and test_id:
             for answer in all_answers:
@@ -1397,8 +1309,6 @@ async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
                     target=answer.get('target')
                 )
         
-        # ✅ СОХРАНЯЕМ МЫСЛИ ПСИХОЛОГА И ОПИСАНИЕ ПРОФИЛЯ
-        # Мысль психолога
         thought = data.get('psychologist_thought')
         if thought:
             await save_psychologist_thought_async(
@@ -1413,7 +1323,6 @@ async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
                 }
             )
         
-        # Описание профиля
         profile_description = data.get('ai_generated_profile')
         if profile_description:
             await save_psychologist_thought_async(
@@ -1441,9 +1350,7 @@ async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
 
 
 def save_test_result_to_db(user_id, test_type, user_data_dict=None):
-    """
-    Синхронная обертка для сохранения результатов теста (простая версия)
-    """
+    """Синхронная обертка"""
     try:
         result = db_loop_manager.run_coro(
             save_test_result_to_db_async,
@@ -1458,10 +1365,6 @@ def save_test_result_to_db(user_id, test_type, user_data_dict=None):
         return None
 
 
-# ============================================
-# ФУНКЦИЯ ДЛЯ СОХРАНЕНИЯ РЕЗУЛЬТАТОВ С ПОЛНЫМИ ПАРАМЕТРАМИ
-# ============================================
-
 async def save_test_result_full_async(
     user_id: int,
     test_type: str,
@@ -1473,21 +1376,15 @@ async def save_test_result_full_async(
     deep_patterns: Dict = None,
     confinement_model: Dict = None
 ) -> Optional[int]:
-    """
-    Асинхронная версия сохранения результатов теста с полными параметрами
-    Принимает 9 параметров для совместимости с db_sync.py
-    """
+    """Асинхронная версия с полными параметрами"""
     try:
-        # Проверяем соединение с повторными попытками
         if not await ensure_db_connection():
             logger.error(f"❌ Нет соединения с БД для сохранения результатов {user_id}")
             return None
         
-        # Если vectors не передан, но есть behavioral_levels в results
         if vectors is None and results.get("behavioral_levels"):
             vectors = results.get("behavioral_levels")
         
-        # Если profile_code не передан, пытаемся извлечь из results
         if profile_code is None:
             if results.get("profile_data"):
                 profile_code = results["profile_data"].get("display_name")
@@ -1497,23 +1394,18 @@ async def save_test_result_full_async(
                 if match:
                     profile_code = match.group(0)
         
-        # Если perception_type не передан, берем из results
         if perception_type is None:
             perception_type = results.get("perception_type")
         
-        # Если thinking_level не передан, берем из results
         if thinking_level is None:
             thinking_level = results.get("thinking_level")
         
-        # Если deep_patterns не передан, берем из results
         if deep_patterns is None:
             deep_patterns = results.get("deep_patterns")
         
-        # Если confinement_model не передан, берем из results
         if confinement_model is None:
             confinement_model = results.get("confinement_model")
         
-        # Сохраняем результат теста
         test_id = await db.save_test_result(
             user_id=user_id,
             test_type=test_type,
@@ -1526,7 +1418,6 @@ async def save_test_result_full_async(
             confinement_model=confinement_model
         )
         
-        # Сохраняем все ответы, если есть
         all_answers = results.get("all_answers", [])
         if all_answers and test_id:
             for answer in all_answers:
@@ -1546,8 +1437,6 @@ async def save_test_result_full_async(
                     target=answer.get('target')
                 )
         
-        # ✅ СОХРАНЯЕМ МЫСЛИ ПСИХОЛОГА И ОПИСАНИЕ ПРОФИЛЯ
-        # Мысль психолога
         thought = results.get('psychologist_thought')
         if thought:
             await save_psychologist_thought_async(
@@ -1562,7 +1451,6 @@ async def save_test_result_full_async(
                 }
             )
         
-        # Описание профиля
         profile_description = results.get('ai_generated_profile')
         if profile_description:
             await save_psychologist_thought_async(
@@ -1600,9 +1488,7 @@ def save_test_result_to_db_full(
     deep_patterns: Dict = None,
     confinement_model: Dict = None
 ) -> Optional[int]:
-    """
-    Синхронная обертка для сохранения результатов теста с полными параметрами
-    """
+    """Синхронная обертка"""
     try:
         result = db_loop_manager.run_coro(
             save_test_result_full_async,
@@ -1633,26 +1519,23 @@ __all__ = [
     'init_db',
     'close_db',
     'save_telegram_user',
-    'save_user',  # алиас
+    'save_user',
     'save_user_to_db',
     'save_test_result_to_db',
-    'save_test_result_to_db_full',  # функция с полными параметрами
+    'save_test_result_to_db_full',
     'log_event',
     'ensure_db_connection',
     'execute_with_retry',
     'sync_db_call',
-    # Функции для работы с данными
     'save_user_data',
     'get_user_data',
     'save_user_context',
     'get_user_context',
     'save_route_data',
-    # Функции для мыслей психолога (основные)
     'create_psychologist_thoughts_table',
     'save_psychologist_thought',
     'get_psychologist_thought',
     'get_psychologist_thought_history',
-    # Дополнительные функции для работы с мыслями
     'get_all_psychologist_thoughts',
     'delete_psychologist_thought',
     'update_psychologist_thought',
@@ -1660,4 +1543,4 @@ __all__ = [
     'get_psychologist_thoughts_stats',
 ]
 
-logger.info("✅ db_instance инициализирован (версия 3.6 с исправлением конкурентного доступа)")
+logger.info("✅ db_instance инициализирован (версия 3.7)")
