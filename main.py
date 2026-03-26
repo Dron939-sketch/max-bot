@@ -3763,13 +3763,25 @@ async def get_goals_with_confinement(user_id: int, mode: str = "coach"):
         # Добавляем общие цели
         goals.extend(mode_db["general"])
         
-        # Добавляем рекомендации на основе конфайнтмент-модели
-        if model.key_confinement:
+        # ✅ ИСПРАВЛЕНО: проверяем, что key_confinement существует и является словарём
+        if model.key_confinement and isinstance(model.key_confinement, dict):
             key_elem = model.key_confinement.get('element')
-            if key_elem:
+            # Проверяем, что key_elem — это объект с атрибутом name
+            if key_elem and hasattr(key_elem, 'name'):
                 goals.insert(0, {
                     "id": "key_confinement_work",
                     "name": f"Работа с ключевым ограничением: {key_elem.name[:30]}",
+                    "time": "3-5 недель",
+                    "difficulty": "hard",
+                    "emoji": "🔐",
+                    "description": model.key_confinement.get('description', 'Работа с главным ограничением системы'),
+                    "is_priority": True
+                })
+            elif isinstance(key_elem, dict) and key_elem.get('name'):
+                # Если key_elem — словарь
+                goals.insert(0, {
+                    "id": "key_confinement_work",
+                    "name": f"Работа с ключевым ограничением: {key_elem.get('name', '')[:30]}",
                     "time": "3-5 недель",
                     "difficulty": "hard",
                     "emoji": "🔐",
@@ -3787,6 +3799,8 @@ async def get_goals_with_confinement(user_id: int, mode: str = "coach"):
         
     except Exception as e:
         logger.error(f"❌ Error in get_goals_with_confinement: {e}")
+        import traceback
+        traceback.print_exc()
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": str(e)}
