@@ -1,15 +1,20 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 hypno_module.py
 Комплексный модуль гипнотического воздействия для виртуального психолога
 Основан на книгах А.Ю. Мейстера "Теория манипуляции" и его методе терапевтических сказок
-Версия: 1.0
+Версия: 1.1 - ДОБАВЛЕНА ИНТЕГРАЦИЯ С КОНФАЙНТМЕНТ-МОДЕЛЬЮ
 """
 
 import random
 import re
+import logging
 from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -26,28 +31,33 @@ class PreSuppositions:
             "Как вы уже поняли, {suggestion}",
             "Здорово, что вы осознаёте, что {suggestion}",
             "Вы в курсе, что {suggestion}?",
-            "Не могу не отметить, что {suggestion}"
+            "Не могу не отметить, что {suggestion}",
+            "Вам уже известно, что {suggestion}",
+            "Согласитесь, что {suggestion}"
         ]
         
         self.implied_templates = [
             "Дай знать, когда {suggestion}",
             "Когда {suggestion}, сразу заметишь это",
             "Пока ты будешь {action}, ты поймёшь, что {suggestion}",
-            "После того как {suggestion}, {action}"
+            "После того как {suggestion}, {action}",
+            "Как только {suggestion}, ты почувствуешь"
         ]
         
         self.subordinate_templates = [
             "Благодаря тому, что {suggestion}, {main_message}",
             "Поскольку {suggestion}, я предлагаю {main_message}",
             "Так как {suggestion}, {main_message}",
-            "Зная, что {suggestion}, {main_message}"
+            "Зная, что {suggestion}, {main_message}",
+            "Учитывая, что {suggestion}, {main_message}"
         ]
         
         self.clarifying_templates = [
             "Когда ты {suggestion}?",
             "Как ты планируешь {suggestion}?",
             "Что в {suggestion} для тебя самое важное?",
-            "Интересно, что произойдёт, когда ты {suggestion}?"
+            "Интересно, что произойдёт, когда ты {suggestion}?",
+            "Как ты узнаешь, что {suggestion}?"
         ]
     
     def introductory(self, suggestion: str) -> str:
@@ -84,31 +94,38 @@ class Truisms:
             "Ты дышишь прямо сейчас",
             "В твоей жизни есть люди, которые тебе дороги",
             "Ты хочешь жить лучше",
-            "У тебя есть опыт, который ты приобрел в жизни"
+            "У тебя есть опыт, который ты приобрел в жизни",
+            "Ты уже многое преодолел",
+            "Каждый день ты учишься чему-то новому"
         ]
         
         self.possibility_templates = [
             "В твоей жизни наверняка есть {something}",
             "Не исключено, что {suggestion}",
             "Возможно, ты замечал, что {suggestion}",
-            "Иногда бывает, что {suggestion}"
+            "Иногда бывает, что {suggestion}",
+            "Бывает, что {suggestion}",
+            "Случается, что {suggestion}"
         ]
         
         self.or_not_templates = [
             "Ты можешь {positive}, а можешь и {negative}. И то и другое нормально.",
-            "Бывает, что {positive}, а бывает, что {negative}"
+            "Бывает, что {positive}, а бывает, что {negative}",
+            "{positive} или {negative} — оба варианта имеют право на существование"
         ]
         
         self.condition_templates = [
             "{statement}, если {condition}",
-            "Когда {condition}, тогда {statement}"
+            "Когда {condition}, тогда {statement}",
+            "Как только {condition}, {statement}"
         ]
         
         self.about_self_templates = [
             "Мне кажется, что {feeling}",
             "Я чувствую, что {feeling}",
             "Мой опыт подсказывает, что {feeling}",
-            "Я замечаю, что {feeling}"
+            "Я замечаю, что {feeling}",
+            "Похоже, что {feeling}"
         ]
         
         self.proverbs = [
@@ -117,14 +134,19 @@ class Truisms:
             "Всё, что ни делается, всё к лучшему",
             "Дорогу осилит идущий",
             "Вода камень точит",
-            "Терпение и труд всё перетрут"
+            "Терпение и труд всё перетрут",
+            "Глаза боятся, а руки делают",
+            "Утро вечера мудренее",
+            "Как аукнется, так и откликнется"
         ]
         
         self.opposites = {
             "получится": "не получится",
             "согласишься": "не согласишься",
             "поймешь": "не поймешь",
-            "захочешь": "не захочешь"
+            "захочешь": "не захочешь",
+            "сделаешь": "не сделаешь",
+            "знаешь": "не знаешь"
         }
     
     def fact(self) -> str:
@@ -174,19 +196,25 @@ class PseudoLogic:
         self.therefore_templates = [
             "{premise}, значит, {conclusion}",
             "{premise}, следовательно, {conclusion}",
-            "{premise}, поэтому {conclusion}"
+            "{premise}, поэтому {conclusion}",
+            "{premise}, а значит {conclusion}",
+            "{premise}, из чего следует {conclusion}"
         ]
         
         self.temporal_templates = [
             "Пока {action1}, {action2}",
             "В то время как {action1}, {action2}",
-            "После того как {action1}, {action2}"
+            "После того как {action1}, {action2}",
+            "Когда {action1}, тогда {action2}",
+            "По мере того как {action1}, {action2}"
         ]
         
         self.causal_templates = [
             "{cause}, поэтому {effect}",
             "{effect}, потому что {cause}",
-            "{cause} ведёт к {effect}"
+            "{cause} ведёт к {effect}",
+            "Если {cause}, то {effect}",
+            "{cause} неизбежно приводит к {effect}"
         ]
     
     def therefore(self, premise: str, conclusion: str) -> str:
@@ -225,20 +253,25 @@ class ParadoxCommands:
             "Я не буду просить тебя {command}",
             "Тебе необязательно {command}",
             "Ты можешь не {command}",
-            "Я не говорю, что тебе нужно {command}"
+            "Я не говорю, что тебе нужно {command}",
+            "Не стоит {command}",
+            "Я бы не стал тебя просить {command}"
         ]
         
         self.prohibition_templates = [
             "Только не вздумай {forbidden}!",
             "Не смей {forbidden}!",
             "Я запрещаю тебе {forbidden}",
-            "Тебе не стоит {forbidden}"
+            "Тебе не стоит {forbidden}",
+            "Ни в коем случае не {forbidden}",
+            "Пожалуйста, не {forbidden}"
         ]
         
         self.limit_templates = [
             "{action}, но только {condition}",
             "Ты можешь {action}, пока {condition}",
-            "{action} возможно лишь тогда, когда {condition}"
+            "{action} возможно лишь тогда, когда {condition}",
+            "{action} только если {condition}"
         ]
     
     def not_command(self, command: str) -> str:
@@ -273,32 +306,37 @@ class HypnoQuestions:
             "{suggestion}?",
             "Ты {suggestion}?",
             "Можешь {suggestion}?",
-            "Готов {suggestion}?"
+            "Готов {suggestion}?",
+            "Согласен {suggestion}?"
         ]
         
         self.rhetorical_templates = [
             "Разве {suggestion}?",
             "Неужели {suggestion}?",
             "Кому не хочется {suggestion}?",
-            "Как ты думаешь, {suggestion}?"
+            "Как ты думаешь, {suggestion}?",
+            "Скажи, разве не так, что {suggestion}?"
         ]
         
         self.return_templates = [
             "{statement}. Да?",
             "{statement}. Правда?",
             "{statement}. Согласен?",
-            "{statement}. Чувствуешь?"
+            "{statement}. Чувствуешь?",
+            "{statement}. Не так ли?"
         ]
         
         self.alternative_templates = [
             "Ты предпочитаешь {option1} или {option2}?",
             "Тебе больше подходит {option1} или {option2}?",
-            "Выбирай: {option1} или {option2}"
+            "Выбирай: {option1} или {option2}",
+            "Что для тебя важнее: {option1} или {option2}?"
         ]
         
         self.unequal_templates = [
             "Тебе {good_option} или лучше {bad_option}?",
-            "Что для тебя важнее: {good_option} или {bad_option}?"
+            "Что для тебя важнее: {good_option} или {bad_option}?",
+            "Ты выберешь {good_option} или всё-таки {bad_option}?"
         ]
     
     def simple(self, suggestion: str) -> str:
@@ -343,28 +381,29 @@ class MiltonModel:
             "понимание", "осознание", "отношение", "доверие", "свобода",
             "безопасность", "уверенность", "спокойствие", "развитие", "рост",
             "изменение", "исцеление", "любовь", "счастье", "радость",
-            "сила", "мудрость", "опыт", "интуиция"
+            "сила", "мудрость", "опыт", "интуиция", "вдохновение"
         ]
         
         self.vague_verbs = [
             "сделать", "почувствовать", "понять", "осознать", "изменить",
             "двигаться", "развиваться", "открыть", "обнаружить", "найти",
-            "довериться", "расслабиться", "отпустить", "принять", "позволить"
+            "довериться", "расслабиться", "отпустить", "принять", "позволить",
+            "заметить", "увидеть", "услышать"
         ]
         
         self.vague_nouns = [
             "человек", "люди", "некто", "кто-то", "каждый",
-            "некоторые", "многие", "окружающие", "другие"
+            "некоторые", "многие", "окружающие", "другие", "другой"
         ]
         
         self.deletions = [
             "Можно...", "Хочется...", "Бывает...", "Случается...", 
-            "Иногда...", "Порой..."
+            "Иногда...", "Порой...", "Возможно...", "Может быть..."
         ]
         
         self.unspecific_nouns = [
             "это", "то", "нечто", "что-то", "все это",
-            "такое", "эта ситуация", "это состояние"
+            "такое", "эта ситуация", "это состояние", "то самое"
         ]
     
     def nominalization(self) -> str:
@@ -395,7 +434,9 @@ class MiltonModel:
         templates = [
             f"И {self.vague_noun()} может {self.vague_verb()} это {self.unspecific()}",
             f"{self.nominalization()} приходит к {self.vague_noun()} {self.deletion()}",
-            f"Когда {self.vague_noun()} {self.vague_verb()}, возникает {self.nominalization()}"
+            f"Когда {self.vague_noun()} {self.vague_verb()}, возникает {self.nominalization()}",
+            f"Ты можешь {self.vague_verb()} {self.unspecific()} прямо сейчас",
+            f"Представь, как {self.nominalization()} входит в {self.vague_noun()}"
         ]
         return random.choice(templates)
 
@@ -411,34 +452,40 @@ class Anchoring:
         self.phrase_anchors = {
             "calm": [
                 "дыши глубже", "всё идёт своим чередом", "ты в безопасности",
-                "можно расслабиться", "внутри становится тихо"
+                "можно расслабиться", "внутри становится тихо", "всё хорошо",
+                "спокойствие приходит", "отпусти напряжение"
             ],
             "confidence": [
                 "ты справишься", "у тебя получится", "ты уже делал это раньше",
-                "в тебе есть сила", "я в тебя верю"
+                "в тебе есть сила", "я в тебя верю", "ты можешь больше, чем думаешь",
+                "доверься себе", "ты сильный"
             ],
             "curiosity": [
                 "интересно, что будет дальше", "давай посмотрим",
-                "любопытно, что ты заметишь", "открой для себя"
+                "любопытно, что ты заметишь", "открой для себя",
+                "что ты видишь?", "заметь новое"
             ],
             "action": [
                 "сделай шаг", "начни прямо сейчас", "пришло время",
-                "действуй", "двигайся вперед"
+                "действуй", "двигайся вперед", "пора",
+                "первый шаг уже сделан", "продолжай"
             ],
             "trust": [
                 "ты можешь доверять", "я рядом", "ты не один",
-                "доверься", "будь собой"
+                "доверься", "будь собой", "можно быть открытым",
+                "всё будет хорошо"
             ],
             "insight": [
                 "понимание приходит", "вдруг становится ясно",
-                "озарение", "внутреннее знание", "интуиция подсказывает"
+                "озарение", "внутреннее знание", "интуиция подсказывает",
+                "ответ уже есть внутри", "ты знаешь"
             ]
         }
         
         self.emoji_anchors = {
             "calm": "🌊", "confidence": "💪", "curiosity": "👀",
             "action": "⚡", "trust": "🤝", "insight": "💡",
-            "love": "❤️", "success": "🏆"
+            "love": "❤️", "success": "🏆", "peace": "🕊️"
         }
         
         self.user_anchors = defaultdict(dict)
@@ -475,6 +522,10 @@ class Anchoring:
             emoji = self.get_emoji(state)
             phrases.append(f"{emoji} {phrase}")
         return "\n".join(phrases)
+    
+    def get_all_states(self) -> List[str]:
+        """Возвращает все доступные состояния"""
+        return list(self.phrase_anchors.keys())
 
 
 # ============================================================================
@@ -488,6 +539,7 @@ class TherapeuticTales:
         self.tales = {
             "fear": {
                 "title": "Тигренок",
+                "keywords": ["страх", "боюсь", "трудно", "неуверен"],
                 "text": """Давным-давно в далекой-далекой стране у самых Синих гор жил маленький полосатый тигренок. Он был весь полосатый: от носа до хвоста. Тигренок часто играл со своим полосатым хвостом, гонялся за бабочками, сбивал лапой цветы и листья. Это забавляло его. И все было бы хорошо, если бы тигренок не был таким трусливым. Он боялся уходить далеко от своей пещеры, боялся зверей, птиц, лесных духов. Тигренок мечтал, что когда он вырастет, он будет самым смелым тигром у Синих гор.
 
 Однажды тигренок услышал историю о том, что в самом дальнем лесу, далеко от Синих гор есть волшебная поляна, на которой исполняется самое заветное желание того, кто дойдет туда. Тигренок очень хотел стать смелым, но он боялся уходить далеко. Уставший от раздумий он лег в своей пещере и уснул. И ему приснился сон, что он решил отправиться в путешествие в самый дальний лес на волшебную поляну.
@@ -509,6 +561,7 @@ class TherapeuticTales:
             
             "learning": {
                 "title": "Поэт",
+                "keywords": ["учиться", "научиться", "обучение", "понять"],
                 "text": """Давным-давно в далекой-далекой стране у самых Синих гор в одном городе жил мальчик, который очень хотел стать Поэтом, сочинять стихи, песни, баллады; рассказывать людям истории, сказки и притчи. Мальчик очень хотел стать Поэтом, и решил, что когда в город придет странствующий Поэт, он обратиться к нему с такими словами: "Великий Поэт! Ты умеешь сочинять стихи, песни, баллады. Своими историями, сказками и притчами ты учишь людей смеяться, любить, радоваться жизни, быть счастливыми. Научи меня сочинять стихи и сказки."
 
 Мальчик очень надеялся, что какой-нибудь Поэт останется на время в городе и научит его рифмовать строки.
@@ -532,6 +585,7 @@ class TherapeuticTales:
             
             "truth": {
                 "title": "В поисках Истины",
+                "keywords": ["смысл", "истина", "понять", "зачем"],
                 "text": """Давным-давно в далекой-далекой стране у самых Синих гор жил человек, который хотел узнать Истину. За свою жизнь он прочитал множество книг, разговаривал со всеми мудрецами близлежащих городов и селений, но так и не получил ответа на свой вопрос: в чем заключается Истина.
 
 Однажды он решил отправиться в путь, чтобы найти ответ на свой вопрос. Он решил пройти по всем городам и селениям далекой-далекой страны и спросить всех Учителей, в чем заключается Истина.
@@ -553,6 +607,7 @@ class TherapeuticTales:
             
             "growth": {
                 "title": "Сказка о дровосеке",
+                "keywords": ["развитие", "расти", "вперед", "двигаться"],
                 "text": """Давным-давно в далекой-далекой стране у самых Синих гор жил дровосек, который рубил дрова в соседнем лесу, отвозил их в ближайший город, продавал. И на вырученные деньги жил, пусть и бедно, но счастливо.
 
 Однажды, когда дровосек как всегда рубил дрова в ближайшем лесу недалеко от дороги, мимо шел путник. Он увидел дровосека и попросил у него что-нибудь поесть. Дровосек с радостью поделился с путником своим обедом. Когда путник закончил обед, он поблагодарил дровосека и сказал: «Иди вперед!»
@@ -572,35 +627,37 @@ class TherapeuticTales:
         self.standard_openings = [
             "Давным-давно в далекой-далекой стране у самых Синих гор",
             "В некотором царстве, в некотором государстве",
-            "Давно это было, в стародавние времена"
+            "Давно это было, в стародавние времена",
+            "Сказывают, в давние времена",
+            "Жили-были"
         ]
         
         self.standard_closings = [
             "Вот такая история случилась давным-давно, в далёкой-далёкой стране у самых Синих гор",
             "Сказке конец, а кто слушал - молодец",
-            "И стали они жить-поживать да добра наживать"
+            "И стали они жить-поживать да добра наживать",
+            "С тех пор прошло много лет, но сказка осталась с нами"
         ]
     
     def get_tale_for_issue(self, text: str) -> Dict:
         """Возвращает подходящую сказку по тексту проблемы"""
         text_lower = text.lower()
         
-        mapping = {
-            "страх": "fear", "боюсь": "fear", "трудно": "fear", "неуверен": "fear",
-            "учиться": "learning", "научиться": "learning", "обучение": "learning",
-            "понять": "truth", "смысл": "truth", "истина": "truth",
-            "развитие": "growth", "расти": "growth", "вперед": "growth"
-        }
-        
-        for key, tale_id in mapping.items():
-            if key in text_lower:
-                tale = self.tales.get(tale_id)
-                if tale:
+        for tale_id, tale in self.tales.items():
+            for keyword in tale.get('keywords', []):
+                if keyword in text_lower:
                     return {"title": tale["title"], "text": tale["text"]}
         
-        # По умолчанию
         default = self.tales["growth"]
         return {"title": default["title"], "text": default["text"]}
+    
+    def get_tale_by_id(self, tale_id: str) -> Optional[Dict]:
+        """Возвращает сказку по ID"""
+        return self.tales.get(tale_id)
+    
+    def get_all_tales(self) -> List[str]:
+        """Возвращает список всех доступных сказок"""
+        return list(self.tales.keys())
     
     def generate_tale(self, topic: str, suggestions: List[str] = None) -> str:
         """Генерирует простую сказку по теме"""
@@ -651,6 +708,25 @@ class HypnoOrchestrator:
             "calm": "🌊", "confidence": "💪", "curiosity": "👀",
             "action": "⚡", "trust": "🤝", "insight": "💡"
         }
+        
+        # Конфигурация для разных режимов
+        self.mode_config = {
+            "coach": {
+                "intro": "🔮",
+                "style": "вопросы, размышления",
+                "tech_filters": ["return_question", "alternative", "rhetorical"]
+            },
+            "psychologist": {
+                "intro": "🧠",
+                "style": "исследование, глубина",
+                "tech_filters": ["tale_fear", "tale_truth", "insight_anchor"]
+            },
+            "trainer": {
+                "intro": "⚡",
+                "style": "инструкции, действия",
+                "tech_filters": ["action_anchor", "unequal_choice", "temporal"]
+            }
+        }
     
     def process(self, user_id: int, text: str, context: Dict = None) -> str:
         """
@@ -659,7 +735,7 @@ class HypnoOrchestrator:
         Args:
             user_id: ID пользователя
             text: текст сообщения
-            context: контекст (профиль, конфайнмент-модель)
+            context: контекст (профиль, конфайнтмент-модель, режим)
             
         Returns:
             ответ с гипнотическими техниками
@@ -670,29 +746,32 @@ class HypnoOrchestrator:
         # Определяем состояние
         state = self._detect_state(context)
         
+        # Определяем режим
+        mode = context.get('mode', 'psychologist') if context else 'psychologist'
+        
         # Выбираем техники
-        techniques = self._select_techniques(issue, state)
+        techniques = self._select_techniques(issue, state, mode)
         
         # Генерируем ответ
-        response = self._generate_response(techniques, text)
+        response = self._generate_response(techniques, text, mode)
         
         # Добавляем якорь
-        response = self._add_anchor(response, state, user_id)
+        response = self._add_anchor(response, state, user_id, mode)
         
         return response
     
     def _detect_issue(self, text: str) -> str:
         """Определяет ключевую проблему из текста"""
         keywords = {
-            "страх": ["боюсь", "страшно", "боязнь", "пугает"],
-            "тревога": ["тревожно", "беспокоюсь", "волнуюсь"],
-            "неуверенность": ["не уверен", "сомневаюсь", "не знаю"],
-            "обида": ["обидно", "обидели", "несправедливо"],
-            "апатия": ["все равно", "нет сил", "устал"],
-            "сопротивление": ["не хочу", "не буду", "не могу"],
-            "недоверие": ["не верю", "сомневаюсь", "вряд ли"],
-            "поиск смысла": ["зачем", "почему", "смысл"],
-            "обучение": ["научиться", "понять", "разобраться"]
+            "страх": ["боюсь", "страшно", "боязнь", "пугает", "тревожно"],
+            "тревога": ["тревожно", "беспокоюсь", "волнуюсь", "нервничаю"],
+            "неуверенность": ["не уверен", "сомневаюсь", "не знаю", "не могу"],
+            "обида": ["обидно", "обидели", "несправедливо", "должен"],
+            "апатия": ["все равно", "нет сил", "устал", "не хочется"],
+            "сопротивление": ["не хочу", "не буду", "не могу", "не получается"],
+            "недоверие": ["не верю", "сомневаюсь", "вряд ли", "наверное"],
+            "поиск смысла": ["зачем", "почему", "смысл", "зачем это"],
+            "обучение": ["научиться", "понять", "разобраться", "узнать"]
         }
         
         text_lower = text.lower()
@@ -707,30 +786,41 @@ class HypnoOrchestrator:
         if not context:
             return "calm"
         
-        # Используем конфайнмент-модель если есть
+        # Используем конфайнтмент-модель если есть
         if context.get('confinement_model'):
             model = context['confinement_model']
             if model.get('key_confinement'):
-                elem_id = model['key_confinement'].get('id')
+                elem_id = model['key_confinement'].get('element_id')
                 state_map = {
                     1: "fear", 2: "anxiety", 3: "apathy",
                     4: "resistance", 5: "search", 6: "learning",
                     7: "distrust", 8: "resentment", 9: "fear"
                 }
-                state = state_map.get(elem_id, "calm")
-                # Конвертируем в наши состояния якорей
                 anchor_map = {
                     "fear": "calm", "anxiety": "calm", "apathy": "action",
                     "resistance": "curiosity", "search": "insight",
                     "learning": "curiosity", "distrust": "trust",
                     "resentment": "trust", "calm": "calm"
                 }
+                state = state_map.get(elem_id, "calm")
                 return anchor_map.get(state, "calm")
+        
+        # Проверяем вектор
+        vector = context.get('vector', '')
+        if vector == 'СБ':
+            return "calm"
+        elif vector == 'ТФ':
+            return "confidence"
+        elif vector == 'УБ':
+            return "curiosity"
+        elif vector == 'ЧВ':
+            return "trust"
         
         return "calm"
     
-    def _select_techniques(self, issue: str, state: str) -> List[str]:
+    def _select_techniques(self, issue: str, state: str, mode: str) -> List[str]:
         """Выбирает техники для проблемы и состояния"""
+        # Базовые техники по проблеме
         techniques = self.technique_map.get(issue, [])
         
         # Добавляем техники по состоянию
@@ -739,17 +829,35 @@ class HypnoOrchestrator:
             "action": ["action_anchor"],
             "curiosity": ["curiosity_anchor", "alternative"],
             "trust": ["trust_anchor", "introductory"],
-            "insight": ["insight_anchor", "rhetorical"]
+            "insight": ["insight_anchor", "rhetorical"],
+            "confidence": ["confidence_anchor", "fact"]
         }
         
         techniques.extend(state_tech.get(state, []))
         
+        # Фильтруем по режиму
+        mode_filters = self.mode_config.get(mode, {}).get("tech_filters", [])
+        if mode_filters:
+            # Оставляем только техники, подходящие для режима
+            filtered = []
+            for tech in techniques:
+                # Сказки всегда оставляем
+                if tech.startswith("tale_"):
+                    filtered.append(tech)
+                elif any(filter_tech in tech for filter_tech in mode_filters):
+                    filtered.append(tech)
+            techniques = filtered if filtered else techniques[:2]
+        
         # Убираем дубликаты
-        return list(set(techniques))[:3]  # Не больше 3 техник
+        return list(set(techniques))[:3]
     
-    def _generate_response(self, techniques: List[str], text: str) -> str:
+    def _generate_response(self, techniques: List[str], text: str, mode: str) -> str:
         """Генерирует ответ с использованием техник"""
         parts = []
+        
+        # Добавляем вступление в зависимости от режима
+        mode_intro = self.mode_config.get(mode, {}).get("intro", "🧠")
+        parts.append(f"{mode_intro} ")
         
         # Добавляем трюизм для согласия
         parts.append(self.truisms.fact())
@@ -757,19 +865,19 @@ class HypnoOrchestrator:
         for technique in techniques:
             if technique == "tale_fear":
                 tale = self.tales.get_tale_for_issue("страх")
-                parts.append(tale['text'][:300])  # Сокращаем
+                parts.append(tale['text'][:400])
                 
             elif technique == "tale_growth":
                 tale = self.tales.get_tale_for_issue("развитие")
-                parts.append(tale['text'][:300])
+                parts.append(tale['text'][:400])
                 
             elif technique == "tale_truth":
                 tale = self.tales.get_tale_for_issue("смысл")
-                parts.append(tale['text'][:300])
+                parts.append(tale['text'][:400])
                 
             elif technique == "tale_learning":
                 tale = self.tales.get_tale_for_issue("обучение")
-                parts.append(tale['text'][:300])
+                parts.append(tale['text'][:400])
                 
             elif technique == "not_command":
                 parts.append(self.pc.not_command("переживать об этом"))
@@ -809,18 +917,46 @@ class HypnoOrchestrator:
                 
             elif technique == "temporal":
                 parts.append(self.pl.temporal("ты думаешь об этом", "ответ появляется"))
+                
+            elif technique == "calm_anchor":
+                parts.append(self.anchoring.get_anchor("calm"))
+                
+            elif technique == "confidence_anchor":
+                parts.append(self.anchoring.get_anchor("confidence"))
+                
+            elif technique == "curiosity_anchor":
+                parts.append(self.anchoring.get_anchor("curiosity"))
+                
+            elif technique == "action_anchor":
+                parts.append(self.anchoring.get_anchor("action"))
+                
+            elif technique == "trust_anchor":
+                parts.append(self.anchoring.get_anchor("trust"))
+                
+            elif technique == "insight_anchor":
+                parts.append(self.anchoring.get_anchor("insight"))
         
         # Добавляем вопрос для вовлечения
         parts.append(self.hq.simple("расскажешь подробнее"))
         
         return " ".join(parts)
     
-    def _add_anchor(self, response: str, state: str, user_id: int) -> str:
+    def _add_anchor(self, response: str, state: str, user_id: int, mode: str) -> str:
         """Добавляет якорь в ответ"""
         emoji = self.anchoring.get_emoji(state)
         anchor = self.anchoring.get_anchor(state, user_id)
         
-        return f"{emoji} {response}\n\n{anchor}"
+        mode_emoji = self.mode_config.get(mode, {}).get("intro", "🧠")
+        
+        return f"{mode_emoji} {response}\n\n{emoji} {anchor}"
+    
+    def get_support_response(self, text: str) -> str:
+        """Быстрый поддерживающий ответ"""
+        parts = []
+        parts.append(self.truisms.about_self("я слышу тебя"))
+        parts.append(self.truisms.possibility("всё может наладиться"))
+        parts.append(self.anchoring.get_anchor("trust"))
+        return " ".join(parts)
 
 
 # ============================================================================
@@ -838,16 +974,18 @@ def test_hypno_module():
     
     # Тестовые сообщения
     test_messages = [
-        "Я боюсь выступать на публике",
-        "Я не уверен в своем решении",
-        "Мне тревожно и непонятно",
-        "Я хочу научиться новому",
-        "У меня нет сил ничего делать"
+        ("Я боюсь выступать на публике", "psychologist"),
+        ("Я не уверен в своем решении", "coach"),
+        ("Мне тревожно и непонятно", "psychologist"),
+        ("Я хочу научиться новому", "trainer"),
+        ("У меня нет сил ничего делать", "coach")
     ]
     
-    for msg in test_messages:
+    for msg, mode in test_messages:
         print(f"\n📝 Сообщение: {msg}")
-        print(f"💬 Ответ: {hypno.process(123, msg)}")
+        print(f"🎭 Режим: {mode}")
+        context = {'mode': mode, 'vector': 'СБ'}
+        print(f"💬 Ответ: {hypno.process(123, msg, context)}")
         print("-" * 40)
     
     # Тестирование отдельных модулей
@@ -874,6 +1012,9 @@ def test_hypno_module():
     tale = TherapeuticTales()
     t = tale.get_tale_for_issue("страх")
     print(f"Сказка: {t['title']} ({len(t['text'])} символов)")
+    
+    mm = MiltonModel()
+    print(f"Милтон-модель: {mm.milton_phrase()}")
     
     print("\n✅ Тестирование завершено")
 
