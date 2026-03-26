@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Синхронные обертки для работы с БД - для вызовов из любого потока
-ВЕРСИЯ 2.7 - ДОБАВЛЕНЫ ВСЕ ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
+ВЕРСИЯ 2.8 - ИСПРАВЛЕНА ОБРАБОТКА ОШИБОК И ДОБАВЛЕНА load_user_from_db
 """
 
 import logging
@@ -22,9 +22,21 @@ class SyncDB:
     """Синхронный интерфейс для БД"""
     
     @staticmethod
+    def _is_ready() -> bool:
+        """Проверяет, готов ли менеджер БД к работе"""
+        try:
+            return db_loop_manager.is_ready()
+        except Exception:
+            return False
+    
+    @staticmethod
     def ensure_connection() -> bool:
         """Синхронная проверка соединения с БД"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning("⚠️ Менеджер БД не готов")
+                return False
+            
             from db_instance import ensure_db_connection
             result = db_loop_manager.run_coro(ensure_db_connection, timeout=10)
             return result if result is not None else False
@@ -42,6 +54,10 @@ class SyncDB:
     ) -> bool:
         """Синхронное сохранение пользователя"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем сохранение {user_id}")
+                return False
+            
             result = db_loop_manager.run_coro(
                 db.save_telegram_user,
                 user_id, username, first_name, last_name, language_code,
@@ -56,6 +72,10 @@ class SyncDB:
     def save_user_data(user_id: int, data: Dict) -> bool:
         """Синхронное сохранение данных пользователя"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем сохранение данных {user_id}")
+                return False
+            
             result = db_loop_manager.run_coro(
                 db.save_user_data,
                 user_id, data,
@@ -70,6 +90,10 @@ class SyncDB:
     def save_user_to_db(user_id: int) -> bool:
         """Синхронное сохранение пользователя в БД"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем сохранение {user_id}")
+                return False
+            
             result = db_save_user(user_id)
             return result if result is not None else False
         except Exception as e:
@@ -78,9 +102,27 @@ class SyncDB:
             return False
     
     @staticmethod
+    def load_user_from_db(user_id: int) -> Optional[Dict[str, Any]]:
+        """Синхронная загрузка пользователя из БД"""
+        try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем загрузку {user_id}")
+                return None
+            
+            from db_instance import load_user_from_db
+            return load_user_from_db(user_id)
+        except Exception as e:
+            logger.error(f"❌ Ошибка load_user_from_db: {e}")
+            return None
+    
+    @staticmethod
     def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
         """Синхронное логирование события"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем логирование {user_id}")
+                return False
+            
             result = db_loop_manager.run_coro(
                 db.log_event,
                 user_id, event_type, event_data,
@@ -95,6 +137,10 @@ class SyncDB:
     def add_reminder(user_id: int, reminder_type: str, remind_at, data: Dict = None) -> Optional[int]:
         """Синхронное добавление напоминания"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем напоминание {user_id}")
+                return None
+            
             result = db_loop_manager.run_coro(
                 db.add_reminder,
                 user_id, reminder_type, remind_at, data,
@@ -111,6 +157,10 @@ class SyncDB:
     def get_pending_reminders(limit: int = 100) -> List[Dict]:
         """Синхронное получение неотправленных напоминаний"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning("⚠️ Менеджер БД не готов")
+                return []
+            
             result = db_loop_manager.run_coro(
                 db.get_pending_reminders,
                 limit,
@@ -125,6 +175,10 @@ class SyncDB:
     def mark_reminder_sent(reminder_id: int) -> bool:
         """Синхронная отметка напоминания как отправленного"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем отметку {reminder_id}")
+                return False
+            
             result = db_loop_manager.run_coro(
                 db.mark_reminder_sent,
                 reminder_id,
@@ -139,6 +193,10 @@ class SyncDB:
     def get_user_test_results(user_id: int, limit: int = 10, test_type: str = None) -> List[Dict]:
         """Синхронное получение результатов тестов пользователя"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение результатов {user_id}")
+                return []
+            
             result = db_loop_manager.run_coro(
                 db.get_user_test_results,
                 user_id, limit, test_type,
@@ -163,10 +221,12 @@ class SyncDB:
     ) -> Optional[int]:
         """
         Синхронное сохранение результата теста
-        Принимает 9 параметров + results (всего 10 параметров)
         """
         try:
-            # Вызываем асинхронную функцию сохранения
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем сохранение теста {user_id}")
+                return None
+            
             result = db_loop_manager.run_coro(
                 async_save_test_result,
                 user_id, 
@@ -203,14 +263,21 @@ class SyncDB:
         Синхронное сохранение мысли психолога
         """
         try:
-            from db_instance import save_psychologist_thought
-            result = save_psychologist_thought(
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем сохранение мысли {user_id}")
+                return None
+            
+            from db_instance import save_psychologist_thought as async_save_thought
+            
+            result = db_loop_manager.run_coro(
+                async_save_thought,
                 user_id, 
                 thought_text, 
                 test_result_id, 
                 thought_type, 
                 thought_summary, 
-                metadata
+                metadata,
+                timeout=25
             )
             return result
         except Exception as e:
@@ -228,8 +295,20 @@ class SyncDB:
         Синхронное получение последней мысли психолога
         """
         try:
-            from db_instance import get_psychologist_thought
-            return get_psychologist_thought(user_id, thought_type, only_active)
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение мысли {user_id}")
+                return None
+            
+            from db_instance import get_psychologist_thought as async_get_thought
+            
+            result = db_loop_manager.run_coro(
+                async_get_thought,
+                user_id, 
+                thought_type, 
+                only_active,
+                timeout=8
+            )
+            return result
         except Exception as e:
             logger.error(f"❌ Ошибка get_psychologist_thought: {e}")
             return None
@@ -244,8 +323,20 @@ class SyncDB:
         Синхронное получение истории мыслей психолога
         """
         try:
-            from db_instance import get_psychologist_thought_history
-            return get_psychologist_thought_history(user_id, thought_type, limit)
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение истории {user_id}")
+                return []
+            
+            from db_instance import get_psychologist_thought_history as async_get_history
+            
+            result = db_loop_manager.run_coro(
+                async_get_history,
+                user_id, 
+                thought_type, 
+                limit,
+                timeout=8
+            )
+            return result if result is not None else []
         except Exception as e:
             logger.error(f"❌ Ошибка get_psychologist_thought_history: {e}")
             return []
@@ -264,8 +355,20 @@ class SyncDB:
         Синхронное получение всех мыслей психолога с пагинацией
         """
         try:
-            from db_instance import get_all_psychologist_thoughts
-            return get_all_psychologist_thoughts(user_id, limit, include_inactive)
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение мыслей {user_id}")
+                return []
+            
+            from db_instance import get_all_psychologist_thoughts as async_get_all
+            
+            result = db_loop_manager.run_coro(
+                async_get_all,
+                user_id, 
+                limit, 
+                include_inactive,
+                timeout=10
+            )
+            return result if result is not None else []
         except Exception as e:
             logger.error(f"❌ Ошибка get_all_psychologist_thoughts: {e}")
             return []
@@ -276,8 +379,18 @@ class SyncDB:
         Синхронное удаление мысли психолога по ID
         """
         try:
-            from db_instance import delete_psychologist_thought
-            return delete_psychologist_thought(thought_id)
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем удаление {thought_id}")
+                return False
+            
+            from db_instance import delete_psychologist_thought as async_delete
+            
+            result = db_loop_manager.run_coro(
+                async_delete,
+                thought_id,
+                timeout=10
+            )
+            return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка delete_psychologist_thought: {e}")
             return False
@@ -294,10 +407,22 @@ class SyncDB:
         Синхронное обновление мысли психолога
         """
         try:
-            from db_instance import update_psychologist_thought
-            return update_psychologist_thought(
-                thought_id, thought_text, thought_summary, is_active, metadata
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем обновление {thought_id}")
+                return False
+            
+            from db_instance import update_psychologist_thought as async_update
+            
+            result = db_loop_manager.run_coro(
+                async_update,
+                thought_id, 
+                thought_text, 
+                thought_summary, 
+                is_active, 
+                metadata,
+                timeout=10
             )
+            return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка update_psychologist_thought: {e}")
             return False
@@ -308,8 +433,18 @@ class SyncDB:
         Синхронное получение всех мыслей, связанных с результатом теста
         """
         try:
-            from db_instance import get_thoughts_by_test_result
-            return get_thoughts_by_test_result(test_result_id)
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение мыслей по тесту {test_result_id}")
+                return []
+            
+            from db_instance import get_thoughts_by_test_result as async_get_by_test
+            
+            result = db_loop_manager.run_coro(
+                async_get_by_test,
+                test_result_id,
+                timeout=10
+            )
+            return result if result is not None else []
         except Exception as e:
             logger.error(f"❌ Ошибка get_thoughts_by_test_result: {e}")
             return []
@@ -320,14 +455,24 @@ class SyncDB:
         Синхронное получение статистики по мыслям психолога
         """
         try:
-            from db_instance import get_psychologist_thoughts_stats
-            return get_psychologist_thoughts_stats(user_id)
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение статистики {user_id}")
+                return {}
+            
+            from db_instance import get_psychologist_thoughts_stats as async_get_stats
+            
+            result = db_loop_manager.run_coro(
+                async_get_stats,
+                user_id,
+                timeout=10
+            )
+            return result if result is not None else {}
         except Exception as e:
             logger.error(f"❌ Ошибка get_psychologist_thoughts_stats: {e}")
             return {}
     
     # ============================================
-    # ОСТАЛЬНЫЕ ФУНКЦИИ (без изменений)
+    # ОСТАЛЬНЫЕ ФУНКЦИИ
     # ============================================
     
     @staticmethod
@@ -348,6 +493,10 @@ class SyncDB:
     ) -> bool:
         """Синхронное сохранение ответа на тест"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем сохранение ответа {user_id}")
+                return False
+            
             result = db_loop_manager.run_coro(
                 db.save_test_answer,
                 user_id, test_result_id, stage, question_index,
@@ -364,6 +513,10 @@ class SyncDB:
     def get_cached_weekend_ideas(user_id: int) -> Optional[str]:
         """Синхронное получение кэшированных идей"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение идей {user_id}")
+                return None
+            
             return db_loop_manager.run_coro(
                 db.get_cached_weekend_ideas,
                 user_id,
@@ -377,6 +530,10 @@ class SyncDB:
     def cache_weekend_ideas(user_id: int, ideas_text: str, main_vector: str, main_level: int) -> bool:
         """Синхронное сохранение идей в кэш"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем кэширование идей {user_id}")
+                return False
+            
             result = db_loop_manager.run_coro(
                 db.cache_weekend_ideas,
                 user_id, ideas_text, main_vector, main_level,
@@ -391,6 +548,10 @@ class SyncDB:
     def get_user_reminders(user_id: int, include_sent: bool = False) -> List[Dict]:
         """Синхронное получение напоминаний пользователя"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение напоминаний {user_id}")
+                return []
+            
             result = db_loop_manager.run_coro(
                 db.get_user_reminders,
                 user_id, include_sent,
@@ -405,6 +566,10 @@ class SyncDB:
     def get_user_context(user_id: int) -> Optional[Dict[str, Any]]:
         """Синхронное получение контекста пользователя"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение контекста {user_id}")
+                return None
+            
             result = db_loop_manager.run_coro(
                 db.load_user_context,
                 user_id,
@@ -419,6 +584,10 @@ class SyncDB:
     def get_user_data(user_id: int) -> Optional[Dict[str, Any]]:
         """Синхронное получение данных пользователя"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение данных {user_id}")
+                return {}
+            
             result = db_loop_manager.run_coro(
                 db.load_user_data,
                 user_id,
@@ -433,6 +602,10 @@ class SyncDB:
     def get_telegram_user(user_id: int) -> Optional[Dict[str, Any]]:
         """Синхронное получение информации о пользователе Telegram"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение пользователя {user_id}")
+                return None
+            
             result = db_loop_manager.run_coro(
                 db.get_telegram_user,
                 user_id,
@@ -447,8 +620,19 @@ class SyncDB:
     def save_user_context(user_id: int, context: Dict[str, Any]) -> bool:
         """Синхронное сохранение контекста пользователя"""
         try:
-            from db_instance import save_user_context
-            return save_user_context(user_id, context)
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем сохранение контекста {user_id}")
+                return False
+            
+            from db_instance import save_user_context as async_save_context
+            
+            result = db_loop_manager.run_coro(
+                async_save_context,
+                user_id, 
+                context,
+                timeout=10
+            )
+            return result if result is not None else False
         except Exception as e:
             logger.error(f"❌ Ошибка save_user_context: {e}")
             return False
@@ -457,7 +641,12 @@ class SyncDB:
     def get_user_goals(user_id: int, limit: int = 10) -> List[Dict]:
         """Синхронное получение целей пользователя"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение целей {user_id}")
+                return []
+            
             from db_instance import get_user_goals
+            
             return get_user_goals(user_id, limit)
         except Exception as e:
             logger.error(f"❌ Ошибка get_user_goals: {e}")
@@ -467,7 +656,12 @@ class SyncDB:
     def save_goal(user_id: int, goal_text: str) -> Optional[int]:
         """Синхронное сохранение цели"""
         try:
+            if not SyncDB._is_ready():
+                logger.warning(f"⚠️ Менеджер БД не готов, пропускаем сохранение цели {user_id}")
+                return None
+            
             from db_instance import save_goal
+            
             return save_goal(user_id, goal_text)
         except Exception as e:
             logger.error(f"❌ Ошибка save_goal: {e}")
@@ -477,4 +671,7 @@ class SyncDB:
 # Создаем глобальный экземпляр
 sync_db = SyncDB()
 
-logger.info("✅ sync_db инициализирован (версия 2.7 с полной поддержкой мыслей психолога)")
+logger.info("✅ sync_db инициализирован (версия 2.8 с полной поддержкой мыслей психолога)")
+
+# Экспорт
+__all__ = ['sync_db', 'SyncDB']
