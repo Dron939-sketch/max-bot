@@ -2,15 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 Административные обработчики для MAX
-Версия 2.1 - ИСПРАВЛЕНЫ АСИНХРОННЫЕ ВЫЗОВЫ
-Восстановлено из оригинального bot3.py и адаптировано
+Версия 2.2 - СТАТИСТИКА ИЗ ПАМЯТИ (без БД)
 """
 
 import logging
 import time
 import datetime
 import asyncio
-import threading  # ✅ УЖЕ ЕСТЬ
+import threading
 from typing import Dict, Any, List, Optional
 
 from bot_instance import bot
@@ -21,54 +20,20 @@ from config import ADMIN_IDS
 from message_utils import safe_send_message, safe_edit_message, safe_delete_message
 from keyboards import get_back_keyboard
 
-# ✅ ИСПРАВЛЕНО: Импортируем из state, а не из main
+# Импорты из state
 from state import (
     user_data, user_contexts, user_names, user_state_data, user_states, user_routes,
     get_state, set_state, get_state_data, update_state_data, clear_state,
     save_all_users_to_db, get_stats as get_memory_stats
 )
 
-# ✅ ИСПРАВЛЕНО: Импортируем Statistics из models, а не из main
+# Импорты для статистики
 from models import Statistics
-
-# ✅ ДОБАВЛЕНО: импорт для БД
-from db_instance import db, save_user_to_db, ensure_db_connection
 
 logger = logging.getLogger(__name__)
 
 # ============================================
-# ✅ ДОБАВЛЕНО: ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АСИНХРОННЫХ ВЫЗОВОВ
-# ============================================
-
-def run_async_task(coro_func, *args, **kwargs):
-    """
-    Запускает асинхронную корутину в отдельном потоке с собственным циклом событий
-    """
-    def _wrapper():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # Проверяем соединение с БД перед выполнением
-            if 'db' in str(coro_func) or 'save' in str(coro_func) or 'log' in str(coro_func):
-                loop.run_until_complete(ensure_db_connection())
-            coro = coro_func(*args, **kwargs)
-            loop.run_until_complete(coro)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
-        finally:
-            loop.close()
-    
-    threading.Thread(target=_wrapper, daemon=True).start()
-
-# ============================================
-# СОЗДАЕМ ЭКЗЕМПЛЯР STATISTICS
-# ============================================
-
-# Создаем экземпляр статистики
-stats = Statistics()
-
-# ============================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (теперь используют state)
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================
 
 def get_user_data(user_id: int) -> Dict[str, Any]:
@@ -94,76 +59,6 @@ def get_user_names(user_id: int) -> str:
 def is_admin(user_id: int) -> bool:
     """Проверяет, является ли пользователь администратором"""
     return user_id in ADMIN_IDS
-
-# ============================================
-# ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
-# ============================================
-
-async def get_db_stats() -> Dict[str, Any]:
-    """Получает статистику из БД"""
-    try:
-        # ✅ Проверяем соединение с БД
-        await ensure_db_connection()
-        return await db.get_stats(days=30)
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения статистики из БД: {e}")
-        return {}
-
-async def sync_user_to_db(user_id: int):
-    """Синхронизирует конкретного пользователя с БД"""
-    try:
-        # ✅ Проверяем соединение с БД
-        await ensure_db_connection()
-        await save_user_to_db(user_id, user_data, user_contexts, user_routes)
-        return True
-    except Exception as e:
-        logger.error(f"❌ Ошибка синхронизации пользователя {user_id}: {e}")
-        return False
-
-async def sync_all_users_to_db() -> Dict[str, int]:
-    """Синхронизирует всех пользователей с БД"""
-    # ✅ Проверяем соединение с БД
-    await ensure_db_connection()
-    saved = await save_all_users_to_db(db)
-    return {"saved": saved}
-
-async def get_db_size() -> Dict[str, int]:
-    """Получает размер таблиц в БД"""
-    try:
-        # ✅ Проверяем соединение с БД
-        await ensure_db_connection()
-        async with db.get_connection() as conn:
-            # Количество пользователей
-            users_count = await conn.fetchval("SELECT COUNT(*) FROM fredi_users")
-            
-            # Количество контекстов
-            contexts_count = await conn.fetchval("SELECT COUNT(*) FROM fredi_user_contexts")
-            
-            # Количество данных
-            data_count = await conn.fetchval("SELECT COUNT(*) FROM fredi_user_data")
-            
-            # Количество маршрутов
-            routes_count = await conn.fetchval("SELECT COUNT(*) FROM fredi_user_routes")
-            
-            # Количество результатов тестов
-            tests_count = await conn.fetchval("SELECT COUNT(*) FROM fredi_test_results")
-            
-            # Количество событий за последние 30 дней
-            events_count = await conn.fetchval(
-                "SELECT COUNT(*) FROM fredi_events WHERE created_at > NOW() - INTERVAL '30 days'"
-            )
-            
-            return {
-                "users": users_count or 0,
-                "contexts": contexts_count or 0,
-                "data": data_count or 0,
-                "routes": routes_count or 0,
-                "tests": tests_count or 0,
-                "events_30d": events_count or 0
-            }
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения размера БД: {e}")
-        return {}
 
 # ============================================
 # ПРОВЕРКА ПРАВ ДОСТУПА
@@ -201,17 +96,232 @@ def check_admin_access(message_or_call) -> bool:
     return True
 
 # ============================================
+# СБОР СТАТИСТИКИ ИЗ ПАМЯТИ
+# ============================================
+
+def collect_memory_stats() -> Dict[str, Any]:
+    """
+    Собирает статистику из памяти (user_data, user_contexts и т.д.)
+    """
+    stats = {
+        'total_users': len(user_data),
+        'users_with_context': len(user_contexts),
+        'users_with_name': len(user_names),
+        'users_with_routes': len(user_routes),
+        'users_with_states': len(user_states),
+        'test_completed': 0,
+        'test_in_progress': 0,
+        'test_not_started': 0,
+        'perception_types': {},
+        'thinking_levels': {},
+        'modes': {},
+        'vectors': {
+            'СБ': {'sum': 0, 'count': 0},
+            'ТФ': {'sum': 0, 'count': 0},
+            'УБ': {'sum': 0, 'count': 0},
+            'ЧВ': {'sum': 0, 'count': 0}
+        },
+        'deep_patterns': {},
+        'dilts_levels': {}
+    }
+    
+    for uid, data in user_data.items():
+        # Проверяем завершённость теста
+        has_profile = data.get('profile_data') or data.get('ai_generated_profile')
+        
+        if has_profile:
+            stats['test_completed'] += 1
+        elif data.get('all_answers') and len(data.get('all_answers', [])) > 0:
+            stats['test_in_progress'] += 1
+        else:
+            stats['test_not_started'] += 1
+        
+        # Типы восприятия
+        pt = data.get('perception_type')
+        if pt:
+            stats['perception_types'][pt] = stats['perception_types'].get(pt, 0) + 1
+        
+        # Уровни мышления
+        tl = data.get('thinking_level')
+        if tl:
+            stats['thinking_levels'][tl] = stats['thinking_levels'].get(tl, 0) + 1
+        
+        # Вектора из профиля
+        profile = data.get('profile_data', {})
+        if profile:
+            for vec in ['СБ', 'ТФ', 'УБ', 'ЧВ']:
+                level = profile.get(f'{vec.lower()}_level')
+                if level:
+                    stats['vectors'][vec]['sum'] += level
+                    stats['vectors'][vec]['count'] += 1
+        
+        # Глубинные паттерны
+        deep = data.get('deep_patterns', {})
+        if deep:
+            for key, value in deep.items():
+                if key not in stats['deep_patterns']:
+                    stats['deep_patterns'][key] = {}
+                stats['deep_patterns'][key][value] = stats['deep_patterns'][key].get(value, 0) + 1
+        
+        # Уровни Дилтса
+        dilts = data.get('dilts_counts', {})
+        if dilts:
+            for level, count in dilts.items():
+                if level not in stats['dilts_levels']:
+                    stats['dilts_levels'][level] = {'sum': 0, 'count': 0}
+                stats['dilts_levels'][level]['sum'] += count
+                stats['dilts_levels'][level]['count'] += 1
+    
+    # Собираем режимы общения
+    for uid, context in user_contexts.items():
+        mode = context.communication_mode if context and hasattr(context, 'communication_mode') else 'coach'
+        stats['modes'][mode] = stats['modes'].get(mode, 0) + 1
+    
+    # Вычисляем средние значения векторов
+    for vec in stats['vectors']:
+        if stats['vectors'][vec]['count'] > 0:
+            stats['vectors'][vec]['avg'] = stats['vectors'][vec]['sum'] / stats['vectors'][vec]['count']
+        else:
+            stats['vectors'][vec]['avg'] = 0
+    
+    # Вычисляем средние значения уровней Дилтса
+    for level in stats['dilts_levels']:
+        if stats['dilts_levels'][level]['count'] > 0:
+            stats['dilts_levels'][level]['avg'] = stats['dilts_levels'][level]['sum'] / stats['dilts_levels'][level]['count']
+    
+    return stats
+
+def format_stats_text(stats: Dict[str, Any]) -> str:
+    """
+    Форматирует статистику в читаемый текст
+    """
+    now = datetime.datetime.now()
+    
+    text = f"📊 <b>СТАТИСТИКА БОТА (В ПАМЯТИ)</b>\n"
+    text += f"🕐 {now.strftime('%d.%m.%Y %H:%M:%S')}\n\n"
+    
+    # Основная статистика
+    text += f"👥 <b>ПОЛЬЗОВАТЕЛИ</b>\n"
+    text += f"• Всего в памяти: <b>{stats['total_users']}</b>\n"
+    text += f"• С профилем: <b>{stats['test_completed']}</b>\n"
+    text += f"• В процессе теста: <b>{stats['test_in_progress']}</b>\n"
+    text += f"• Не начинали тест: <b>{stats['test_not_started']}</b>\n"
+    text += f"• С контекстом: <b>{stats['users_with_context']}</b>\n"
+    text += f"• С именем: <b>{stats['users_with_name']}</b>\n"
+    text += f"• С маршрутами: <b>{stats['users_with_routes']}</b>\n"
+    text += f"• В состояниях: <b>{stats['users_with_states']}</b>\n\n"
+    
+    # Режимы общения
+    if stats['modes']:
+        text += f"🎭 <b>РЕЖИМЫ ОБЩЕНИЯ</b>\n"
+        mode_names = {
+            'coach': '🔮 Коуч',
+            'psychologist': '🧠 Психолог',
+            'trainer': '⚡ Тренер'
+        }
+        for mode, count in sorted(stats['modes'].items(), key=lambda x: x[1], reverse=True):
+            name = mode_names.get(mode, mode)
+            percent = (count / stats['total_users'] * 100) if stats['total_users'] > 0 else 0
+            text += f"• {name}: <b>{count}</b> ({percent:.1f}%)\n"
+        text += "\n"
+    
+    # Типы восприятия
+    if stats['perception_types']:
+        text += f"👁️ <b>ТИПЫ ВОСПРИЯТИЯ</b>\n"
+        pt_names = {
+            'visual': '👁️ Визуал',
+            'auditory': '👂 Аудиал',
+            'kinesthetic': '🤲 Кинестетик',
+            'digital': '💭 Дигитал'
+        }
+        for pt, count in sorted(stats['perception_types'].items(), key=lambda x: x[1], reverse=True):
+            name = pt_names.get(pt, pt)
+            percent = (count / stats['test_completed'] * 100) if stats['test_completed'] > 0 else 0
+            text += f"• {name}: <b>{count}</b> ({percent:.1f}%)\n"
+        text += "\n"
+    
+    # Уровни мышления
+    if stats['thinking_levels']:
+        text += f"🧠 <b>УРОВНИ МЫШЛЕНИЯ</b>\n"
+        for level in sorted(stats['thinking_levels'].keys()):
+            count = stats['thinking_levels'][level]
+            percent = (count / stats['test_completed'] * 100) if stats['test_completed'] > 0 else 0
+            text += f"• Уровень {level}: <b>{count}</b> ({percent:.1f}%)\n"
+        text += "\n"
+    
+    # Средние значения векторов
+    if any(v['count'] > 0 for v in stats['vectors'].values()):
+        text += f"📈 <b>СРЕДНИЕ ЗНАЧЕНИЯ ВЕКТОРОВ</b>\n"
+        vector_names = {
+            'СБ': '🛡️ Стабильность',
+            'ТФ': '💰 Трансформация',
+            'УБ': '🧩 Убеждения',
+            'ЧВ': '💕 Чувства'
+        }
+        for vec, data in stats['vectors'].items():
+            if data['count'] > 0:
+                name = vector_names.get(vec, vec)
+                text += f"• {name}: <b>{data['avg']:.1f}</b> (n={data['count']})\n"
+        text += "\n"
+    
+    # Глубинные паттерны
+    if stats['deep_patterns']:
+        text += f"🔍 <b>ГЛУБИННЫЕ ПАТТЕРНЫ</b>\n"
+        for pattern, values in stats['deep_patterns'].items():
+            pattern_names = {
+                'attachment': '🪢 Тип привязанности',
+                'coping': '🛡️ Копинг-стратегии',
+                'defense': '🔒 Защитные механизмы'
+            }
+            name = pattern_names.get(pattern, pattern)
+            text += f"<b>{name}:</b>\n"
+            for value, count in sorted(values.items(), key=lambda x: x[1], reverse=True)[:3]:
+                percent = (count / stats['test_completed'] * 100) if stats['test_completed'] > 0 else 0
+                text += f"   • {value}: {count} ({percent:.1f}%)\n"
+        text += "\n"
+    
+    # Уровни Дилтса
+    if stats['dilts_levels']:
+        text += f"🏔️ <b>УРОВНИ ДИЛТСА</b>\n"
+        level_names = {
+            'environment': '🌍 Окружение',
+            'behavior': '⚡ Поведение',
+            'capabilities': '💪 Способности',
+            'beliefs': '🧠 Убеждения',
+            'identity': '🪞 Идентичность',
+            'spiritual': '✨ Духовность'
+        }
+        for level, data in stats['dilts_levels'].items():
+            if data['count'] > 0:
+                name = level_names.get(level, level)
+                text += f"• {name}: <b>{data['avg']:.1f}</b>\n"
+        text += "\n"
+    
+    # Прогресс
+    if stats['test_completed'] > 0:
+        completion_rate = (stats['test_completed'] / stats['total_users'] * 100) if stats['total_users'] > 0 else 0
+        text += f"📊 <b>ОБЩИЙ ПРОГРЕСС</b>\n"
+        text += f"• Завершили тест: <b>{completion_rate:.1f}%</b>\n"
+    
+    return text
+
+# ============================================
 # КОМАНДЫ АДМИНИСТРАТОРОВ
 # ============================================
 
 @bot.message_handler(commands=['stats'])
 def cmd_stats(message: Message):
-    """Команда /stats — статистика бота"""
+    """Команда /stats — статистика бота из памяти"""
     if not check_admin_access(message):
         return
     
-    stats_text = stats.get_stats_text()
+    # Собираем статистику
+    stats_data = collect_memory_stats()
     
+    # Форматируем текст
+    stats_text = format_stats_text(stats_data)
+    
+    # Отправляем
     safe_send_message(
         message,
         stats_text,
@@ -221,43 +331,27 @@ def cmd_stats(message: Message):
 
 @bot.message_handler(commands=['dbstats'])
 def cmd_dbstats(message: Message):
-    """Команда /dbstats — статистика базы данных"""
+    """Команда /dbstats — статистика из памяти (БД отключена)"""
     if not check_admin_access(message):
         return
     
-    def run_async():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # Получаем размер таблиц
-            db_sizes = loop.run_until_complete(get_db_size())
-            
-            # Получаем статистику из памяти
-            memory_stats = get_memory_stats()
-            
-            text = f"📊 <b>СТАТИСТИКА БАЗЫ ДАННЫХ</b>\n\n"
-            
-            text += f"<b>PostgreSQL:</b>\n"
-            text += f"• Пользователей: {db_sizes.get('users', 0)}\n"
-            text += f"• Контекстов: {db_sizes.get('contexts', 0)}\n"
-            text += f"• Данных: {db_sizes.get('data', 0)}\n"
-            text += f"• Маршрутов: {db_sizes.get('routes', 0)}\n"
-            text += f"• Результатов тестов: {db_sizes.get('tests', 0)}\n"
-            text += f"• Событий (30 дн): {db_sizes.get('events_30d', 0)}\n\n"
-            
-            text += f"<b>Память (кэш):</b>\n"
-            text += f"• user_data: {memory_stats.get('users_in_data', 0)}\n"
-            text += f"• user_contexts: {memory_stats.get('users_in_contexts', 0)}\n"
-            text += f"• user_routes: {memory_stats.get('users_in_routes', 0)}\n"
-            text += f"• user_states: {memory_stats.get('users_in_states', 0)}\n"
-            
-            safe_send_message(message, text, parse_mode='HTML', delete_previous=True)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в dbstats: {e}")
-        finally:
-            loop.close()
+    memory_stats = get_memory_stats()
     
-    threading.Thread(target=run_async, daemon=True).start()
+    text = f"📊 <b>СТАТИСТИКА ПАМЯТИ</b>\n\n"
+    text += f"<b>Хранилища:</b>\n"
+    text += f"• user_data: {memory_stats.get('users_in_data', 0)}\n"
+    text += f"• user_contexts: {memory_stats.get('users_in_contexts', 0)}\n"
+    text += f"• user_routes: {memory_stats.get('users_in_routes', 0)}\n"
+    text += f"• user_states: {memory_stats.get('users_in_states', 0)}\n"
+    text += f"• user_names: {memory_stats.get('users_with_names', 0)}\n"
+    text += f"• Всего уникальных: {memory_stats.get('total_unique', 0)}\n\n"
+    
+    text += f"<b>⚠️ Режим работы:</b>\n"
+    text += f"• База данных ОТКЛЮЧЕНА\n"
+    text += f"• Данные хранятся только в памяти\n"
+    text += f"• При перезапуске данные будут потеряны"
+    
+    safe_send_message(message, text, parse_mode='HTML', delete_previous=True)
 
 @bot.message_handler(commands=['apistatus'])
 def cmd_apistatus(message: Message):
@@ -310,7 +404,6 @@ def cmd_broadcast(message: Message):
     
     safe_send_message(message, text, reply_markup=keyboard, parse_mode='HTML', delete_previous=True)
     
-    # ✅ ИСПРАВЛЕНО: используем импортированный user_states из state
     user_states[message.from_user.id] = "awaiting_broadcast"
 
 @bot.message_handler(commands=['users'])
@@ -323,39 +416,16 @@ def cmd_users(message: Message):
 
 @bot.message_handler(commands=['sync'])
 def cmd_sync(message: Message):
-    """Команда /sync — синхронизация с БД"""
+    """Команда /sync — синхронизация с БД (отключена)"""
     if not check_admin_access(message):
         return
     
-    def run_sync():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            status_msg = safe_send_message(
-                message,
-                "🔄 Синхронизация с базой данных...",
-                delete_previous=True
-            )
-            
-            result = loop.run_until_complete(sync_all_users_to_db())
-            
-            if status_msg:
-                try:
-                    safe_delete_message(message.chat.id, status_msg.message_id)
-                except:
-                    pass
-            
-            safe_send_message(
-                message,
-                f"✅ Синхронизировано пользователей: {result.get('saved', 0)}",
-                delete_previous=True
-            )
-        except Exception as e:
-            logger.error(f"❌ Ошибка синхронизации: {e}")
-        finally:
-            loop.close()
-    
-    threading.Thread(target=run_sync, daemon=True).start()
+    safe_send_message(
+        message,
+        "⚠️ <b>СИНХРОНИЗАЦИЯ ОТКЛЮЧЕНА</b>\n\nБаза данных временно отключена. Все данные хранятся только в памяти.\n\nПри перезапуске данные будут потеряны.",
+        parse_mode='HTML',
+        delete_previous=True
+    )
 
 # ============================================
 # АДМИНСКАЯ ПАНЕЛЬ
@@ -368,17 +438,21 @@ def show_admin_panel(message_or_call):
     if not check_admin_access(message_or_call):
         return
     
-    # Собираем статистику из памяти
-    memory_stats = get_memory_stats()
+    # Собираем статистику
+    stats_data = collect_memory_stats()
     
     text = f"""
 🔧 <b>ПАНЕЛЬ АДМИНИСТРАТОРА</b>
 
 📊 <b>СТАТИСТИКА В ПАМЯТИ:</b>
-• Всего пользователей: <b>{memory_stats.get('total_unique', 0)}</b>
-• С данными: <b>{memory_stats.get('users_in_data', 0)}</b>
-• В маршрутах: <b>{memory_stats.get('users_in_routes', 0)}</b>
-• Завершили тест: <b>{stats.data.get('completed_tests', 0)}</b>
+• Всего пользователей: <b>{stats_data['total_users']}</b>
+• С профилем: <b>{stats_data['test_completed']}</b>
+• В процессе теста: <b>{stats_data['test_in_progress']}</b>
+• В контексте: <b>{stats_data['users_with_context']}</b>
+
+⚠️ <b>РЕЖИМ РАБОТЫ:</b>
+• База данных ОТКЛЮЧЕНА
+• Данные только в памяти
 
 👇 <b>ДЕЙСТВИЯ:</b>
 """
@@ -390,20 +464,15 @@ def show_admin_panel(message_or_call):
     )
     keyboard.row(
         InlineKeyboardButton("👥 ПОЛЬЗОВАТЕЛИ", callback_data="admin_users"),
-        InlineKeyboardButton("🗄 БАЗА ДАННЫХ", callback_data="admin_db")
+        InlineKeyboardButton("💾 ПАМЯТЬ", callback_data="admin_memory")
     )
     keyboard.row(
-        InlineKeyboardButton("🔄 СИНХРОНИЗАЦИЯ", callback_data="admin_sync"),
-        InlineKeyboardButton("🧹 ОЧИСТКА", callback_data="admin_cleanup")
-    )
-    keyboard.row(
-        InlineKeyboardButton("📝 ЛОГИ", callback_data="admin_logs"),
+        InlineKeyboardButton("🧹 ОЧИСТКА", callback_data="admin_cleanup"),
         InlineKeyboardButton("⚙️ НАСТРОЙКИ", callback_data="admin_settings")
     )
     keyboard.row(InlineKeyboardButton("◀️ В МЕНЮ", callback_data="main_menu"))
     
     if hasattr(message_or_call, 'message'):
-        # Это callback
         safe_send_message(
             message_or_call.message,
             text,
@@ -412,7 +481,6 @@ def show_admin_panel(message_or_call):
             delete_previous=True
         )
     else:
-        # Это message
         safe_send_message(
             message_or_call,
             text,
@@ -438,14 +506,10 @@ def handle_admin_callback(call: CallbackQuery, action: str):
         start_broadcast(call)
     elif action == "users":
         show_users_list(call)
-    elif action == "db":
-        show_admin_db(call)
-    elif action == "sync":
-        start_sync(call)
+    elif action == "memory":
+        show_memory_info(call)
     elif action == "settings":
         show_admin_settings(call)
-    elif action == "logs":
-        show_admin_logs(call)
     elif action == "cleanup":
         show_admin_cleanup(call)
     else:
@@ -461,135 +525,61 @@ def show_admin_stats(call: CallbackQuery):
     if not check_admin_access(call):
         return
     
-    def run_async():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # Получаем статистику из БД
-            db_stats = loop.run_until_complete(get_db_stats())
-            
-            # Статистика из памяти
-            memory_stats = get_memory_stats()
-            
-            text = f"📊 <b>РАСШИРЕННАЯ СТАТИСТИКА</b>\n\n"
-            
-            text += f"<b>ПАМЯТЬ (КЭШ):</b>\n"
-            text += f"• Всего уникальных: {memory_stats.get('total_unique', 0)}\n"
-            text += f"• user_data: {memory_stats.get('users_in_data', 0)}\n"
-            text += f"• user_contexts: {memory_stats.get('users_in_contexts', 0)}\n"
-            text += f"• user_routes: {memory_stats.get('users_in_routes', 0)}\n"
-            text += f"• user_states: {memory_stats.get('users_in_states', 0)}\n\n"
-            
-            text += f"<b>POSTGRESQL (30 дней):</b>\n"
-            text += f"• Всего пользователей: {db_stats.get('total_users', 0)}\n"
-            text += f"• Активных: {db_stats.get('active_users', 0)}\n"
-            text += f"• Завершённых тестов: {db_stats.get('completed_tests', 0)}\n\n"
-            
-            if db_stats.get('perception_types'):
-                text += f"<b>Типы восприятия:</b>\n"
-                for pt in db_stats.get('perception_types', []):
-                    text += f"• {pt.get('perception_type', 'unknown')}: {pt.get('count', 0)}\n"
-                text += f"\n"
-            
-            keyboard = get_back_keyboard("admin_panel")
-            
-            safe_send_message(
-                call.message,
-                text,
-                reply_markup=keyboard,
-                parse_mode='HTML',
-                delete_previous=True
-            )
-        except Exception as e:
-            logger.error(f"❌ Ошибка в admin_stats: {e}")
-        finally:
-            loop.close()
+    # Собираем статистику
+    stats_data = collect_memory_stats()
     
-    threading.Thread(target=run_async, daemon=True).start()
+    # Форматируем текст
+    stats_text = format_stats_text(stats_data)
+    
+    keyboard = get_back_keyboard("admin_panel")
+    
+    safe_send_message(
+        call.message,
+        stats_text,
+        reply_markup=keyboard,
+        parse_mode='HTML',
+        delete_previous=True
+    )
 
-def show_admin_db(call: CallbackQuery):
-    """Показывает информацию о базе данных"""
+def show_memory_info(call: CallbackQuery):
+    """Показывает информацию о памяти"""
     if not check_admin_access(call):
         return
     
-    def run_async():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # Получаем размер таблиц
-            db_sizes = loop.run_until_complete(get_db_size())
-            
-            text = f"🗄 <b>БАЗА ДАННЫХ</b>\n\n"
-            
-            text += f"<b>Размер таблиц:</b>\n"
-            text += f"• fredi_users: {db_sizes.get('users', 0)} записей\n"
-            text += f"• fredi_user_contexts: {db_sizes.get('contexts', 0)} записей\n"
-            text += f"• fredi_user_data: {db_sizes.get('data', 0)} записей\n"
-            text += f"• fredi_user_routes: {db_sizes.get('routes', 0)} записей\n"
-            text += f"• fredi_test_results: {db_sizes.get('tests', 0)} записей\n"
-            text += f"• fredi_events (30 дн): {db_sizes.get('events_30d', 0)} записей\n\n"
-            
-            text += f"<b>URL подключения:</b>\n"
-            text += f"• {db.dsn[:50]}...\n"
-            
-            keyboard = InlineKeyboardMarkup()
-            keyboard.row(
-                InlineKeyboardButton("🔄 СИНХРОНИЗАЦИЯ", callback_data="admin_sync"),
-                InlineKeyboardButton("◀️ НАЗАД", callback_data="admin_panel")
-            )
-            
-            safe_send_message(
-                call.message,
-                text,
-                reply_markup=keyboard,
-                parse_mode='HTML',
-                delete_previous=True
-            )
-        except Exception as e:
-            logger.error(f"❌ Ошибка в admin_db: {e}")
-        finally:
-            loop.close()
+    memory_stats = get_memory_stats()
     
-    threading.Thread(target=run_async, daemon=True).start()
-
-def start_sync(call: CallbackQuery):
-    """Запускает синхронизацию с БД"""
-    if not check_admin_access(call):
-        return
+    # Размеры объектов в памяти (приблизительно)
+    import sys
+    size_data = sys.getsizeof(user_data) // 1024
+    size_contexts = sys.getsizeof(user_contexts) // 1024
+    size_routes = sys.getsizeof(user_routes) // 1024
+    size_states = sys.getsizeof(user_states) // 1024
     
-    def run_sync():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            status_msg = safe_send_message(
-                call.message,
-                "🔄 Синхронизация с базой данных...",
-                delete_previous=True
-            )
-            
-            result = loop.run_until_complete(sync_all_users_to_db())
-            
-            if status_msg:
-                try:
-                    safe_delete_message(call.message.chat.id, status_msg.message_id)
-                except:
-                    pass
-            
-            text = f"✅ Синхронизировано пользователей: {result.get('saved', 0)}"
-            keyboard = get_back_keyboard("admin_panel")
-            
-            safe_send_message(
-                call.message,
-                text,
-                reply_markup=keyboard,
-                delete_previous=True
-            )
-        except Exception as e:
-            logger.error(f"❌ Ошибка синхронизации: {e}")
-        finally:
-            loop.close()
+    text = f"💾 <b>ИНФОРМАЦИЯ О ПАМЯТИ</b>\n\n"
     
-    threading.Thread(target=run_sync, daemon=True).start()
+    text += f"<b>Хранилища:</b>\n"
+    text += f"• user_data: {memory_stats.get('users_in_data', 0)} записей (~{size_data} KB)\n"
+    text += f"• user_contexts: {memory_stats.get('users_in_contexts', 0)} записей (~{size_contexts} KB)\n"
+    text += f"• user_routes: {memory_stats.get('users_in_routes', 0)} записей (~{size_routes} KB)\n"
+    text += f"• user_states: {memory_stats.get('users_in_states', 0)} записей (~{size_states} KB)\n"
+    text += f"• user_names: {memory_stats.get('users_with_names', 0)} записей\n"
+    text += f"• Всего уникальных: {memory_stats.get('total_unique', 0)}\n\n"
+    
+    text += f"<b>⚠️ ВАЖНО:</b>\n"
+    text += f"• База данных ОТКЛЮЧЕНА\n"
+    text += f"• Данные хранятся ТОЛЬКО в оперативной памяти\n"
+    text += f"• При перезапуске бота все данные будут потеряны\n"
+    text += f"• Рекомендуется включить БД для постоянного хранения"
+    
+    keyboard = get_back_keyboard("admin_panel")
+    
+    safe_send_message(
+        call.message,
+        text,
+        reply_markup=keyboard,
+        parse_mode='HTML',
+        delete_previous=True
+    )
 
 def start_broadcast(call: CallbackQuery):
     """Начинает процесс рассылки"""
@@ -615,7 +605,6 @@ def start_broadcast(call: CallbackQuery):
         delete_previous=True
     )
     
-    # ✅ ИСПРАВЛЕНО: используем импортированный user_states из state
     user_states[call.from_user.id] = "awaiting_broadcast"
 
 def process_broadcast(message: Message, text: str):
@@ -711,7 +700,7 @@ def show_users_list(message_or_call):
             test_passed = "✅" if user_data[uid].get("profile_data") or user_data[uid].get("ai_generated_profile") else "❌"
             
             # Режим
-            mode = context.communication_mode if context else "coach"
+            mode = context.communication_mode if context and hasattr(context, 'communication_mode') else "coach"
             mode_emoji = "🔮" if mode == "coach" else "🧠" if mode == "psychologist" else "⚡"
             
             # ID для копирования
@@ -721,7 +710,6 @@ def show_users_list(message_or_call):
             text += f"\n... и ещё {len(all_users) - 20} пользователей"
     
     keyboard = InlineKeyboardMarkup()
-    keyboard.row(InlineKeyboardButton("🔄 СИНХРОНИЗИРОВАТЬ", callback_data="admin_sync"))
     keyboard.row(InlineKeyboardButton("◀️ НАЗАД", callback_data="admin_panel"))
     
     if hasattr(message_or_call, 'message'):
@@ -762,28 +750,10 @@ def show_admin_settings(call: CallbackQuery):
 
 <b>АДМИНИСТРАТОРЫ:</b>
 {chr(10).join([f'• <code>{aid}</code>' for aid in ADMIN_IDS])}
-"""
-    
-    keyboard = get_back_keyboard("admin_panel")
-    
-    safe_send_message(
-        call.message,
-        text,
-        reply_markup=keyboard,
-        parse_mode='HTML',
-        delete_previous=True
-    )
 
-def show_admin_logs(call: CallbackQuery):
-    """Показывает последние логи"""
-    if not check_admin_access(call):
-        return
-    
-    # Здесь можно реализовать чтение логов из файла
-    text = """
-📝 <b>ЛОГИ</b>
-
-Функция просмотра логов в разработке.
+<b>РЕЖИМ РАБОТЫ:</b>
+• База данных: ❌ ОТКЛЮЧЕНА
+• Хранение: только в памяти
 """
     
     keyboard = get_back_keyboard("admin_panel")
@@ -802,22 +772,21 @@ def show_admin_cleanup(call: CallbackQuery):
         return
     
     text = """
-🔄 <b>ОЧИСТКА</b>
+🔄 <b>ОЧИСТКА ПАМЯТИ</b>
 
 Выберите, что очистить:
 """
     
     keyboard = InlineKeyboardMarkup()
     keyboard.row(
-        InlineKeyboardButton("🧹 КЭШ", callback_data="cleanup_cache"),
-        InlineKeyboardButton("🗑 ЛОГИ", callback_data="cleanup_logs")
+        InlineKeyboardButton("🧹 ВСЕ ДАННЫЕ", callback_data="cleanup_all"),
+        InlineKeyboardButton("👥 НЕАКТИВНЫХ", callback_data="cleanup_users")
     )
     keyboard.row(
-        InlineKeyboardButton("👥 ПОЛЬЗОВАТЕЛИ", callback_data="cleanup_users"),
-        InlineKeyboardButton("🧠 ТЕСТЫ", callback_data="cleanup_tests")
+        InlineKeyboardButton("🧠 НЕЗАВЕРШЁННЫЕ", callback_data="cleanup_tests"),
+        InlineKeyboardButton("🗑 СОСТОЯНИЯ", callback_data="cleanup_cache")
     )
     keyboard.row(
-        InlineKeyboardButton("🗄 БАЗА ДАННЫХ", callback_data="cleanup_db"),
         InlineKeyboardButton("◀️ НАЗАД", callback_data="admin_panel")
     )
     
@@ -834,7 +803,7 @@ def show_admin_cleanup(call: CallbackQuery):
 # ============================================
 
 def cleanup_cache(call: CallbackQuery):
-    """Очищает кэш"""
+    """Очищает кэш состояний"""
     if not check_admin_access(call):
         return
     
@@ -842,22 +811,6 @@ def cleanup_cache(call: CallbackQuery):
     user_state_data.clear()
     
     text = "✅ Кэш состояний очищен"
-    keyboard = get_back_keyboard("admin_panel")
-    
-    safe_send_message(
-        call.message,
-        text,
-        reply_markup=keyboard,
-        delete_previous=True
-    )
-
-def cleanup_logs(call: CallbackQuery):
-    """Очищает логи"""
-    if not check_admin_access(call):
-        return
-    
-    # Здесь можно реализовать очистку лог-файлов
-    text = "✅ Логи очищены"
     keyboard = get_back_keyboard("admin_panel")
     
     safe_send_message(
@@ -942,45 +895,31 @@ def cleanup_tests(call: CallbackQuery):
         delete_previous=True
     )
 
-def cleanup_db(call: CallbackQuery):
-    """Очищает старые данные в БД"""
+def cleanup_all(call: CallbackQuery):
+    """Очищает все данные пользователей"""
     if not check_admin_access(call):
         return
     
-    def run_cleanup():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            status_msg = safe_send_message(
-                call.message,
-                "🧹 Очистка базы данных...",
-                delete_previous=True
-            )
-            
-            loop.run_until_complete(ensure_db_connection())
-            loop.run_until_complete(db.cleanup_old_data(days=30))
-            result = "✅ База данных очищена"
-            
-            if status_msg:
-                try:
-                    safe_delete_message(call.message.chat.id, status_msg.message_id)
-                except:
-                    pass
-            
-            keyboard = get_back_keyboard("admin_panel")
-            safe_send_message(
-                call.message,
-                result,
-                reply_markup=keyboard,
-                delete_previous=True
-            )
-        except Exception as e:
-            logger.error(f"❌ Ошибка очистки БД: {e}")
-        finally:
-            loop.close()
+    # Сохраняем количество
+    total = len(user_data)
     
-    threading.Thread(target=run_cleanup, daemon=True).start()
-
+    # Очищаем все хранилища
+    user_data.clear()
+    user_contexts.clear()
+    user_names.clear()
+    user_routes.clear()
+    user_state_data.clear()
+    user_states.clear()
+    
+    text = f"✅ Очищены все данные: {total} пользователей удалено"
+    keyboard = get_back_keyboard("admin_panel")
+    
+    safe_send_message(
+        call.message,
+        text,
+        reply_markup=keyboard,
+        delete_previous=True
+    )
 
 # ============================================
 # ЭКСПОРТ
@@ -999,16 +938,15 @@ __all__ = [
     'show_admin_panel',
     'handle_admin_callback',
     'show_admin_stats',
-    'show_admin_db',
     'start_broadcast',
     'process_broadcast',
     'show_users_list',
     'show_admin_settings',
-    'show_admin_logs',
     'show_admin_cleanup',
     'cleanup_cache',
-    'cleanup_logs',
     'cleanup_users',
     'cleanup_tests',
-    'cleanup_db'
+    'cleanup_all',
+    'collect_memory_stats',
+    'format_stats_text'
 ]
