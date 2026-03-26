@@ -37,7 +37,7 @@ from hypno_module import HypnoOrchestrator, TherapeuticTales, Anchoring
 
 # ========== ИМПОРТЫ ДЛЯ БАЗЫ ДАННЫХ ==========
 from db_instance import db, init_db, close_db, ensure_db_connection, execute_with_retry
-from sync_db import sync_db
+from db_sync import sync_db
 import asyncpg
 # =============================================
 
