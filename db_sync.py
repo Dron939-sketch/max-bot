@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Синхронные обертки для работы с БД - для вызовов из любого потока
-ВЕРСИЯ 2.8 - ИСПРАВЛЕНА ОБРАБОТКА ОШИБОК И ДОБАВЛЕНА load_user_from_db
+ВЕРСИЯ 2.9 - ИСПРАВЛЕНЫ ИМПОРТЫ АСИНХРОННЫХ ФУНКЦИЙ
 """
 
 import logging
@@ -14,6 +14,26 @@ from typing import Optional, Dict, Any, List
 from db_instance import db_loop_manager, db, save_user_to_db as db_save_user
 from db_instance import save_telegram_user as db_save_telegram_user
 from db_instance import save_test_result_full_async as async_save_test_result
+
+# ============================================
+# ПРАВИЛЬНЫЕ ИМПОРТЫ АСИНХРОННЫХ ФУНКЦИЙ
+# ============================================
+from db_instance import (
+    # Асинхронные функции для мыслей психолога
+    save_psychologist_thought_async as async_save_thought,
+    get_psychologist_thought_async as async_get_thought,
+    get_psychologist_thought_history_async as async_get_history,
+    get_all_psychologist_thoughts_async as async_get_all,
+    delete_psychologist_thought_async as async_delete,
+    update_psychologist_thought_async as async_update,
+    get_thoughts_by_test_result_async as async_get_by_test,
+    get_psychologist_thoughts_stats_async as async_get_stats,
+    # Асинхронные функции для контекста
+    save_user_context_async as async_save_context,
+    # Синхронные обертки для целей (они уже синхронные)
+    get_user_goals,
+    save_goal
+)
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +267,7 @@ class SyncDB:
             return None
     
     # ============================================
-    # ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
+    # ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА (ИСПРАВЛЕНЫ)
     # ============================================
     
     @staticmethod
@@ -266,8 +286,6 @@ class SyncDB:
             if not SyncDB._is_ready():
                 logger.warning(f"⚠️ Менеджер БД не готов, пропускаем сохранение мысли {user_id}")
                 return None
-            
-            from db_instance import save_psychologist_thought_async as async_save_thought
             
             result = db_loop_manager.run_coro(
                 async_save_thought,
@@ -299,8 +317,6 @@ class SyncDB:
                 logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение мысли {user_id}")
                 return None
             
-            from db_instance import get_psychologist_thought as async_get_thought
-            
             result = db_loop_manager.run_coro(
                 async_get_thought,
                 user_id, 
@@ -327,8 +343,6 @@ class SyncDB:
                 logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение истории {user_id}")
                 return []
             
-            from db_instance import get_psychologist_thought_history as async_get_history
-            
             result = db_loop_manager.run_coro(
                 async_get_history,
                 user_id, 
@@ -342,7 +356,7 @@ class SyncDB:
             return []
     
     # ============================================
-    # ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
+    # ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА (ИСПРАВЛЕНЫ)
     # ============================================
     
     @staticmethod
@@ -358,8 +372,6 @@ class SyncDB:
             if not SyncDB._is_ready():
                 logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение мыслей {user_id}")
                 return []
-            
-            from db_instance import get_all_psychologist_thoughts as async_get_all
             
             result = db_loop_manager.run_coro(
                 async_get_all,
@@ -382,8 +394,6 @@ class SyncDB:
             if not SyncDB._is_ready():
                 logger.warning(f"⚠️ Менеджер БД не готов, пропускаем удаление {thought_id}")
                 return False
-            
-            from db_instance import delete_psychologist_thought as async_delete
             
             result = db_loop_manager.run_coro(
                 async_delete,
@@ -411,8 +421,6 @@ class SyncDB:
                 logger.warning(f"⚠️ Менеджер БД не готов, пропускаем обновление {thought_id}")
                 return False
             
-            from db_instance import update_psychologist_thought as async_update
-            
             result = db_loop_manager.run_coro(
                 async_update,
                 thought_id, 
@@ -437,8 +445,6 @@ class SyncDB:
                 logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение мыслей по тесту {test_result_id}")
                 return []
             
-            from db_instance import get_thoughts_by_test_result as async_get_by_test
-            
             result = db_loop_manager.run_coro(
                 async_get_by_test,
                 test_result_id,
@@ -458,8 +464,6 @@ class SyncDB:
             if not SyncDB._is_ready():
                 logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение статистики {user_id}")
                 return {}
-            
-            from db_instance import get_psychologist_thoughts_stats as async_get_stats
             
             result = db_loop_manager.run_coro(
                 async_get_stats,
@@ -618,13 +622,11 @@ class SyncDB:
     
     @staticmethod
     def save_user_context(user_id: int, context: Dict[str, Any]) -> bool:
-        """Синхронное сохранение контекста пользователя"""
+        """Синхронное сохранение контекста пользователя (ИСПРАВЛЕНО)"""
         try:
             if not SyncDB._is_ready():
                 logger.warning(f"⚠️ Менеджер БД не готов, пропускаем сохранение контекста {user_id}")
                 return False
-            
-            from db_instance import save_user_context as async_save_context
             
             result = db_loop_manager.run_coro(
                 async_save_context,
@@ -645,8 +647,6 @@ class SyncDB:
                 logger.warning(f"⚠️ Менеджер БД не готов, пропускаем получение целей {user_id}")
                 return []
             
-            from db_instance import get_user_goals
-            
             return get_user_goals(user_id, limit)
         except Exception as e:
             logger.error(f"❌ Ошибка get_user_goals: {e}")
@@ -660,8 +660,6 @@ class SyncDB:
                 logger.warning(f"⚠️ Менеджер БД не готов, пропускаем сохранение цели {user_id}")
                 return None
             
-            from db_instance import save_goal
-            
             return save_goal(user_id, goal_text)
         except Exception as e:
             logger.error(f"❌ Ошибка save_goal: {e}")
@@ -671,7 +669,7 @@ class SyncDB:
 # Создаем глобальный экземпляр
 sync_db = SyncDB()
 
-logger.info("✅ sync_db инициализирован (версия 2.8 с полной поддержкой мыслей психолога)")
+logger.info("✅ sync_db инициализирован (версия 2.9 - исправлены импорты асинхронных функций)")
 
 # Экспорт
 __all__ = ['sync_db', 'SyncDB']
