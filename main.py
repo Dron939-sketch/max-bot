@@ -4030,5 +4030,825 @@ async def reality_check_with_confinement(request: Request):
             content={"success": False, "error": str(e)}
         )
 
+# ============================================
+# API ЭНДПОИНТЫ ДЛЯ КОНФАЙНТМЕНТ-МОДЕЛИ И ГИПНОЗА
+# ============================================
+
+from confinement_model import ConfinementModel9
+from loop_analyzer import LoopAnalyzer
+from key_confinement import KeyConfinementDetector
+from intervention_library import InterventionLibrary
+from hypno_module import HypnoOrchestrator, TherapeuticTales, Anchoring
+
+
+@api_app.get("/api/confinement/model/{user_id}")
+async def get_confinement_model(user_id: int):
+    """
+    Получить 9-элементную конфайнтмент-модель пользователя
+    """
+    try:
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        # Проверяем, есть ли уже построенная модель
+        existing_model = user_info.get('confinement_model')
+        
+        if existing_model:
+            # Восстанавливаем модель из словаря
+            if isinstance(existing_model, dict):
+                model = ConfinementModel9.from_dict(existing_model)
+            else:
+                model = existing_model
+        else:
+            # Строим новую модель
+            scores = {}
+            for k in VECTORS:
+                levels = user_info.get("behavioral_levels", {}).get(k, [])
+                scores[k] = sum(levels) / len(levels) if levels else 3.0
+            
+            # Получаем историю диалогов
+            history = user_info.get('history', [])
+            
+            # Строим модель
+            model = ConfinementModel9(user_id)
+            model.build_from_profile(scores, history)
+            
+            # Сохраняем в user_data
+            user_info['confinement_model'] = model.to_dict()
+            sync_db.save_user_to_db(user_id)
+        
+        # Формируем ответ для фронтенда
+        response = {
+            "success": True,
+            "user_id": user_id,
+            "elements": {},
+            "links": model.links,
+            "loops": model.loops,
+            "key_confinement": model.key_confinement,
+            "is_closed": model.is_closed,
+            "closure_score": model.closure_score,
+            "vectors": {
+                k: {
+                    "name": VECTORS.get(k, {}).get('name', k),
+                    "emoji": VECTORS.get(k, {}).get('emoji', '🔍'),
+                    "level": model.elements.get(pos).level if model.elements.get(pos) else 3
+                }
+                for pos, k in [(2, 'СБ'), (3, 'ТФ'), (4, 'УБ')]
+                if model.elements.get(pos)
+            }
+        }
+        
+        # Добавляем каждый элемент
+        for i in range(1, 10):
+            elem = model.elements.get(i)
+            if elem:
+                response["elements"][i] = {
+                    "id": elem.id,
+                    "name": elem.name,
+                    "description": elem.description,
+                    "type": elem.element_type,
+                    "vector": elem.vector,
+                    "level": elem.level,
+                    "archetype": elem.archetype,
+                    "strength": elem.strength,
+                    "vak": elem.vak,
+                    "causes": elem.causes,
+                    "caused_by": elem.caused_by,
+                    "amplifies": elem.amplifies
+                }
+        
+        return JSONResponse(response)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_confinement_model: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/confinement/model/{user_id}/loops")
+async def get_confinement_loops(user_id: int):
+    """
+    Получить петли конфайнтмент-модели
+    """
+    try:
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        existing_model = user_info.get('confinement_model')
+        if not existing_model:
+            return JSONResponse({
+                "success": False,
+                "message": "Модель не построена"
+            })
+        
+        if isinstance(existing_model, dict):
+            model = ConfinementModel9.from_dict(existing_model)
+        else:
+            model = existing_model
+        
+        analyzer = LoopAnalyzer(model)
+        loops = analyzer.analyze()
+        
+        return JSONResponse({
+            "success": True,
+            "loops": loops,
+            "statistics": analyzer.get_statistics(),
+            "strongest_loop": analyzer.get_strongest_loop(),
+            "all_loops_summary": analyzer.get_all_loops_summary()
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_confinement_loops: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/confinement/model/{user_id}/key-confinement")
+async def get_key_confinement(user_id: int):
+    """
+    Получить ключевой конфайнтмент (главное ограничение)
+    """
+    try:
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        existing_model = user_info.get('confinement_model')
+        if not existing_model:
+            return JSONResponse({
+                "success": False,
+                "message": "Модель не построена"
+            })
+        
+        if isinstance(existing_model, dict):
+            model = ConfinementModel9.from_dict(existing_model)
+        else:
+            model = existing_model
+        
+        analyzer = LoopAnalyzer(model)
+        loops = analyzer.analyze()
+        
+        detector = KeyConfinementDetector(model, loops)
+        key_confinement = detector.detect()
+        all_confinements = detector.detect_all()
+        
+        # Получаем интервенцию для ключевого конфайнтмента
+        intervention = None
+        if key_confinement:
+            lib = InterventionLibrary()
+            intervention = lib.get_intervention_for_element(
+                key_confinement['element_id'],
+                vector=key_confinement['element'].vector if key_confinement['element'] else None,
+                level=key_confinement['element'].level if key_confinement['element'] else None
+            )
+        
+        return JSONResponse({
+            "success": True,
+            "key_confinement": key_confinement,
+            "all_confinements": all_confinements,
+            "intervention": intervention,
+            "summary": detector.get_key_confinement_summary() if key_confinement else None,
+            "break_points_summary": detector.get_break_points_summary()
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_key_confinement: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/confinement/model/{user_id}/element/{element_id}")
+async def get_confinement_element(user_id: int, element_id: int):
+    """
+    Получить конкретный элемент модели
+    """
+    try:
+        user_id = int(user_id)
+        element_id = int(element_id)
+        user_info = user_data.get(user_id, {})
+        
+        existing_model = user_info.get('confinement_model')
+        if not existing_model:
+            return JSONResponse({
+                "success": False,
+                "message": "Модель не построена"
+            })
+        
+        if isinstance(existing_model, dict):
+            model = ConfinementModel9.from_dict(existing_model)
+        else:
+            model = existing_model
+        
+        element = model.elements.get(element_id)
+        if not element:
+            return JSONResponse({
+                "success": False,
+                "message": f"Элемент {element_id} не найден"
+            })
+        
+        # Находим петли, в которые входит элемент
+        analyzer = LoopAnalyzer(model)
+        loops = analyzer.analyze()
+        element_loops = analyzer.get_loops_by_element(element_id)
+        
+        return JSONResponse({
+            "success": True,
+            "element": {
+                "id": element.id,
+                "name": element.name,
+                "description": element.description,
+                "type": element.element_type,
+                "vector": element.vector,
+                "level": element.level,
+                "archetype": element.archetype,
+                "strength": element.strength,
+                "vak": element.vak,
+                "causes": element.causes,
+                "caused_by": element.caused_by,
+                "amplifies": element.amplifies
+            },
+            "loops": element_loops,
+            "participation_count": len(element_loops)
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_confinement_element: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.post("/api/confinement/model/{user_id}/rebuild")
+async def rebuild_confinement_model(user_id: int):
+    """
+    Принудительно перестроить конфайнтмент-модель
+    """
+    try:
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        # Строим новую модель
+        scores = {}
+        for k in VECTORS:
+            levels = user_info.get("behavioral_levels", {}).get(k, [])
+            scores[k] = sum(levels) / len(levels) if levels else 3.0
+        
+        history = user_info.get('history', [])
+        
+        model = ConfinementModel9(user_id)
+        model.build_from_profile(scores, history)
+        
+        # Сохраняем
+        user_info['confinement_model'] = model.to_dict()
+        sync_db.save_user_to_db(user_id)
+        
+        return JSONResponse({
+            "success": True,
+            "message": "Модель перестроена",
+            "closure_score": model.closure_score,
+            "is_closed": model.is_closed,
+            "key_confinement": model.key_confinement
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in rebuild_confinement_model: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/intervention/{element_id}")
+async def get_intervention(element_id: int, user_id: int):
+    """
+    Получить интервенцию для элемента
+    """
+    try:
+        user_id = int(user_id)
+        element_id = int(element_id)
+        user_info = user_data.get(user_id, {})
+        
+        existing_model = user_info.get('confinement_model')
+        if not existing_model:
+            return JSONResponse({
+                "success": False,
+                "message": "Модель не построена"
+            })
+        
+        if isinstance(existing_model, dict):
+            model = ConfinementModel9.from_dict(existing_model)
+        else:
+            model = existing_model
+        
+        element = model.elements.get(element_id)
+        if not element:
+            return JSONResponse({
+                "success": False,
+                "message": f"Элемент {element_id} не найден"
+            })
+        
+        lib = InterventionLibrary()
+        
+        intervention = lib.get_intervention_for_element(
+            element_id,
+            vector=element.vector,
+            level=element.level
+        )
+        
+        daily_practice = lib.get_daily_practice(element_id)
+        week_program = lib.get_program_for_week(element_id)
+        
+        # Получаем случайное упражнение и цитату
+        random_exercise = lib.get_random_exercise()
+        random_quote = lib.get_random_quote()
+        
+        return JSONResponse({
+            "success": True,
+            "element": {
+                "id": element.id,
+                "name": element.name,
+                "description": element.description,
+                "type": element.element_type,
+                "vector": element.vector,
+                "level": element.level
+            },
+            "intervention": intervention,
+            "daily_practice": daily_practice,
+            "week_program": week_program,
+            "random_exercise": random_exercise,
+            "random_quote": random_quote
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_intervention: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.post("/api/hypno/process")
+async def process_hypno(request: Request):
+    """
+    Получить гипнотический ответ на сообщение
+    """
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        text = data.get('text')
+        mode = data.get('mode', 'psychologist')
+        
+        if not user_id or not text:
+            raise HTTPException(status_code=400, detail="user_id and text required")
+        
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        # Получаем контекст
+        context_obj = user_contexts.get(user_id)
+        
+        # Получаем конфайнтмент-модель
+        existing_model = user_info.get('confinement_model')
+        if existing_model:
+            if isinstance(existing_model, dict):
+                model = ConfinementModel9.from_dict(existing_model)
+            else:
+                model = existing_model
+        else:
+            model = None
+        
+        # Собираем контекст
+        context = {
+            'mode': mode,
+            'vector': user_info.get('profile_data', {}).get('dominant_vector'),
+            'confinement_model': model.to_dict() if model else None,
+            'key_confinement': model.key_confinement if model else None
+        }
+        
+        hypno = HypnoOrchestrator()
+        response = hypno.process(user_id, text, context)
+        
+        # Сохраняем в историю
+        if 'hypno_history' not in user_info:
+            user_info['hypno_history'] = []
+        user_info['hypno_history'].append({
+            'text': text,
+            'response': response,
+            'mode': mode,
+            'timestamp': datetime.now().isoformat()
+        })
+        sync_db.save_user_to_db(user_id)
+        
+        return JSONResponse({
+            "success": True,
+            "response": response,
+            "mode": mode
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in process_hypno: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.post("/api/hypno/support")
+async def get_hypno_support(request: Request):
+    """
+    Получить поддерживающий гипнотический ответ
+    """
+    try:
+        data = await request.json()
+        text = data.get('text', '')
+        
+        hypno = HypnoOrchestrator()
+        response = hypno.get_support_response(text)
+        
+        return JSONResponse({
+            "success": True,
+            "response": response
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_hypno_support: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/tale")
+async def get_tale(issue: str = None):
+    """
+    Получить терапевтическую сказку
+    """
+    try:
+        tales = TherapeuticTales()
+        
+        if issue:
+            tale = tales.get_tale_for_issue(issue)
+        else:
+            # Случайная сказка
+            tale_id = random.choice(tales.get_all_tales())
+            tale = tales.get_tale_by_id(tale_id)
+        
+        return JSONResponse({
+            "success": True,
+            "tale": tale,
+            "available_tales": tales.get_all_tales()
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_tale: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/tale/{tale_id}")
+async def get_tale_by_id(tale_id: str):
+    """
+    Получить конкретную сказку по ID
+    """
+    try:
+        tales = TherapeuticTales()
+        tale = tales.get_tale_by_id(tale_id)
+        
+        if not tale:
+            return JSONResponse({
+                "success": False,
+                "message": f"Сказка {tale_id} не найдена"
+            }, status_code=404)
+        
+        return JSONResponse({
+            "success": True,
+            "tale": tale
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_tale_by_id: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/anchor/{state}")
+async def get_anchor(state: str, user_id: int = None):
+    """
+    Получить якорь для состояния
+    """
+    try:
+        anchoring = Anchoring()
+        
+        if user_id:
+            phrase = anchoring.get_anchor(state, user_id)
+        else:
+            phrase = anchoring.get_anchor(state)
+        
+        emoji = anchoring.get_emoji(state)
+        
+        return JSONResponse({
+            "success": True,
+            "state": state,
+            "phrase": phrase,
+            "emoji": emoji,
+            "available_states": anchoring.get_all_states()
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_anchor: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.post("/api/anchor/set")
+async def set_anchor(request: Request):
+    """
+    Установить персональный якорь
+    """
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        anchor_name = data.get('anchor_name')
+        state = data.get('state')
+        phrase = data.get('phrase')
+        
+        if not all([user_id, anchor_name, state, phrase]):
+            raise HTTPException(status_code=400, detail="user_id, anchor_name, state, phrase required")
+        
+        user_id = int(user_id)
+        
+        anchoring = Anchoring()
+        anchoring.set_anchor(user_id, anchor_name, state, phrase)
+        
+        # Сохраняем в БД
+        user_info = user_data.get(user_id, {})
+        if 'anchors' not in user_info:
+            user_info['anchors'] = []
+        user_info['anchors'].append({
+            'name': anchor_name,
+            'state': state,
+            'phrase': phrase,
+            'timestamp': datetime.now().isoformat()
+        })
+        sync_db.save_user_to_db(user_id)
+        
+        return JSONResponse({
+            "success": True,
+            "message": f"Якорь '{anchor_name}' установлен"
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in set_anchor: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.post("/api/anchor/fire")
+async def fire_anchor(request: Request):
+    """
+    Активировать якорь
+    """
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        anchor_name = data.get('anchor_name')
+        
+        if not user_id or not anchor_name:
+            raise HTTPException(status_code=400, detail="user_id and anchor_name required")
+        
+        user_id = int(user_id)
+        
+        anchoring = Anchoring()
+        phrase = anchoring.fire_anchor(user_id, anchor_name)
+        
+        if not phrase:
+            return JSONResponse({
+                "success": False,
+                "message": f"Якорь '{anchor_name}' не найден"
+            }, status_code=404)
+        
+        return JSONResponse({
+            "success": True,
+            "phrase": phrase,
+            "anchor_name": anchor_name
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in fire_anchor: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/anchor/user/{user_id}")
+async def get_user_anchors(user_id: int):
+    """
+    Получить все якоря пользователя
+    """
+    try:
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        anchors = user_info.get('anchors', [])
+        
+        return JSONResponse({
+            "success": True,
+            "anchors": anchors
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_user_anchors: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/practice/morning")
+async def get_morning_practice():
+    """
+    Получить утреннюю практику
+    """
+    try:
+        lib = InterventionLibrary()
+        practice = lib.get_morning_practice()
+        
+        return JSONResponse({
+            "success": True,
+            "practice": practice
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_morning_practice: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/practice/evening")
+async def get_evening_practice():
+    """
+    Получить вечернюю практику
+    """
+    try:
+        lib = InterventionLibrary()
+        practice = lib.get_evening_practice()
+        
+        return JSONResponse({
+            "success": True,
+            "practice": practice
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_evening_practice: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/practice/random-exercise")
+async def get_random_exercise(category: str = None):
+    """
+    Получить случайное упражнение
+    """
+    try:
+        lib = InterventionLibrary()
+        exercise = lib.get_random_exercise(category)
+        
+        # Получаем все доступные категории
+        all_categories = list(lib.exercises.keys())
+        
+        return JSONResponse({
+            "success": True,
+            "exercise": exercise,
+            "category": category,
+            "available_categories": all_categories
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_random_exercise: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/practice/random-quote")
+async def get_random_quote(category: str = None):
+    """
+    Получить случайную цитату
+    """
+    try:
+        lib = InterventionLibrary()
+        quote = lib.get_random_quote(category)
+        
+        return JSONResponse({
+            "success": True,
+            "quote": quote,
+            "category": category
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_random_quote: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/practice/week-program/{element_id}")
+async def get_week_program(element_id: int, user_id: int):
+    """
+    Получить недельную программу для элемента
+    """
+    try:
+        user_id = int(user_id)
+        element_id = int(element_id)
+        user_info = user_data.get(user_id, {})
+        
+        lib = InterventionLibrary()
+        week_program = lib.get_program_for_week(element_id)
+        
+        return JSONResponse({
+            "success": True,
+            "element_id": element_id,
+            "program": week_program
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_week_program: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+
+@api_app.get("/api/confinement/statistics/{user_id}")
+async def get_confinement_statistics(user_id: int):
+    """
+    Получить статистику по конфайнтмент-модели
+    """
+    try:
+        user_id = int(user_id)
+        user_info = user_data.get(user_id, {})
+        
+        existing_model = user_info.get('confinement_model')
+        if not existing_model:
+            return JSONResponse({
+                "success": False,
+                "message": "Модель не построена"
+            })
+        
+        if isinstance(existing_model, dict):
+            model = ConfinementModel9.from_dict(existing_model)
+        else:
+            model = existing_model
+        
+        analyzer = LoopAnalyzer(model)
+        loops = analyzer.analyze()
+        
+        detector = KeyConfinementDetector(model, loops)
+        key = detector.detect()
+        
+        lib = InterventionLibrary()
+        
+        return JSONResponse({
+            "success": True,
+            "statistics": {
+                "total_elements": len([e for e in model.elements.values() if e]),
+                "active_elements": sum(1 for e in model.elements.values() if e and e.strength > 0.3),
+                "total_loops": len(loops),
+                "strongest_loop_strength": analyzer.get_strongest_loop().get('impact', 0) if analyzer.get_strongest_loop() else 0,
+                "is_system_closed": model.is_closed,
+                "closure_score": model.closure_score,
+                "has_key_confinement": key is not None,
+                "key_confinement_strength": key.get('score', 0) if key else 0
+            },
+            "library_statistics": lib.get_statistics()
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error in get_confinement_statistics: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
 if __name__ == "__main__":
     main()
