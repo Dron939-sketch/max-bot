@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Обработчики сбора контекста (город, возраст, пол) для MAX
-ВЕРСИЯ 2.2 - ИСПРАВЛЕНО ДУБЛИРОВАНИЕ СООБЩЕНИЙ (ПЕРСОНАЛЬНЫЕ БЛОКИРОВКИ)
+ВЕРСИЯ 2.3 - ВРЕМЕННО ОТКЛЮЧЕНО СОХРАНЕНИЕ В БД (ИСПРАВЛЕНИЕ ЗАВИСАНИЙ)
 """
 
 import logging
@@ -87,13 +87,15 @@ def get_user_context_dict() -> Dict[int, UserContext]:
 
 def save_context_to_db(user_id: int):
     """СИНХРОННО сохраняет контекст пользователя в БД"""
-    context = get_user_context(user_id)
-    if context:
-        try:
-            sync_db.save_user_to_db(user_id)
-            logger.debug(f"💾 Контекст пользователя {user_id} сохранен в БД")
-        except Exception as e:
-            logger.error(f"❌ Ошибка сохранения контекста {user_id}: {e}")
+    # ⚠️ ВРЕМЕННО ОТКЛЮЧЕНО: БД зависает
+    # context = get_user_context(user_id)
+    # if context:
+    #     try:
+    #         sync_db.save_user_to_db(user_id)
+    #         logger.debug(f"💾 Контекст пользователя {user_id} сохранен в БД")
+    #     except Exception as e:
+    #         logger.error(f"❌ Ошибка сохранения контекста {user_id}: {e}")
+    logger.debug(f"⚠️ Сохранение контекста в БД временно отключено для {user_id}")
 
 # ============================================
 # НАЧАЛО СБОРА КОНТЕКСТА
@@ -209,7 +211,6 @@ def handle_context_callback(call: CallbackQuery):
         
         # Получаем следующий вопрос
         question, keyboard = context.ask_for_context()
-        logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
         
         if question:
             safe_send_message(
@@ -231,7 +232,6 @@ def handle_context_callback(call: CallbackQuery):
         threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
         
         question, keyboard = context.ask_for_context()
-        logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
         
         if question:
             safe_send_message(
@@ -253,7 +253,6 @@ def handle_context_callback(call: CallbackQuery):
         threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
         
         question, keyboard = context.ask_for_context()
-        logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
         
         if question:
             safe_send_message(
@@ -267,7 +266,6 @@ def handle_context_callback(call: CallbackQuery):
             show_context_complete(call.message, context)
         return
     
-    # Обработка пропуска контекста
     elif data == "skip_context":
         logger.info(f"⏭️ Пропускаем сбор контекста")
         context.awaiting_context = None
@@ -336,7 +334,7 @@ def handle_context_message(message: Message) -> bool:
         logger.info(f"📊 context.awaiting_context = {context.awaiting_context}")
         
         if not context.awaiting_context:
-            logger.info(f"⏭️ Не ожидается контекст (context.awaiting_context is None), выходим")
+            logger.info(f"⏭️ Не ожидается контекст, выходим")
             return False
         
         text = message.text.strip()
@@ -364,10 +362,11 @@ def handle_context_message(message: Message) -> bool:
                     context.detect_timezone_from_city()
                     logger.info(f"✅ Часовой пояс определен")
                     
-                    save_context_to_db(user_id)
+                    # Временно отключено
+                    # save_context_to_db(user_id)
                     
                     question, keyboard = context.ask_for_context()
-                    logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
+                    logger.info(f"📋 Следующий вопрос: '{question}'")
                     
                     if question:
                         safe_send_message(
@@ -415,13 +414,12 @@ def handle_context_message(message: Message) -> bool:
                     context.awaiting_context = None
                     logger.info(f"✅ [AGE] context.awaiting_context сброшен в None")
                     
-                    logger.info(f"💾 [AGE] Сохраняем в БД...")
-                    threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
-                    logger.info(f"✅ [AGE] Задача сохранения запущена")
+                    # ✅ ВРЕМЕННО ОТКЛЮЧЕНО: сохранение в БД
+                    logger.info(f"⚠️ [AGE] Сохранение в БД временно отключено")
                     
                     logger.info(f"❓ [AGE] Вызываем context.ask_for_context()...")
                     question, keyboard = context.ask_for_context()
-                    logger.info(f"📋 [AGE] ask_for_context вернул: question='{question}', keyboard={keyboard is not None}")
+                    logger.info(f"📋 [AGE] ask_for_context вернул: question='{question}'")
                     
                     if question:
                         logger.info(f"📤 [AGE] Есть следующий вопрос, отправляем...")
@@ -470,11 +468,12 @@ def handle_context_message(message: Message) -> bool:
             
             context.awaiting_context = None
             
-            threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
+            # Временно отключено
+            # threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
             
             logger.info(f"❓ Получаем следующий вопрос после пола...")
             question, keyboard = context.ask_for_context()
-            logger.info(f"📋 Следующий вопрос: '{question}', клавиатура: {keyboard is not None}")
+            logger.info(f"📋 Следующий вопрос: '{question}'")
             
             if question:
                 logger.info(f"📤 Отправляем следующий вопрос...")
@@ -526,8 +525,8 @@ def show_context_complete(message: Message, context: UserContext):
         context.update_weather()
         logger.info(f"✅ Погода обновлена")
         
-        threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
-        logger.info(f"✅ Задача сохранения в БД запущена")
+        # Временно отключено
+        # threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
         
         # Отмечаем, что контекст завершен
         _mark_context_completed(user_id)
@@ -556,15 +555,13 @@ def show_context_complete(message: Message, context: UserContext):
         keyboard.row(InlineKeyboardButton("🚀 НАЧАТЬ ТЕСТ", callback_data="start_stage_1_direct"))
         keyboard.row(InlineKeyboardButton("📖 ЧТО ДАЕТ ТЕСТ", callback_data="show_benefits"))
         
-        logger.info(f"📤 Отправляем итоговый экран...")
-        sent = safe_send_message(
+        safe_send_message(
             message,
             summary,
             reply_markup=keyboard,
             parse_mode='Markdown',
             delete_previous=True
         )
-        logger.info(f"✅ Итоговый экран отправлен, result={sent is not None}")
         
         # Очищаем состояние
         if user_id in user_states:
@@ -606,7 +603,8 @@ def cmd_context(message: Message):
     if user_id in _completed_flags:
         del _completed_flags[user_id]
     
-    threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
+    # Временно отключено
+    # threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
     
     safe_send_message(
         message,
@@ -704,18 +702,6 @@ def show_current_context(message: Message):
         weather = context.weather_cache
         text += f"{weather['icon']} **Погода:** {weather['description']}, {weather['temp']}°C\n"
     
-    # Жизненный контекст, если есть
-    if context.life_context_complete:
-        text += f"\n📋 **ЖИЗНЕННЫЙ КОНТЕКСТ:**\n"
-        if context.family_status:
-            text += f"• Семья: {context.family_status}\n"
-        if context.has_children:
-            text += f"• Дети: {context.children_ages}\n"
-        if context.job_title:
-            text += f"• Работа: {context.job_title}\n"
-        if context.energy_level:
-            text += f"• Энергия: {context.energy_level}/10\n"
-    
     keyboard = InlineKeyboardMarkup()
     keyboard.row(
         InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="start_context"),
@@ -756,7 +742,8 @@ def save_life_context(user_id: int, answers: dict):
     context.energy_level = answers.get('energy_level')
     context.life_context_complete = True
     
-    threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
+    # Временно отключено
+    # threading.Thread(target=save_context_to_db, args=(user_id,), daemon=True).start()
 
 def parse_life_context_from_text(text: str) -> dict:
     """
@@ -766,21 +753,15 @@ def parse_life_context_from_text(text: str) -> dict:
     answers = {}
     
     for i, line in enumerate(lines):
-        # Убираем нумерацию и лишние пробелы
         clean = re.sub(r'^[\d️⃣🔟\s]*', '', line.strip())
         if not clean:
             continue
         
-        # Семейное положение
         if i == 0:
             answers['family_status'] = clean
-        
-        # Дети
         elif i == 1:
             answers['has_children'] = 'да' in clean.lower() or 'есть' in clean.lower()
             answers['children_ages'] = clean
-        
-        # Работа и график
         elif i == 2:
             answers['job_title'] = clean
             if '5/2' in clean:
@@ -791,33 +772,19 @@ def parse_life_context_from_text(text: str) -> dict:
                 answers['work_schedule'] = 'свободный'
             else:
                 answers['work_schedule'] = clean
-        
-        # Время на дорогу
         elif i == 3:
             minutes = re.findall(r'\d+', clean)
             answers['commute_time'] = int(minutes[0]) if minutes else None
-        
-        # Жильё
         elif i == 4:
             answers['housing_type'] = clean
-        
-        # Отдельное пространство
         elif i == 5:
             answers['has_private_space'] = 'да' in clean.lower() or 'есть' in clean.lower()
-        
-        # Машина
         elif i == 6:
             answers['has_car'] = 'да' in clean.lower() or 'есть' in clean.lower()
-        
-        # Поддержка
         elif i == 7:
             answers['support_people'] = clean
-        
-        # Сопротивление
         elif i == 8:
             answers['resistance_people'] = clean if 'нет' not in clean.lower() else None
-        
-        # Энергия
         elif i == 9:
             energy = re.findall(r'\d+', clean)
             answers['energy_level'] = int(energy[0]) if energy else 5
