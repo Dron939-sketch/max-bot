@@ -22,6 +22,92 @@ from typing import Optional, Dict, List, Any, Tuple, Union
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
+# ============================================
+# ⚠️ ВРЕМЕННОЕ ОТКЛЮЧЕНИЕ БАЗЫ ДАННЫХ
+# ============================================
+# Создаем заглушку для БД прямо здесь, до любых импортов
+import importlib
+
+# Создаем класс-заглушку
+class DummyDB:
+    def __getattr__(self, name):
+        def dummy(*args, **kwargs):
+            return None if name != 'log_event' else True
+        return dummy
+
+# Создаем экземпляры
+db = DummyDB()
+db_loop_manager = DummyDB()
+sync_db = DummyDB()
+
+# Асинхронные функции-заглушки
+async def init_db(): 
+    print("⚠️ БД ВРЕМЕННО ОТКЛЮЧЕНА — работаем в памяти")
+    return True
+
+async def close_db(): 
+    pass
+
+async def ensure_db_connection(): 
+    return True
+
+async def execute_with_retry(*args, **kwargs): 
+    return None
+
+def load_user_from_db(*args, **kwargs): 
+    return None
+
+def save_telegram_user(*args, **kwargs): 
+    return True
+
+def save_user(*args, **kwargs): 
+    return True
+
+def save_user_to_db(*args, **kwargs): 
+    return True
+
+def log_event(*args, **kwargs): 
+    return True
+
+def save_psychologist_thought(*args, **kwargs): 
+    return 1
+
+def get_psychologist_thought(*args, **kwargs): 
+    return None
+
+def get_user_goals(*args, **kwargs): 
+    return []
+
+def save_goal(*args, **kwargs): 
+    return 1
+
+# Подменяем модули на заглушки
+sys.modules['db_instance'] = type('module', (), {
+    'db': db,
+    'db_loop_manager': db_loop_manager,
+    'init_db': init_db,
+    'close_db': close_db,
+    'ensure_db_connection': ensure_db_connection,
+    'execute_with_retry': execute_with_retry,
+    'load_user_from_db': load_user_from_db,
+    'save_telegram_user': save_telegram_user,
+    'save_user': save_user,
+    'save_user_to_db': save_user_to_db,
+    'log_event': log_event,
+    'save_psychologist_thought': save_psychologist_thought,
+    'get_psychologist_thought': get_psychologist_thought,
+    'get_user_goals': get_user_goals,
+    'save_goal': save_goal,
+})()
+
+sys.modules['db_sync'] = type('module', (), {
+    'sync_db': sync_db,
+})()
+
+print("⚠️ БАЗА ДАННЫХ ВРЕМЕННО ОТКЛЮЧЕНА — работаем в памяти")
+print("   Все данные будут храниться только в памяти и потеряются при перезапуске")
+# ============================================
+
 # ========== ИМПОРТЫ ДЛЯ FASTAPI ==========
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,9 +122,9 @@ from intervention_library import InterventionLibrary
 from hypno_module import HypnoOrchestrator, TherapeuticTales, Anchoring
 
 # ========== ИМПОРТЫ ДЛЯ БАЗЫ ДАННЫХ ==========
+# Эти импорты теперь будут браться из заглушки
 from db_instance import db, init_db, close_db, ensure_db_connection, execute_with_retry
 from db_sync import sync_db
-import asyncpg
 # =============================================
 
 # ========== ЗАЩИТА ОТ ДВОЙНОГО ЗАПУСКА ==========
@@ -183,173 +269,33 @@ morning_manager.set_bot(bot)
 morning_manager.set_contexts(user_contexts, user_data)
 
 # ============================================
-# ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ
+# ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ (ВРЕМЕННО ОТКЛЮЧЕНО)
 # ============================================
 
 async def init_database():
-    """Инициализация базы данных"""
-    try:
-        await init_db()
-        logger.info("✅ Подключение к PostgreSQL установлено")
-        await ensure_db_connection()
-        await load_all_users_from_db()
-        setup_auto_save(interval_seconds=300)
-        asyncio.create_task(periodic_save_to_db())
-        asyncio.create_task(periodic_cleanup_db())
-        asyncio.create_task(keep_db_alive())
-        logger.info("✅ База данных инициализирована")
-    except Exception as e:
-        logger.error(f"❌ Ошибка инициализации БД: {e}")
-        raise
+    """Инициализация базы данных (ВРЕМЕННО ОТКЛЮЧЕНА)"""
+    logger.info("⚠️ БД ВРЕМЕННО ОТКЛЮЧЕНА — работаем в памяти")
+    return True
 
 async def load_all_users_from_db():
-    """Загружает всех пользователей из БД в словари памяти"""
-    global user_data, user_names, user_contexts, user_routes
-    
-    logger.info("🔄 Загрузка данных из PostgreSQL...")
-    
-    try:
-        async with db.get_connection() as conn:
-            rows = await conn.fetch("SELECT user_id, first_name, username FROM fredi_users")
-            for row in rows:
-                user_names[row['user_id']] = row['first_name'] or row['username'] or f"user_{row['user_id']}"
-        
-        async with db.get_connection() as conn:
-            rows = await conn.fetch("SELECT * FROM fredi_user_contexts")
-            for row in rows:
-                user_id = row['user_id']
-                context = UserContext(user_id)
-                context.name = row.get('name')
-                context.age = row.get('age')
-                context.gender = row.get('gender')
-                context.city = row.get('city')
-                context.birth_date = row.get('birth_date')
-                context.timezone = row.get('timezone', 'Europe/Moscow')
-                context.timezone_offset = row.get('timezone_offset', 3)
-                context.communication_mode = row.get('communication_mode', 'coach')
-                context.last_context_update = row.get('last_context_update')
-                if row.get('weather_cache'):
-                    context.weather_cache = json.loads(row['weather_cache'])
-                context.weather_cache_time = row.get('weather_cache_time')
-                context.family_status = row.get('family_status')
-                context.has_children = row.get('has_children', False)
-                context.children_ages = row.get('children_ages')
-                context.work_schedule = row.get('work_schedule')
-                context.job_title = row.get('job_title')
-                context.commute_time = row.get('commute_time')
-                context.housing_type = row.get('housing_type')
-                context.has_private_space = row.get('has_private_space', False)
-                context.has_car = row.get('has_car', False)
-                context.support_people = row.get('support_people')
-                context.resistance_people = row.get('resistance_people')
-                context.energy_level = row.get('energy_level')
-                context.life_context_complete = row.get('life_context_complete', False)
-                context.awaiting_context = row.get('awaiting_context')
-                user_contexts[user_id] = context
-        
-        async with db.get_connection() as conn:
-            rows = await conn.fetch("SELECT user_id, data FROM fredi_user_data")
-            for row in rows:
-                data = row['data']
-                if isinstance(data, str):
-                    data = json.loads(data)
-                user_data[row['user_id']] = data
-        
-        async with db.get_connection() as conn:
-            rows = await conn.fetch("""
-                SELECT user_id, route_data, current_step, progress 
-                FROM fredi_user_routes 
-                WHERE is_active = TRUE
-            """)
-            for row in rows:
-                route_data = row['route_data']
-                if isinstance(route_data, str):
-                    route_data = json.loads(route_data)
-                progress = row['progress']
-                if isinstance(progress, str):
-                    progress = json.loads(progress)
-                user_routes[row['user_id']] = {
-                    'route_data': route_data,
-                    'current_step': row['current_step'],
-                    'progress': progress
-                }
-        
-        async with db.get_connection() as conn:
-            rows = await conn.fetch("SELECT user_id, context_data FROM fredi_context_objects")
-            for row in rows:
-                user_id = row['user_id']
-                if user_id not in user_contexts:
-                    try:
-                        import pickle
-                        context = pickle.loads(row['context_data'])
-                        user_contexts[user_id] = context
-                        logger.debug(f"📦 Загружен pickled контекст для {user_id}")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Не удалось загрузить pickled контекст для {user_id}: {e}")
-        
-        # 👇👇👇 НОВАЯ ЗАГРУЗКА МЫСЛЕЙ ПСИХОЛОГА 👇👇👇
-        async with db.get_connection() as conn:
-            rows = await conn.fetch("""
-                SELECT user_id, thought_text, thought_type, is_active, metadata
-                FROM fredi_psychologist_thoughts 
-                WHERE is_active = TRUE
-                ORDER BY created_at DESC
-            """)
-            for row in rows:
-                user_id = row['user_id']
-                if user_id not in user_data:
-                    user_data[user_id] = {}
-                
-                if row['thought_type'] == 'psychologist_thought':
-                    user_data[user_id]['psychologist_thought'] = row['thought_text']
-                    user_data[user_id]['psychologist_thought_metadata'] = row['metadata']
-                elif row['thought_type'] == 'profile_description':
-                    if not user_data[user_id].get('ai_generated_profile'):
-                        user_data[user_id]['ai_generated_profile'] = row['thought_text']
-        
-        logger.info(f"✅ Загружено: {len(user_data)} пользователей, "
-                   f"{len(user_contexts)} контекстов, "
-                   f"{len(user_routes)} маршрутов")
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка загрузки данных из БД: {e}")
-        import traceback
-        traceback.print_exc()
-        
+    """Загрузка пользователей из БД (ВРЕМЕННО ОТКЛЮЧЕНО)"""
+    logger.info("⚠️ Загрузка из БД отключена — работаем в памяти")
+    return
+
 async def periodic_save_to_db():
-    """Периодически сохраняет всех пользователей в БД"""
-    while True:
-        await asyncio.sleep(300)
-        logger.info("🔄 Периодическое сохранение данных в БД...")
-        saved_count = 0
-        for user_id in list(user_data.keys()):
-            try:
-                if sync_db.save_user_to_db(user_id):
-                    saved_count += 1
-            except Exception as e:
-                logger.error(f"❌ Ошибка сохранения {user_id}: {e}")
-        logger.info(f"✅ Сохранено {saved_count} пользователей")
+    """Периодическое сохранение (ВРЕМЕННО ОТКЛЮЧЕНО)"""
+    await asyncio.sleep(3600)  # Ждем час, потом просто выходим
+    return
 
 async def periodic_cleanup_db():
-    """Периодическая очистка старых данных"""
-    while True:
-        await asyncio.sleep(86400)
-        try:
-            await db.cleanup_old_data(days=30)
-            logger.info("🧹 Очистка старых данных выполнена")
-        except Exception as e:
-            logger.error(f"❌ Ошибка при очистке данных: {e}")
+    """Очистка старых данных (ВРЕМЕННО ОТКЛЮЧЕНО)"""
+    await asyncio.sleep(86400)  # Ждем сутки, потом просто выходим
+    return
 
 async def keep_db_alive():
-    """Поддерживает соединение с БД живым (периодический пинг)"""
-    while True:
-        await asyncio.sleep(25)  # Каждые 25 секунд
-        try:
-            from db_instance import ensure_db_connection
-            await ensure_db_connection()
-            logger.debug("💓 Пинг БД выполнен")
-        except Exception as e:
-            logger.error(f"❌ Пинг БД failed: {e}")
+    """Поддержание соединения (ВРЕМЕННО ОТКЛЮЧЕНО)"""
+    await asyncio.sleep(3600)  # Ждем час, потом просто выходим
+    return
 
 # ============================================
 # FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ (ИСПРАВЛЕННЫЙ)
