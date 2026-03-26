@@ -34,7 +34,7 @@ class BotDatabase:
         self._connection_lock = None  # Блокировка для предотвращения конкурентных операций
     
     async def connect(self, min_size: int = 1, max_size: int = 3):
-    """Создание пула соединений с БД"""
+        """Создание пула соединений с БД"""
     try:
         if self.pool:
             logger.info("✅ Пул соединений уже существует")
