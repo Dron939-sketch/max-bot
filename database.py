@@ -33,39 +33,34 @@ class BotDatabase:
         self.pool: Optional[asyncpg.Pool] = None
         self._connection_lock = None  # Блокировка для предотвращения конкурентных операций
     
-    async def connect(self, min_size: int = 1, max_size: int = 10):
-        """
-        Создание пула соединений с БД
+    async def connect(self, min_size: int = 1, max_size: int = 3):
+    """Создание пула соединений с БД"""
+    try:
+        if self.pool:
+            logger.info("✅ Пул соединений уже существует")
+            return
         
-        Args:
-            min_size: Минимальное количество соединений в пуле
-            max_size: Максимальное количество соединений в пуле
-        """
-        try:
-            # Проверяем, не подключены ли уже
-            if self.pool:
-                logger.info("✅ Пул соединений уже существует")
-                return
-            
-            logger.info("🔄 Создаём пул соединений к PostgreSQL...")
-            
-            # Стандартное создание пула для Python 3.11
-            self.pool = await asyncpg.create_pool(
-                self.dsn,
-                min_size=min_size,
-                max_size=max_size,
-                command_timeout=60,
-                max_inactive_connection_lifetime=300,
-                timeout=60
-            )
-            logger.info("✅ Пул соединений создан")
-            
-            # Создаем таблицы при подключении
-            await self.create_tables()
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка подключения к PostgreSQL: {e}")
-            raise
+        logger.info("🔄 Создаём пул соединений к PostgreSQL...")
+        
+        # Уменьшаем количество соединений и увеличиваем их время жизни
+        self.pool = await asyncpg.create_pool(
+            self.dsn,
+            min_size=min_size,
+            max_size=max_size,
+            command_timeout=30,  # Уменьшено с 60
+            max_inactive_connection_lifetime=600,  # Увеличено с 300 до 600 секунд
+            timeout=30,
+            # Важно: отключаем автоматическое закрытие соединений
+            max_queries=50000,
+            max_inactive_connection_lifetime=600
+        )
+        logger.info("✅ Пул соединений создан")
+        
+        await self.create_tables()
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка подключения к PostgreSQL: {e}")
+        raise
     
     async def disconnect(self):
         """Закрытие пула соединений"""
