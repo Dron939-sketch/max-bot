@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Сервисные функции для работы с API и генерации ответов
-Версия 9.8.5 - ДОБАВЛЕНО СОХРАНЕНИЕ МЫСЛЕЙ ПСИХОЛОГА В БД
+Версия 9.8.6 - ДОБАВЛЕН УНИВЕРСАЛЬНЫЙ ДЕКОРАТОР ДЛЯ ЛОГИРОВАНИЯ
 """
 
 import os
@@ -11,6 +11,8 @@ import logging
 import asyncio
 import re
 import sys
+import time
+import functools
 import traceback
 import httpx
 from typing import Optional, Dict, List, Any, Tuple
@@ -29,6 +31,103 @@ from config import (
 from db_sync import sync_db
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================
+# УНИВЕРСАЛЬНЫЙ ДЕКОРАТОР ДЛЯ ЛОГИРОВАНИЯ
+# ============================================
+
+def log_call(func):
+    """Декоратор для логирования всех вызовов функций"""
+    @functools.wraps(func)
+    async def async_wrapper(*args, **kwargs):
+        # Пытаемся извлечь user_id из аргументов
+        user_id = None
+        if args and len(args) > 0:
+            first_arg = args[0]
+            if isinstance(first_arg, int):
+                user_id = first_arg
+            elif hasattr(first_arg, 'from_user') and hasattr(first_arg.from_user, 'id'):
+                user_id = first_arg.from_user.id
+            elif isinstance(first_arg, dict) and 'user_id' in first_arg:
+                user_id = first_arg.get('user_id')
+        
+        logger.error(f"")
+        logger.error(f"🔥🔥🔥 ========== {func.__name__} НАЧАЛО ========== 🔥🔥🔥")
+        logger.error(f"🔥🔥🔥 Время: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+        if user_id:
+            logger.error(f"🔥🔥🔥 user_id: {user_id}")
+        
+        # Логируем аргументы (первые 300 символов)
+        args_str = str(args)[:300] if args else ""
+        kwargs_str = str(kwargs)[:300] if kwargs else ""
+        if args_str:
+            logger.error(f"🔥🔥🔥 args: {args_str}")
+        if kwargs_str:
+            logger.error(f"🔥🔥🔥 kwargs: {kwargs_str}")
+        
+        start = time.time()
+        try:
+            result = await func(*args, **kwargs)
+            elapsed = time.time() - start
+            
+            # Логируем результат
+            result_type = type(result).__name__
+            result_len = len(str(result)) if result else 0
+            
+            logger.error(f"✅✅✅ {func.__name__} ЗАВЕРШЕН за {elapsed:.2f} сек")
+            logger.error(f"✅✅✅ Результат: {result_type}, длина: {result_len}")
+            
+            # Если результат строка, показываем начало
+            if isinstance(result, str) and result:
+                logger.error(f"✅✅✅ Начало результата: {result[:200]}...")
+            
+            # Если результат словарь с ключевыми данными
+            if isinstance(result, dict):
+                logger.error(f"✅✅✅ Ключи результата: {list(result.keys())}")
+            
+            return result
+            
+        except Exception as e:
+            elapsed = time.time() - start
+            logger.error(f"❌❌❌ {func.__name__} ОШИБКА через {elapsed:.2f} сек")
+            logger.error(f"❌❌❌ Ошибка: {type(e).__name__}: {e}")
+            traceback.print_exc()
+            raise
+    
+    @functools.wraps(func)
+    def sync_wrapper(*args, **kwargs):
+        user_id = None
+        if args and len(args) > 0:
+            first_arg = args[0]
+            if isinstance(first_arg, int):
+                user_id = first_arg
+            elif hasattr(first_arg, 'from_user') and hasattr(first_arg.from_user, 'id'):
+                user_id = first_arg.from_user.id
+        
+        logger.error(f"")
+        logger.error(f"🔥🔥🔥 ========== {func.__name__} НАЧАЛО (синхронный) ========== 🔥🔥🔥")
+        logger.error(f"🔥🔥🔥 Время: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+        if user_id:
+            logger.error(f"🔥🔥🔥 user_id: {user_id}")
+        
+        start = time.time()
+        try:
+            result = func(*args, **kwargs)
+            elapsed = time.time() - start
+            result_len = len(str(result)) if result else 0
+            logger.error(f"✅✅✅ {func.__name__} ЗАВЕРШЕН за {elapsed:.2f} сек")
+            logger.error(f"✅✅✅ Результат: {type(result).__name__}, длина: {result_len}")
+            return result
+        except Exception as e:
+            elapsed = time.time() - start
+            logger.error(f"❌❌❌ {func.__name__} ОШИБКА через {elapsed:.2f} сек: {e}")
+            raise
+    
+    if asyncio.iscoroutinefunction(func):
+        return async_wrapper
+    else:
+        return sync_wrapper
 
 
 # ========== ГЛОБАЛЬНЫЙ КЛИЕНТ ДЛЯ HTTPX ==========
@@ -154,6 +253,7 @@ def make_json_serializable(obj):
 # ПОГОДА (OPENWEATHER)
 # ============================================
 
+@log_call
 async def get_weather(city: str, lang: str = "ru") -> Optional[Dict[str, Any]]:
     """
     Получает погоду для города через OpenWeather API
@@ -256,6 +356,7 @@ async def get_weather(city: str, lang: str = "ru") -> Optional[Dict[str, Any]]:
 # DEEPSEEK API (С ИСПОЛЬЗОВАНИЕМ HTTPX)
 # ============================================
 
+@log_call
 async def call_deepseek(
     prompt: str,
     system_prompt: str = None,
@@ -384,6 +485,7 @@ async def call_deepseek(
 # DEEPSEEK API С КОНТЕКСТОМ
 # ============================================
 
+@log_call
 async def call_deepseek_with_context(
     user_id: int,
     user_message: str,
@@ -470,6 +572,7 @@ async def call_deepseek_with_context(
 # DEEPGRAM API (РАСПОЗНАВАНИЕ РЕЧИ) - С ДИАГНОСТИКОЙ
 # ============================================
 
+@log_call
 async def speech_to_text(audio_file_path: str) -> Optional[str]:
     """
     Распознает речь из аудиофайла через Deepgram API
@@ -663,6 +766,7 @@ async def speech_to_text(audio_file_path: str) -> Optional[str]:
 # YANDEX TTS (СИНТЕЗ РЕЧИ)
 # ============================================
 
+@log_call
 async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
     """
     Преобразует текст в речь через Yandex TTS
@@ -732,6 +836,7 @@ async def text_to_speech(text: str, mode: str = "coach") -> Optional[bytes]:
 # ГЕНЕРАЦИЯ ПСИХОЛОГИЧЕСКОГО ПОРТРЕТА
 # ============================================
 
+@log_call
 async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
     """
     Генерирует психологический портрет на основе данных теста
@@ -983,6 +1088,7 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
 # ГЕНЕРАЦИЯ МЫСЛЕЙ ПСИХОЛОГА
 # ============================================
 
+@log_call
 async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[str]:
     """
     Генерирует мысли психолога на основе конфайнтмент-модели
@@ -1132,6 +1238,7 @@ async def generate_psychologist_thought(user_id: int, data: dict) -> Optional[st
 # ГЕНЕРАЦИЯ МАРШРУТА
 # ============================================
 
+@log_call
 async def generate_route_ai(user_id: int, data: dict, goal: dict) -> Optional[Dict]:
     """
     Генерирует пошаговый маршрут к цели
@@ -1259,6 +1366,7 @@ async def generate_route_ai(user_id: int, data: dict, goal: dict) -> Optional[Di
 # ГЕНЕРАЦИЯ ОТВЕТА НА ВОПРОС
 # ============================================
 
+@log_call
 async def generate_response_with_full_context(
     user_id: int,
     user_message: str,
@@ -1381,6 +1489,7 @@ async def generate_response_with_full_context(
     return result
 
 
+@log_call
 async def generate_suggestions(question: str, answer: str, profile_code: str, mode: str) -> list:
     """
     Генерирует предложения для продолжения диалога
