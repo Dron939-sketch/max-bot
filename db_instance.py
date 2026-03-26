@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Централизованный доступ к экземпляру базы данных
-ВЕРСИЯ 3.7 - ИСПРАВЛЕНА ПРОБЛЕМА С ЦИКЛАМИ СОБЫТИЙ
+ВЕРСИЯ 3.8 - ИСПРАВЛЕНА ПРОБЛЕМА С КОНКУРЕНТНЫМ ДОСТУПОМ И ПУЛОМ СОЕДИНЕНИЙ
 """
 
 import os
@@ -123,7 +123,7 @@ class DBLoopManager:
         """Создает блокировку в цикле БД"""
         return asyncio.Lock()
     
-    def run_coro(self, coro_func: Callable[..., Awaitable], *args, timeout: int = 60, **kwargs):
+    def run_coro(self, coro_func: Callable[..., Awaitable], *args, timeout: int = 45, **kwargs):
         """
         Запускает корутину в цикле БД и возвращает результат.
         """
@@ -148,7 +148,6 @@ class DBLoopManager:
                 logger.debug("✅ Блокировка создана в цикле БД")
             except Exception as e:
                 logger.error(f"❌ Ошибка создания блокировки: {e}")
-                # Создаем блокировку прямо в этом потоке (запасной вариант)
                 self._execution_lock = asyncio.Lock()
                 logger.warning("⚠️ Используется блокировка из основного потока")
         
@@ -256,7 +255,7 @@ async def close_db():
         logger.error(f"❌ Ошибка при закрытии подключения: {e}")
 
 # ============================================
-# ПРОВЕРКА СОЕДИНЕНИЯ (УПРОЩЕННАЯ)
+# ПРОВЕРКА СОЕДИНЕНИЯ С ПОВТОРНЫМИ ПОПЫТКАМИ
 # ============================================
 
 _ensure_db_lock = None
@@ -270,45 +269,43 @@ async def _get_ensure_lock():
 
 async def ensure_db_connection(max_retries: int = 2, delay: float = 0.5):
     """
-    Упрощенная проверка соединения с БД с блокировкой
+    Проверяет соединение с БД с автоматическим восстановлением.
+    Упрощенная версия с минимальными блокировками.
     """
     lock = await _get_ensure_lock()
     
     async with lock:
         for attempt in range(max_retries):
             try:
+                # Если пула нет - подключаемся
                 if db.pool is None:
-                    logger.info(f"🔄 Подключаемся к БД...")
+                    logger.info("🔄 Подключаемся к БД...")
                     await db.connect()
                     logger.info("✅ Подключение к БД установлено")
                     return True
                 
+                # Быстрая проверка соединения с таймаутом
                 try:
-                    async with asyncio.timeout(3.0):
+                    async with asyncio.timeout(2.0):
                         async with db.get_connection() as conn:
                             await conn.execute("SELECT 1")
-                    logger.debug("✅ Соединение с БД работает")
                     return True
                 except asyncio.TimeoutError:
                     logger.warning("⚠️ Таймаут проверки соединения")
-                    try:
-                        await db.disconnect()
-                    except:
-                        pass
-                    await db.connect()
-                    return True
                 except Exception as conn_error:
                     logger.warning(f"⚠️ Ошибка соединения: {conn_error}")
-                    try:
-                        await db.disconnect()
-                    except:
-                        pass
-                    await db.connect()
-                    return True
-                    
+                
+                # Если дошли сюда - соединение потеряно, переподключаемся
+                try:
+                    await db.disconnect()
+                except:
+                    pass
+                await db.connect()
+                logger.info("✅ Переподключение к БД выполнено")
+                return True
+                
             except Exception as e:
                 logger.warning(f"⚠️ Ошибка (попытка {attempt + 1}/{max_retries}): {e}")
-                
                 if attempt < max_retries - 1:
                     await asyncio.sleep(delay)
                 else:
@@ -321,14 +318,14 @@ async def ensure_db_connection(max_retries: int = 2, delay: float = 0.5):
 # ВЫПОЛНЕНИЕ С ПОВТОРАМИ
 # ============================================
 
-async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
+async def execute_with_retry(coro_func, *args, max_retries=2, **kwargs):
     """Выполняет функцию с повторными попытками"""
     last_error = None
     
     for attempt in range(max_retries):
         try:
             result = db_loop_manager.run_coro(
-                coro_func, *args, timeout=30, **kwargs
+                coro_func, *args, timeout=25, **kwargs
             )
             return result
             
@@ -340,7 +337,7 @@ async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
             logger.warning(f"⚠️ Ошибка (попытка {attempt+1}/{max_retries}): {e}")
         
         if attempt < max_retries - 1:
-            await asyncio.sleep(1 * (attempt + 1))
+            await asyncio.sleep(0.5)
     
     logger.error(f"❌ Все попытки исчерпаны: {last_error}")
     return None
@@ -404,7 +401,7 @@ def save_telegram_user(
             first_name,
             last_name,
             language_code,
-            timeout=30
+            timeout=25
         )
         return result if result is not None else False
     except Exception as e:
@@ -444,7 +441,7 @@ def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
             user_id,
             event_type,
             event_data,
-            timeout=10
+            timeout=8
         )
         return result if result is not None else False
     except Exception as e:
@@ -478,7 +475,7 @@ def save_user_data(user_id: int, data: Dict[str, Any]) -> bool:
             save_user_data_async,
             user_id,
             data,
-            timeout=30
+            timeout=25
         )
         return result if result is not None else False
     except Exception as e:
@@ -506,7 +503,7 @@ def get_user_data(user_id: int) -> Optional[Dict[str, Any]]:
         result = db_loop_manager.run_coro(
             get_user_data_async,
             user_id,
-            timeout=10
+            timeout=8
         )
         return result
     except Exception as e:
@@ -536,7 +533,7 @@ def save_user_context(user_id: int, context: Dict[str, Any]) -> bool:
             save_user_context_async,
             user_id,
             context,
-            timeout=30
+            timeout=25
         )
         return result if result is not None else False
     except Exception as e:
@@ -564,7 +561,7 @@ def get_user_context(user_id: int) -> Optional[Dict[str, Any]]:
         result = db_loop_manager.run_coro(
             get_user_context_async,
             user_id,
-            timeout=10
+            timeout=8
         )
         return result
     except Exception as e:
@@ -599,7 +596,7 @@ def save_route_data(user_id: int, route_data: Dict[str, Any]) -> bool:
             save_route_data_async,
             user_id,
             route_data,
-            timeout=30
+            timeout=25
         )
         return result if result is not None else False
     except Exception as e:
@@ -659,8 +656,6 @@ async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict
         
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
-        import traceback
-        traceback.print_exc()
         return False
 
 
@@ -673,7 +668,7 @@ def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_
             user_data_dict,
             user_contexts_dict,
             user_routes_dict,
-            timeout=30
+            timeout=25
         )
         return result if result is not None else False
     except Exception as e:
@@ -792,7 +787,7 @@ async def save_psychologist_thought_async(
             except Exception as e:
                 logger.warning(f"⚠️ Не удалось сохранить мысль в user_data: {e}")
             
-            logger.info(f"💾 Мысль психолога сохранена: user={user_id}, id={thought_id}, type={thought_type}")
+            logger.info(f"💾 Мысль психолога сохранена: user={user_id}, id={thought_id}")
             return thought_id
             
     except Exception as e:
@@ -818,7 +813,7 @@ def save_psychologist_thought(
             thought_type,
             thought_summary,
             metadata,
-            timeout=30
+            timeout=25
         )
         return result if result is not None else None
     except Exception as e:
@@ -868,7 +863,7 @@ def get_psychologist_thought(
             user_id,
             thought_type,
             only_active,
-            timeout=10
+            timeout=8
         )
         return result
     except Exception as e:
@@ -935,7 +930,7 @@ def get_psychologist_thought_history(
             user_id,
             thought_type,
             limit,
-            timeout=10
+            timeout=8
         )
         return result if result is not None else []
     except Exception as e:
@@ -1344,8 +1339,6 @@ async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
         
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения результатов теста для {user_id}: {e}")
-        import traceback
-        traceback.print_exc()
         return None
 
 
@@ -1357,7 +1350,7 @@ def save_test_result_to_db(user_id, test_type, user_data_dict=None):
             user_id,
             test_type,
             user_data_dict,
-            timeout=30
+            timeout=25
         )
         return result if result is not None else None
     except Exception as e:
@@ -1472,8 +1465,6 @@ async def save_test_result_full_async(
         
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения результатов теста для {user_id}: {e}")
-        import traceback
-        traceback.print_exc()
         return None
 
 
@@ -1501,7 +1492,7 @@ def save_test_result_to_db_full(
             vectors,
             deep_patterns,
             confinement_model,
-            timeout=30
+            timeout=25
         )
         return result if result is not None else None
     except Exception as e:
@@ -1543,4 +1534,4 @@ __all__ = [
     'get_psychologist_thoughts_stats',
 ]
 
-logger.info("✅ db_instance инициализирован (версия 3.7)")
+logger.info("✅ db_instance инициализирован (версия 3.8)")
