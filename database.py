@@ -4,7 +4,7 @@
 Модуль для работы с PostgreSQL базой данных бота "Фреди"
 Все таблицы имеют префикс fredi_ для избежания конфликтов
 
-Версия 4.0 - ИСПРАВЛЕНА ОБРАБОТКА ASYNCIO, ТРАНЗАКЦИИ И ПУЛ СОЕДИНЕНИЙ
+Версия 4.1 - ИСПРАВЛЕНА ПРОБЛЕМА С ПУЛОМ И КОНКУРЕНТНОСТЬЮ
 """
 
 import asyncio
@@ -31,12 +31,12 @@ class BotDatabase:
         """
         self.dsn = dsn
         self.pool: Optional[asyncpg.Pool] = None
-        self._connection_lock = asyncio.Lock()  # ✅ Создаём сразу, избегаем race condition
-        self._background_tasks: set = set()  # ✅ Для отслеживания фоновых задач
+        self._background_tasks: set = set()  # Для отслеживания фоновых задач
         self._initialized = False
         self._tables_checked = False
+        self._reconnecting = False  # Флаг переподключения
     
-    async def connect(self, min_size: int = 5, max_size: int = 20):
+    async def connect(self, min_size: int = 2, max_size: int = 10):
         """
         Создание пула соединений с БД
         
@@ -45,29 +45,29 @@ class BotDatabase:
             max_size: Максимальное количество соединений
         """
         try:
-            if self.pool:
+            if self.pool and not self.pool._closed:
                 logger.info("✅ Пул соединений уже существует")
                 return
             
             logger.info("🔄 Создаём пул соединений к PostgreSQL...")
             
-            # ✅ Оптимальные настройки пула (убрано дублирование параметров)
+            # Оптимальные настройки пула
             self.pool = await asyncpg.create_pool(
                 self.dsn,
                 min_size=min_size,
                 max_size=max_size,
-                command_timeout=30,  # Таймаут команд
-                max_inactive_connection_lifetime=600,  # 10 минут - время жизни неактивного соединения
-                timeout=30,  # Таймаут получения соединения из пула
-                max_queries=50000  # Максимум запросов на одно соединение
+                command_timeout=30,
+                max_inactive_connection_lifetime=300,  # 5 минут
+                timeout=30,
+                max_queries=50000
             )
             
-            # ✅ Проверяем соединение (pre-ping)
+            # Проверяем соединение
             async with self.pool.acquire() as conn:
                 await conn.execute("SELECT 1")
                 logger.info("✅ Проверка соединения успешна")
             
-            # ✅ Создаём таблицы
+            # Создаём таблицы
             await self.create_tables()
             
             self._initialized = True
@@ -75,6 +75,7 @@ class BotDatabase:
             
         except Exception as e:
             logger.error(f"❌ Ошибка подключения к PostgreSQL: {e}")
+            self.pool = None
             raise
     
     async def disconnect(self):
@@ -83,12 +84,12 @@ class BotDatabase:
         """
         logger.info("🔄 Начинаем graceful shutdown...")
         
-        # ✅ Отменяем все фоновые задачи
+        # Отменяем все фоновые задачи
         for task in self._background_tasks:
             if not task.done():
                 task.cancel()
         
-        # ✅ Ждём завершения отмены с таймаутом
+        # Ждём завершения отмены
         if self._background_tasks:
             try:
                 await asyncio.gather(*self._background_tasks, return_exceptions=True)
@@ -96,8 +97,8 @@ class BotDatabase:
                 pass
             self._background_tasks.clear()
         
-        # ✅ Закрываем пул
-        if self.pool:
+        # Закрываем пул
+        if self.pool and not self.pool._closed:
             await self.pool.close()
             self.pool = None
         
@@ -107,122 +108,99 @@ class BotDatabase:
     def _add_background_task(self, task: asyncio.Task):
         """
         Добавляет фоновую задачу для отслеживания
-        
-        Args:
-            task: Задача asyncio
         """
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
     
-   @asynccontextmanager
-async def get_connection(self):
-    if not self.pool:
-        error_msg = "Пул соединений не инициализирован. Вызовите connect()"
-        logger.error(f"❌ {error_msg}")
-        raise RuntimeError(error_msg)
-    
-    # ✅ УБИРАЕМ self._connection_lock - он убивает конкурентность!
-    # async with self._connection_lock:  # ← УДАЛИТЬ ЭТУ СТРОКУ
-    
-    try:
-        async with self.pool.acquire() as conn:
-            # Проверяем живо ли соединение
-            try:
-                await conn.execute("SELECT 1")
-            except (asyncpg.exceptions.ConnectionDoesNotExistError, 
-                    asyncpg.exceptions.ConnectionClosedError) as e:
-                logger.warning(f"⚠️ Соединение потеряно: {e}, пробуем переподключиться")
-                # Пересоздаем пул
-                await self.pool.close()
-                await self.connect()
-                async with self.pool.acquire() as new_conn:
-                    yield new_conn
+    @asynccontextmanager
+    async def get_connection(self):
+        """
+        Контекстный менеджер для получения соединения из пула
+        с автоматической проверкой живости соединения
+        """
+        if not self.pool or self.pool._closed:
+            error_msg = "Пул соединений не инициализирован или закрыт"
+            logger.error(f"❌ {error_msg}")
+            
+            # Пытаемся переподключиться
+            if not self._reconnecting:
+                try:
+                    self._reconnecting = True
+                    await self.connect()
+                    self._reconnecting = False
+                except Exception as e:
+                    self._reconnecting = False
+                    raise RuntimeError(f"{error_msg}. Не удалось переподключиться: {e}")
             else:
-                yield conn
-    except Exception as e:
-        logger.error(f"❌ Ошибка при получении соединения: {e}")
-        raise
+                raise RuntimeError(error_msg)
         
-        async with self._connection_lock:
-            try:
-                async with self.pool.acquire() as conn:
-                    # ✅ Проверяем живо ли соединение
-                    try:
-                        await conn.execute("SELECT 1")
-                    except (asyncpg.exceptions.ConnectionDoesNotExistError, 
-                            asyncpg.exceptions.ConnectionClosedError) as e:
-                        logger.warning(f"⚠️ Соединение потеряно: {e}, пробуем переподключиться")
-                        # Закрываем текущий пул и создаём новый
+        try:
+            async with self.pool.acquire() as conn:
+                # Проверяем живо ли соединение
+                try:
+                    await conn.execute("SELECT 1")
+                except (asyncpg.exceptions.ConnectionDoesNotExistError, 
+                        asyncpg.exceptions.ConnectionClosedError,
+                        asyncpg.exceptions.InterfaceError) as e:
+                    logger.warning(f"⚠️ Соединение потеряно: {e}")
+                    # Закрываем текущий пул и создаём новый
+                    if self.pool and not self.pool._closed:
                         await self.pool.close()
-                        await self.connect()
-                        async with self.pool.acquire() as new_conn:
-                            yield new_conn
-                    else:
-                        yield conn
-            except Exception as e:
-                logger.error(f"❌ Ошибка при получении соединения: {e}")
-                raise
+                    self.pool = None
+                    await self.connect()
+                    async with self.pool.acquire() as new_conn:
+                        yield new_conn
+                else:
+                    yield conn
+        except Exception as e:
+            logger.error(f"❌ Ошибка при получении соединения: {e}")
+            raise
     
     # ====================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ СЕРИАЛИЗАЦИИ ======================
     
     def _make_json_serializable(self, obj: Any) -> Any:
-        """
-        Рекурсивно преобразует объект в JSON-сериализуемый формат
-        """
+        """Рекурсивно преобразует объект в JSON-сериализуемый формат"""
         if obj is None:
             return None
         
-        # Если это базовый тип, который уже сериализуется
         if isinstance(obj, (str, int, float, bool)):
             return obj
         
-        # Если это datetime
         if isinstance(obj, datetime):
             return obj.isoformat()
         
-        # Если это список или кортеж
         if isinstance(obj, (list, tuple)):
             return [self._make_json_serializable(item) for item in obj]
         
-        # Если это словарь
         if isinstance(obj, dict):
             return {key: self._make_json_serializable(value) for key, value in obj.items()}
         
-        # Если это объект с __dict__ (пользовательский класс)
         if hasattr(obj, '__dict__'):
             result = {}
             for key, value in obj.__dict__.items():
-                # Пропускаем приватные атрибуты
                 if not key.startswith('_'):
                     result[key] = self._make_json_serializable(value)
             return result
         
-        # Если есть метод to_dict
         if hasattr(obj, 'to_dict'):
             return self._make_json_serializable(obj.to_dict())
         
-        # Если ничего не подошло, преобразуем в строку
         return str(obj)
     
     def _safe_json_dumps(self, data: Any) -> Optional[str]:
-        """
-        Безопасно сериализует данные в JSON, обрабатывая любые типы
-        """
+        """Безопасно сериализует данные в JSON"""
         if data is None:
             return None
         
         try:
-            # Пробуем прямую сериализацию
             return json.dumps(data, default=str, ensure_ascii=False)
         except Exception as e:
-            logger.warning(f"⚠️ Ошибка прямой сериализации JSON: {e}, пробуем рекурсивное преобразование")
+            logger.warning(f"⚠️ Ошибка прямой сериализации JSON: {e}")
             try:
-                # Пробуем рекурсивное преобразование
                 serializable = self._make_json_serializable(data)
                 return json.dumps(serializable, ensure_ascii=False)
             except Exception as e2:
                 logger.error(f"❌ Не удалось сериализовать данные: {e2}")
-                # Возвращаем пустой объект вместо None, чтобы не ломать запрос
                 return "{}"
     
     # ====================== СОЗДАНИЕ ТАБЛИЦ ======================
@@ -230,7 +208,7 @@ async def get_connection(self):
     async def create_tables(self):
         """Создает все необходимые таблицы, если их нет"""
         async with self.get_connection() as conn:
-            async with conn.transaction():  # ✅ Явная транзакция
+            async with conn.transaction():
                 
                 # Таблица пользователей Telegram
                 await conn.execute("""
@@ -246,7 +224,7 @@ async def get_connection(self):
                     )
                 """)
                 
-                # Таблица контекста пользователей (UserContext)
+                # Таблица контекста пользователей
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS fredi_user_contexts (
                         user_id BIGINT PRIMARY KEY REFERENCES fredi_users(user_id) ON DELETE CASCADE,
@@ -280,7 +258,7 @@ async def get_connection(self):
                     )
                 """)
                 
-                # Таблица данных пользователей (user_data)
+                # Таблица данных пользователей
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS fredi_user_data (
                         user_id BIGINT PRIMARY KEY REFERENCES fredi_users(user_id) ON DELETE CASCADE,
@@ -290,7 +268,7 @@ async def get_connection(self):
                     )
                 """)
                 
-                # Таблица для хранения сериализованных объектов UserContext (резерв)
+                # Таблица для хранения сериализованных объектов
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS fredi_context_objects (
                         user_id BIGINT PRIMARY KEY REFERENCES fredi_users(user_id) ON DELETE CASCADE,
@@ -438,7 +416,20 @@ async def get_connection(self):
                     )
                 """)
                 
-                # ИНДЕКСЫ ДЛЯ БЫСТРОГО ПОИСКА
+                # Таблица целей пользователя
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS fredi_user_goals (
+                        id BIGSERIAL PRIMARY KEY,
+                        user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
+                        goal_text TEXT NOT NULL,
+                        status TEXT DEFAULT 'active',
+                        completed_at TIMESTAMP WITH TIME ZONE,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    )
+                """)
+                
+                # ИНДЕКСЫ
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_reminders_remind_at ON fredi_reminders(remind_at) WHERE is_sent = FALSE")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_events_user_id ON fredi_events(user_id)")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON fredi_events(event_type)")
@@ -449,24 +440,14 @@ async def get_connection(self):
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_question_cache_hash ON fredi_question_analysis_cache(user_id, question_hash)")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_question_cache_expires ON fredi_question_analysis_cache(expires_at)")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_hypno_anchors_user ON fredi_hypno_anchors(user_id)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_goals_user_id ON fredi_user_goals(user_id)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_goals_status ON fredi_user_goals(status)")
                 
                 # Индексы для таблицы мыслей психолога
-                await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_psych_thoughts_user_id 
-                    ON fredi_psychologist_thoughts(user_id)
-                """)
-                await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_psych_thoughts_test_result 
-                    ON fredi_psychologist_thoughts(test_result_id)
-                """)
-                await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_psych_thoughts_type 
-                    ON fredi_psychologist_thoughts(thought_type)
-                """)
-                await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_psych_thoughts_created 
-                    ON fredi_psychologist_thoughts(created_at)
-                """)
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_user_id ON fredi_psychologist_thoughts(user_id)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_test_result ON fredi_psychologist_thoughts(test_result_id)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_type ON fredi_psychologist_thoughts(thought_type)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_created ON fredi_psychologist_thoughts(created_at)")
                 await conn.execute("""
                     CREATE INDEX IF NOT EXISTS idx_psych_thoughts_text_gin 
                     ON fredi_psychologist_thoughts 
@@ -477,10 +458,7 @@ async def get_connection(self):
                 logger.info("✅ Все таблицы созданы или уже существуют")
     
     async def create_psychologist_thoughts_table(self):
-        """
-        Создаёт таблицу для мыслей психолога (отдельный вызов)
-        Используется для гарантии существования таблицы перед сохранением
-        """
+        """Создаёт таблицу для мыслей психолога (отдельный вызов)"""
         async with self.get_connection() as conn:
             async with conn.transaction():
                 await conn.execute("""
@@ -498,23 +476,10 @@ async def get_connection(self):
                     )
                 """)
                 
-                # Индексы
-                await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_psych_thoughts_user_id 
-                    ON fredi_psychologist_thoughts(user_id)
-                """)
-                await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_psych_thoughts_test_result 
-                    ON fredi_psychologist_thoughts(test_result_id)
-                """)
-                await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_psych_thoughts_type 
-                    ON fredi_psychologist_thoughts(thought_type)
-                """)
-                await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_psych_thoughts_created 
-                    ON fredi_psychologist_thoughts(created_at)
-                """)
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_user_id ON fredi_psychologist_thoughts(user_id)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_test_result ON fredi_psychologist_thoughts(test_result_id)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_type ON fredi_psychologist_thoughts(thought_type)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_created ON fredi_psychologist_thoughts(created_at)")
                 await conn.execute("""
                     CREATE INDEX IF NOT EXISTS idx_psych_thoughts_text_gin 
                     ON fredi_psychologist_thoughts 
@@ -533,12 +498,7 @@ async def get_connection(self):
         last_name: Optional[str] = None,
         language_code: Optional[str] = None
     ) -> bool:
-        """
-        Сохранение или обновление информации о пользователе Telegram
-        
-        Returns:
-            True если пользователь создан, False если обновлен
-        """
+        """Сохранение или обновление информации о пользователе Telegram"""
         async with self.get_connection() as conn:
             async with conn.transaction():
                 existing = await conn.fetchval(
@@ -588,13 +548,7 @@ async def get_connection(self):
     # ====================== КОНТЕКСТ ПОЛЬЗОВАТЕЛЯ ======================
     
     async def save_user_context(self, user_id: int, context_obj) -> None:
-        """
-        Сохраняет объект UserContext в БД
-        
-        Args:
-            user_id: ID пользователя
-            context_obj: Объект UserContext
-        """
+        """Сохраняет объект UserContext в БД"""
         await self.save_telegram_user(user_id)
         
         if isinstance(context_obj, dict):
@@ -729,7 +683,7 @@ async def get_connection(self):
     # ====================== СЕРИАЛИЗОВАННЫЕ ОБЪЕКТЫ ======================
     
     async def save_pickled_context(self, user_id: int, context_obj) -> None:
-        """Сохраняет сериализованный объект UserContext (как резерв)"""
+        """Сохраняет сериализованный объект UserContext"""
         async with self.get_connection() as conn:
             async with conn.transaction():
                 pickled = pickle.dumps(context_obj)
@@ -1067,7 +1021,7 @@ async def get_connection(self):
                 return reminder_id
     
     async def get_pending_reminders(self, limit: int = 100) -> List[Dict]:
-        """Получает список неотправленных напоминаний, которые уже пора отправить"""
+        """Получает список неотправленных напоминаний"""
         async with self.get_connection() as conn:
             async with conn.transaction():
                 rows = await conn.fetch("""
@@ -1152,7 +1106,7 @@ async def get_connection(self):
                 return cache_id
     
     async def get_cached_weekend_ideas(self, user_id: int) -> Optional[str]:
-        """Получает кэшированные идеи на выходные (если не истекли)"""
+        """Получает кэшированные идеи на выходные"""
         async with self.get_connection() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow("""
@@ -1191,7 +1145,7 @@ async def get_connection(self):
                 return cache_id
     
     async def get_cached_question_analysis(self, user_id: int, question: str) -> Optional[Dict]:
-        """Получает кэшированный анализ вопроса (если не истек)"""
+        """Получает кэшированный анализ вопроса"""
         question_hash = hash(question) % 1000000
         
         async with self.get_connection() as conn:
@@ -1219,12 +1173,7 @@ async def get_connection(self):
         thought_summary: Optional[str] = None,
         metadata: Optional[Dict] = None
     ) -> Optional[int]:
-        """
-        Сохраняет мысль психолога в отдельную таблицу
-        
-        Returns:
-            ID сохранённой мысли или None при ошибке
-        """
+        """Сохраняет мысль психолога в отдельную таблицу"""
         try:
             if not self._tables_checked:
                 await self.create_psychologist_thoughts_table()
@@ -1468,7 +1417,35 @@ async def get_connection(self):
                 
                 logger.info(f"🧹 Очистка старых данных выполнена")
     
-    # ====================== МИГРАЦИЯ СУЩЕСТВУЮЩИХ ПОЛЬЗОВАТЕЛЕЙ ======================
+    # ====================== ЦЕЛИ ПОЛЬЗОВАТЕЛЯ ======================
+    
+    async def save_user_goal(self, user_id: int, goal_text: str) -> Optional[int]:
+        """Сохраняет цель пользователя"""
+        async with self.get_connection() as conn:
+            async with conn.transaction():
+                goal_id = await conn.fetchval("""
+                    INSERT INTO fredi_user_goals (user_id, goal_text)
+                    VALUES ($1, $2)
+                    RETURNING id
+                """, user_id, goal_text)
+                
+                return goal_id
+    
+    async def get_user_goals(self, user_id: int, limit: int = 10) -> List[Dict]:
+        """Получает цели пользователя"""
+        async with self.get_connection() as conn:
+            async with conn.transaction():
+                rows = await conn.fetch("""
+                    SELECT id, goal_text, status, completed_at, created_at 
+                    FROM fredi_user_goals 
+                    WHERE user_id = $1 
+                    ORDER BY created_at DESC 
+                    LIMIT $2
+                """, user_id, limit)
+                
+                return [dict(row) for row in rows]
+    
+    # ====================== МИГРАЦИЯ ======================
     
     async def migrate_existing_users(
         self,
