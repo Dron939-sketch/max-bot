@@ -26,11 +26,8 @@ logger = logging.getLogger(__name__)
 # URL базы данных
 # ============================================
 DATABASE_URL = os.environ.get(
-    "EXTERNAL_DATABASE_URL",
-    os.environ.get(
-        "DATABASE_URL",
-        "postgresql://variatica:Ben9BvM0OnppX1EVSabWQQSwTCrqkahh@dpg-d639vucr85hc73b2ge00-a.oregon-postgres.render.com/variatica"
-    )
+    "DATABASE_URL",
+    "postgresql://fredi_db_flz2_user:PP1FP91G1P6mn1uS8iBLGlk38bKqzkGy@dpg-d739b31r0fns739a7oj0-a/fredi_db_flz2"
 )
 
 # Маскируем пароль в логах
