@@ -23,90 +23,9 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 # ============================================
-# ⚠️ ВРЕМЕННОЕ ОТКЛЮЧЕНИЕ БАЗЫ ДАННЫХ
+# ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ
 # ============================================
-# Создаем заглушку для БД прямо здесь, до любых импортов
-import importlib
-
-# Создаем класс-заглушку
-class DummyDB:
-    def __getattr__(self, name):
-        def dummy(*args, **kwargs):
-            return None if name != 'log_event' else True
-        return dummy
-
-# Создаем экземпляры
-db = DummyDB()
-db_loop_manager = DummyDB()
-sync_db = DummyDB()
-
-# Асинхронные функции-заглушки
-async def init_db(): 
-    print("⚠️ БД ВРЕМЕННО ОТКЛЮЧЕНА — работаем в памяти")
-    return True
-
-async def close_db(): 
-    pass
-
-async def ensure_db_connection(): 
-    return True
-
-async def execute_with_retry(*args, **kwargs): 
-    return None
-
-def load_user_from_db(*args, **kwargs): 
-    return None
-
-def save_telegram_user(*args, **kwargs): 
-    return True
-
-def save_user(*args, **kwargs): 
-    return True
-
-def save_user_to_db(*args, **kwargs): 
-    return True
-
-def log_event(*args, **kwargs): 
-    return True
-
-def save_psychologist_thought(*args, **kwargs): 
-    return 1
-
-def get_psychologist_thought(*args, **kwargs): 
-    return None
-
-def get_user_goals(*args, **kwargs): 
-    return []
-
-def save_goal(*args, **kwargs): 
-    return 1
-
-# Подменяем модули на заглушки
-sys.modules['db_instance'] = type('module', (), {
-    'db': db,
-    'db_loop_manager': db_loop_manager,
-    'init_db': init_db,
-    'close_db': close_db,
-    'ensure_db_connection': ensure_db_connection,
-    'execute_with_retry': execute_with_retry,
-    'load_user_from_db': load_user_from_db,
-    'save_telegram_user': save_telegram_user,
-    'save_user': save_user,
-    'save_user_to_db': save_user_to_db,
-    'log_event': log_event,
-    'save_psychologist_thought': save_psychologist_thought,
-    'get_psychologist_thought': get_psychologist_thought,
-    'get_user_goals': get_user_goals,
-    'save_goal': save_goal,
-})()
-
-sys.modules['db_sync'] = type('module', (), {
-    'sync_db': sync_db,
-})()
-
-print("⚠️ БАЗА ДАННЫХ ВРЕМЕННО ОТКЛЮЧЕНА — работаем в памяти")
-print("   Все данные будут храниться только в памяти и потеряются при перезапуске")
-# ============================================
+print('✅ Подключаем реальную PostgreSQL БД...')
 
 # ========== ИМПОРТЫ ДЛЯ FASTAPI ==========
 from fastapi import FastAPI, Request, HTTPException
@@ -122,8 +41,14 @@ from intervention_library import InterventionLibrary
 from hypno_module import HypnoOrchestrator, TherapeuticTales, Anchoring
 
 # ========== ИМПОРТЫ ДЛЯ БАЗЫ ДАННЫХ ==========
-# Эти импорты теперь будут браться из заглушки
-from db_instance import db, init_db, close_db, ensure_db_connection, execute_with_retry
+from db_instance import (
+    db, db_loop_manager, init_db, close_db,
+    ensure_db_connection, execute_with_retry,
+    load_user_from_db, save_telegram_user, save_user,
+    save_user_to_db, log_event,
+    save_psychologist_thought, get_psychologist_thought,
+    get_user_goals, save_goal
+)
 from db_sync import sync_db
 # =============================================
 
@@ -273,29 +198,98 @@ morning_manager.set_contexts(user_contexts, user_data)
 # ============================================
 
 async def init_database():
-    """Инициализация базы данных (ВРЕМЕННО ОТКЛЮЧЕНА)"""
-    logger.info("⚠️ БД ВРЕМЕННО ОТКЛЮЧЕНА — работаем в памяти")
-    return True
+    """Инициализация базы данных"""
+    try:
+        result = await init_db()
+        if result:
+            logger.info("✅ PostgreSQL БД подключена")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка подключения к БД: {e}")
+        logger.warning("⚠️ Продолжаем без БД — данные в памяти")
+        return False
 
 async def load_all_users_from_db():
-    """Загрузка пользователей из БД (ВРЕМЕННО ОТКЛЮЧЕНО)"""
-    logger.info("⚠️ Загрузка из БД отключена — работаем в памяти")
-    return
+    """Загрузка активных пользователей из БД при старте"""
+    try:
+        if not db_loop_manager.is_ready():
+            logger.warning("⚠️ БД не готова для загрузки пользователей")
+            return
+        async with db.get_connection() as conn:
+            rows = await conn.fetch("""
+                SELECT u.user_id, u.first_name, u.username,
+                       ud.data as user_data,
+                       uc.communication_mode, uc.name, uc.city,
+                       uc.age, uc.gender
+                FROM fredi_users u
+                LEFT JOIN fredi_user_data ud ON u.user_id = ud.user_id
+                LEFT JOIN fredi_user_contexts uc ON u.user_id = uc.user_id
+                WHERE u.last_activity > NOW() - INTERVAL '30 days'
+                ORDER BY u.last_activity DESC
+                LIMIT 100
+            """)
+            loaded = 0
+            for row in rows:
+                uid = row['user_id']
+                if row['first_name']:
+                    user_names[uid] = row['first_name']
+                if row['user_data']:
+                    data = row['user_data'] if isinstance(row['user_data'], dict) else json.loads(row['user_data'])
+                    user_data[uid] = data
+                if uid not in user_contexts:
+                    ctx = UserContext(uid)
+                    if row['name']:              ctx.name = row['name']
+                    if row['city']:              ctx.city = row['city']
+                    if row['age']:               ctx.age = row['age']
+                    if row['gender']:            ctx.gender = row['gender']
+                    if row['communication_mode']:
+                        ctx.communication_mode = row['communication_mode']
+                    user_contexts[uid] = ctx
+                loaded += 1
+            logger.info(f"✅ Загружено {loaded} пользователей из БД")
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки пользователей: {e}")
 
 async def periodic_save_to_db():
-    """Периодическое сохранение (ВРЕМЕННО ОТКЛЮЧЕНО)"""
-    await asyncio.sleep(3600)  # Ждем час, потом просто выходим
-    return
+    """Периодическое сохранение всех пользователей в БД каждые 5 минут"""
+    while True:
+        await asyncio.sleep(300)
+        try:
+            if not db_loop_manager.is_ready():
+                continue
+            saved = 0
+            for uid in list(user_data.keys()):
+                try:
+                    save_user_to_db(uid)
+                    saved += 1
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка сохранения {uid}: {e}")
+            if saved > 0:
+                logger.info(f"💾 Периодически сохранено {saved} пользователей")
+        except Exception as e:
+            logger.error(f"❌ Ошибка periodic_save: {e}")
 
 async def periodic_cleanup_db():
-    """Очистка старых данных (ВРЕМЕННО ОТКЛЮЧЕНО)"""
-    await asyncio.sleep(86400)  # Ждем сутки, потом просто выходим
-    return
+    """Очистка старых данных раз в сутки"""
+    while True:
+        await asyncio.sleep(86400)
+        try:
+            if db_loop_manager.is_ready():
+                await db.cleanup_old_data(days=30)
+                logger.info("🧹 Очистка старых данных выполнена")
+        except Exception as e:
+            logger.error(f"❌ Ошибка cleanup: {e}")
 
 async def keep_db_alive():
-    """Поддержание соединения (ВРЕМЕННО ОТКЛЮЧЕНО)"""
-    await asyncio.sleep(3600)  # Ждем час, потом просто выходим
-    return
+    """Пинг БД каждые 10 минут чтобы не разрывалось соединение"""
+    while True:
+        await asyncio.sleep(600)
+        try:
+            if db_loop_manager.is_ready():
+                async with db.get_connection() as conn:
+                    await conn.execute("SELECT 1")
+        except Exception as e:
+            logger.warning(f"⚠️ keep_db_alive: {e}")
 
 # ============================================
 # FASTAPI ДЛЯ МИНИ-ПРИЛОЖЕНИЯ (ИСПРАВЛЕННЫЙ)
@@ -1643,6 +1637,16 @@ def show_main_menu_after_mode(message: types.Message, context: UserContext):
 
 @bot.message_handler(commands=['start'])
 def cmd_start(message: types.Message):
+    try:
+        save_telegram_user(
+            user_id=message.from_user.id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            last_name=message.from_user.last_name,
+        )
+        log_event(message.from_user.id, 'start', {'username': message.from_user.username})
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось сохранить пользователя: {e}")
     from handlers.start import cmd_start
     cmd_start(message)
 
