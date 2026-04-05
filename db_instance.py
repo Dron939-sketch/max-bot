@@ -1,1548 +1,1822 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Модуль для работы с PostgreSQL базой данных бота "Фреди"
-Все таблицы имеют префикс fredi_ для избежания конфликтов
-
-Версия 4.1 - ИСПРАВЛЕНА ПРОБЛЕМА С ПУЛОМ И КОНКУРЕНТНОСТЬЮ
+Централизованный доступ к экземпляру базы данных
+ВЕРСИЯ 3.10 - ИСПРАВЛЕНА ПРОБЛЕМА С АСИНХРОННЫМ ВЫЗОВОМ В save_psychologist_thought_async
 """
 
-import asyncio
-import asyncpg
-import pickle
+import os
 import json
+import pickle
 import logging
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List, Union
-from contextlib import asynccontextmanager
+import asyncio
+import threading
+import inspect
+import traceback
+from typing import Dict, Any, Optional, Callable, Awaitable, List
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from functools import wraps
+from datetime import datetime
+
+from database import BotDatabase
 
 logger = logging.getLogger(__name__)
 
+# ============================================
+# URL базы данных
+# ============================================
+# Убираем sslmode из URL — asyncpg не понимает его, передаём отдельно
+_raw_url = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://fredi_db_flz2_user:PP1FP91G1P6mn1uS8iBLGlk38bKqzkGy@dpg-d739b31r0fns739a7oj0-a/fredi_db_flz2"
+)
+# Очищаем sslmode из URL
+DATABASE_URL = _raw_url.replace("?sslmode=require", "").replace("?sslmode=disable", "").replace("?ssl=true", "").strip()
 
-class BotDatabase:
-    """Класс для работы с базой данных PostgreSQL"""
+# Маскируем пароль в логах
+url_parts = DATABASE_URL.split('@')
+safe_url = f"postgresql://{url_parts[1]}" if len(url_parts) > 1 else DATABASE_URL[:50] + "..."
+print(f"🔗 DATABASE_URL из env: {'✅ задан' if _raw_url != DATABASE_URL or 'postgresql' in DATABASE_URL else '❌ ПУСТОЙ!'}")
+print(f"🔗 Используем URL: {safe_url}")
+logger.info(f"🔗 Используем URL базы данных: {safe_url}")
+
+# ============================================
+# ГЛОБАЛЬНЫЙ МЕНЕДЖЕР ЦИКЛА БД
+# ============================================
+
+class DBLoopManager:
+    """
+    Единый менеджер для работы с циклом событий БД.
+    Все асинхронные операции с БД должны выполняться через этот менеджер.
+    """
     
-    def __init__(self, dsn: str):
-        """
-        Инициализация подключения к БД
-        
-        Args:
-            dsn: Строка подключения к PostgreSQL
-        """
-        self.dsn = dsn
-        self.pool: Optional[asyncpg.Pool] = None
-        self._background_tasks: set = set()  # Для отслеживания фоновых задач
-        self._initialized = False
-        self._tables_checked = False
-        self._reconnecting = False  # Флаг переподключения
+    def __init__(self):
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+        self._tasks = set()
+        self._running = False
+        self._db_instance: Optional[BotDatabase] = None
+        self._execution_lock = None
+        self._shutting_down = False
     
-    async def connect(self, min_size: int = 2, max_size: int = 10):
-        """
-        Создание пула соединений с БД
-        
-        Args:
-            min_size: Минимальное количество соединений
-            max_size: Максимальное количество соединений
-        """
-        try:
-            if self.pool and not self.pool._closed:
-                logger.info("✅ Пул соединений уже существует")
+    def init(self, db_instance: BotDatabase):
+        """Инициализирует цикл событий в отдельном потоке"""
+        with self._lock:
+            if self.loop is not None:
+                logger.warning("⚠️ Цикл БД уже инициализирован")
                 return
             
-            logger.info("🔄 Создаём пул соединений к PostgreSQL...")
+            self._db_instance = db_instance
+            self._shutting_down = False
             
-            # Оптимальные настройки пула
-            self.pool = await asyncpg.create_pool(
-                self.dsn,
-                min_size=min_size,
-                max_size=max_size,
-                command_timeout=30,
-                max_inactive_connection_lifetime=300,  # 5 минут
-                timeout=30,
-                max_queries=50000,
-                ssl='require'
+            # Создаем новый цикл
+            self.loop = asyncio.new_event_loop()
+            
+            # Запускаем поток с циклом
+            self.thread = threading.Thread(
+                target=self._run_loop,
+                daemon=True,
+                name="DB-Loop"
             )
+            self.thread.start()
             
-            # Проверяем соединение
-            async with self.pool.acquire() as conn:
-                await conn.execute("SELECT 1")
-                logger.info("✅ Проверка соединения успешна")
-            
-            # Создаём таблицы
-            await self.create_tables()
-            
-            self._initialized = True
-            logger.info(f"✅ Пул соединений создан (min={min_size}, max={max_size})")
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка подключения к PostgreSQL: {e}")
-            self.pool = None
-            raise
+            # Ждем, пока цикл запустится
+            future = asyncio.run_coroutine_threadsafe(
+                self._init_db_in_loop(),
+                self.loop
+            )
+            try:
+                future.result(timeout=30)
+                logger.info("✅ Глобальный цикл БД инициализирован")
+            except TimeoutError:
+                logger.error("❌ Таймаут инициализации цикла БД")
+                raise
+            except Exception as e:
+                logger.error(f"❌ Ошибка инициализации цикла БД: {e}")
+                raise
     
-    async def disconnect(self):
-        """
-        Корректное закрытие пула соединений с отменой всех фоновых задач
-        """
-        logger.info("🔄 Начинаем graceful shutdown...")
-        
-        # Отменяем все фоновые задачи
-        for task in self._background_tasks:
-            if not task.done():
+    def _run_loop(self):
+        """Запускает цикл событий в потоке"""
+        asyncio.set_event_loop(self.loop)
+        self._running = True
+        try:
+            self.loop.run_forever()
+        finally:
+            self._running = False
+            # Закрываем все незавершенные задачи
+            pending = asyncio.all_tasks(self.loop)
+            for task in pending:
                 task.cancel()
-        
-        # Ждём завершения отмены
-        if self._background_tasks:
-            try:
-                await asyncio.gather(*self._background_tasks, return_exceptions=True)
-            except asyncio.CancelledError:
-                pass
-            self._background_tasks.clear()
-        
-        # Закрываем пул
-        if self.pool and not self.pool._closed:
-            await self.pool.close()
-            self.pool = None
-        
-        self._initialized = False
-        logger.info("🔌 Пул соединений с PostgreSQL закрыт")
-    
-    def _add_background_task(self, task: asyncio.Task):
-        """
-        Добавляет фоновую задачу для отслеживания
-        """
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
-    
-    @asynccontextmanager
-    async def get_connection(self):
-        """
-        Контекстный менеджер для получения соединения из пула
-        с автоматической проверкой живости соединения
-        """
-        if not self.pool or self.pool._closed:
-            error_msg = "Пул соединений не инициализирован или закрыт"
-            logger.error(f"❌ {error_msg}")
-            
-            # Пытаемся переподключиться
-            if not self._reconnecting:
+            if pending:
                 try:
-                    self._reconnecting = True
-                    await self.connect()
-                    self._reconnecting = False
-                except Exception as e:
-                    self._reconnecting = False
-                    raise RuntimeError(f"{error_msg}. Не удалось переподключиться: {e}")
-            else:
-                raise RuntimeError(error_msg)
+                    self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                except Exception:
+                    pass
+            self.loop.close()
+            logger.info("🔒 Цикл БД остановлен")
+    
+    async def _init_db_in_loop(self):
+        """Инициализирует БД внутри правильного цикла"""
+        if self._db_instance:
+            try:
+                await self._db_instance.connect()
+                logger.info("✅ Подключение к БД установлено в цикле")
+            except Exception as e:
+                logger.error(f"❌ Ошибка подключения к БД: {e}")
+                raise
+    
+    async def _create_lock(self):
+        """Создает блокировку в цикле БД"""
+        return asyncio.Lock()
+    
+    def is_ready(self) -> bool:
+        """Проверяет, готов ли менеджер к работе"""
+        return (self.loop is not None and 
+                self.loop.is_running() and 
+                not self._shutting_down and
+                self._db_instance is not None and
+                self._db_instance.pool is not None and
+                not self._db_instance.pool._closed)
+    
+    def run_coro(self, coro_func: Callable[..., Awaitable], *args, timeout: int = 45, **kwargs):
+        """
+        Запускает корутину в цикле БД и возвращает результат.
+        """
+        if not self.is_ready():
+            raise RuntimeError(f"Цикл БД не готов: loop={self.loop is not None}, "
+                             f"running={self.loop.is_running() if self.loop else False}, "
+                             f"shutting_down={self._shutting_down}, "
+                             f"db_pool={self._db_instance.pool is not None if self._db_instance else False}")
+        
+        # Проверяем тип переданного объекта
+        is_coro_func = inspect.iscoroutinefunction(coro_func)
+        is_coro = inspect.iscoroutine(coro_func)
+        
+        if not is_coro_func and not is_coro:
+            raise TypeError(f"{coro_func} is not a coroutine or coroutine function")
+        
+        # Создаем блокировку в цикле, если её нет
+        if self._execution_lock is None:
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    self._create_lock(),
+                    self.loop
+                )
+                self._execution_lock = future.result(timeout=5)
+                logger.debug("✅ Блокировка создана в цикле БД")
+            except Exception as e:
+                logger.error(f"❌ Ошибка создания блокировки: {e}")
+                self._execution_lock = asyncio.Lock()
+                logger.warning("⚠️ Используется блокировка из основного потока")
+        
+        async def _wrapped():
+            try:
+                # Проверяем пул перед выполнением
+                if self._db_instance and (self._db_instance.pool is None or self._db_instance.pool._closed):
+                    logger.warning("⚠️ Пул закрыт, пробуем переподключиться")
+                    await self._db_instance.connect()
+                
+                async with self._execution_lock:
+                    if is_coro:
+                        return await coro_func
+                    else:
+                        return await coro_func(*args, **kwargs)
+            except asyncio.CancelledError:
+                logger.debug("Задача отменена")
+                raise
+            except Exception as e:
+                logger.error(f"❌ Ошибка в _wrapped: {e}")
+                raise
+        
+        future = asyncio.run_coroutine_threadsafe(_wrapped(), self.loop)
         
         try:
-            async with self.pool.acquire() as conn:
-                # Проверяем живо ли соединение
-                try:
-                    await conn.execute("SELECT 1")
-                except (asyncpg.exceptions.ConnectionDoesNotExistError, 
-                        asyncpg.exceptions.ConnectionClosedError,
-                        asyncpg.exceptions.InterfaceError) as e:
-                    logger.warning(f"⚠️ Соединение потеряно: {e}")
-                    # Закрываем текущий пул и создаём новый
-                    if self.pool and not self.pool._closed:
-                        await self.pool.close()
-                    self.pool = None
-                    await self.connect()
-                    async with self.pool.acquire() as new_conn:
-                        yield new_conn
-                else:
-                    yield conn
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            future.cancel()
+            logger.error(f"❌ Таймаут {timeout}с при выполнении")
+            raise
         except Exception as e:
-            logger.error(f"❌ Ошибка при получении соединения: {e}")
+            logger.error(f"❌ Ошибка при выполнении: {e}")
             raise
     
-    # ====================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ СЕРИАЛИЗАЦИИ ======================
-    
-    def _make_json_serializable(self, obj: Any) -> Any:
-        """Рекурсивно преобразует объект в JSON-сериализуемый формат"""
-        if obj is None:
+    def run_task(self, coro_func: Callable[..., Awaitable], *args, **kwargs):
+        """
+        Запускает корутину как фоновую задачу (fire-and-forget)
+        """
+        if not self.is_ready():
+            logger.warning("⚠️ Цикл БД не готов, задача не будет запущена")
             return None
         
-        if isinstance(obj, (str, int, float, bool)):
-            return obj
+        is_coro_func = inspect.iscoroutinefunction(coro_func)
+        is_coro = inspect.iscoroutine(coro_func)
         
-        if isinstance(obj, datetime):
-            return obj.isoformat()
+        if not is_coro_func and not is_coro:
+            raise TypeError(f"{coro_func} is not a coroutine or coroutine function")
         
-        if isinstance(obj, (list, tuple)):
-            return [self._make_json_serializable(item) for item in obj]
-        
-        if isinstance(obj, dict):
-            return {key: self._make_json_serializable(value) for key, value in obj.items()}
-        
-        if hasattr(obj, '__dict__'):
-            result = {}
-            for key, value in obj.__dict__.items():
-                if not key.startswith('_'):
-                    result[key] = self._make_json_serializable(value)
-            return result
-        
-        if hasattr(obj, 'to_dict'):
-            return self._make_json_serializable(obj.to_dict())
-        
-        return str(obj)
-    
-    def _safe_json_dumps(self, data: Any) -> Optional[str]:
-        """Безопасно сериализует данные в JSON"""
-        if data is None:
-            return None
-        
-        try:
-            return json.dumps(data, default=str, ensure_ascii=False)
-        except Exception as e:
-            logger.warning(f"⚠️ Ошибка прямой сериализации JSON: {e}")
+        async def _wrapped():
             try:
-                serializable = self._make_json_serializable(data)
-                return json.dumps(serializable, ensure_ascii=False)
-            except Exception as e2:
-                logger.error(f"❌ Не удалось сериализовать данные: {e2}")
-                return "{}"
-    
-    # ====================== СОЗДАНИЕ ТАБЛИЦ ======================
-    
-    async def create_tables(self):
-        """Создает все необходимые таблицы, если их нет"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
+                if self._db_instance and (self._db_instance.pool is None or self._db_instance.pool._closed):
+                    await self._db_instance.connect()
                 
-                # Таблица пользователей Telegram
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_users (
-                        user_id BIGINT PRIMARY KEY,
-                        username TEXT,
-                        first_name TEXT,
-                        last_name TEXT,
-                        language_code TEXT,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        last_activity TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    )
-                """)
-                
-                # Таблица контекста пользователей
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_user_contexts (
-                        user_id BIGINT PRIMARY KEY REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        name TEXT,
-                        age INTEGER,
-                        gender TEXT,
-                        city TEXT,
-                        birth_date DATE,
-                        timezone TEXT DEFAULT 'Europe/Moscow',
-                        timezone_offset INTEGER DEFAULT 3,
-                        communication_mode TEXT DEFAULT 'coach',
-                        last_context_update TIMESTAMP WITH TIME ZONE,
-                        weather_cache JSONB,
-                        weather_cache_time TIMESTAMP WITH TIME ZONE,
-                        family_status TEXT,
-                        has_children BOOLEAN DEFAULT FALSE,
-                        children_ages TEXT,
-                        work_schedule TEXT,
-                        job_title TEXT,
-                        commute_time INTEGER,
-                        housing_type TEXT,
-                        has_private_space BOOLEAN DEFAULT FALSE,
-                        has_car BOOLEAN DEFAULT FALSE,
-                        support_people TEXT,
-                        resistance_people TEXT,
-                        energy_level INTEGER,
-                        life_context_complete BOOLEAN DEFAULT FALSE,
-                        awaiting_context TEXT,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    )
-                """)
-                
-                # Таблица данных пользователей
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_user_data (
-                        user_id BIGINT PRIMARY KEY REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        data JSONB NOT NULL,
-                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    )
-                """)
-                
-                # Таблица для хранения сериализованных объектов
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_context_objects (
-                        user_id BIGINT PRIMARY KEY REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        context_data BYTEA NOT NULL,
-                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    )
-                """)
-                
-                # Таблица маршрутов пользователей
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_user_routes (
-                        id BIGSERIAL PRIMARY KEY,
-                        user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        route_data JSONB NOT NULL,
-                        current_step INTEGER DEFAULT 1,
-                        progress JSONB DEFAULT '[]',
-                        is_active BOOLEAN DEFAULT TRUE,
-                        completed_at TIMESTAMP WITH TIME ZONE,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    )
-                """)
-                
-                # Таблица результатов тестов
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_test_results (
-                        id BIGSERIAL PRIMARY KEY,
-                        user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        test_type TEXT NOT NULL,
-                        results JSONB NOT NULL,
-                        profile_code TEXT,
-                        perception_type TEXT,
-                        thinking_level INTEGER,
-                        vectors JSONB,
-                        behavioral_levels JSONB,
-                        deep_patterns JSONB,
-                        confinement_model JSONB,
-                        current_destination JSONB,
-                        current_route JSONB,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    )
-                """)
-                
-                # Таблица ответов на тест
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_test_answers (
-                        id BIGSERIAL PRIMARY KEY,
-                        user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        test_result_id BIGINT REFERENCES fredi_test_results(id) ON DELETE CASCADE,
-                        stage INTEGER NOT NULL,
-                        question_index INTEGER NOT NULL,
-                        question_text TEXT,
-                        answer_text TEXT,
-                        answer_value TEXT,
-                        scores JSONB,
-                        measures TEXT,
-                        strategy TEXT,
-                        dilts TEXT,
-                        pattern TEXT,
-                        target TEXT,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    )
-                """)
-                
-                # Таблица гипнотических якорей
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_hypno_anchors (
-                        id BIGSERIAL PRIMARY KEY,
-                        user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        anchor_name TEXT NOT NULL,
-                        anchor_state TEXT NOT NULL,
-                        anchor_phrase TEXT NOT NULL,
-                        emoji TEXT,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        last_used TIMESTAMP WITH TIME ZONE,
-                        use_count INTEGER DEFAULT 0,
-                        UNIQUE(user_id, anchor_name)
-                    )
-                """)
-                
-                # Таблица напоминаний
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_reminders (
-                        id BIGSERIAL PRIMARY KEY,
-                        user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        reminder_type TEXT NOT NULL,
-                        remind_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                        data JSONB,
-                        is_sent BOOLEAN DEFAULT FALSE,
-                        sent_at TIMESTAMP WITH TIME ZONE,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    )
-                """)
-                
-                # Таблица кэша идей на выходные
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_weekend_ideas_cache (
-                        id BIGSERIAL PRIMARY KEY,
-                        user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        ideas_text TEXT NOT NULL,
-                        main_vector TEXT,
-                        main_level INTEGER,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        expires_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() + INTERVAL '1 hour'
-                    )
-                """)
-                
-                # Таблица анализов вопросов
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_question_analysis_cache (
-                        id BIGSERIAL PRIMARY KEY,
-                        user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        question_hash INTEGER NOT NULL,
-                        question_text TEXT,
-                        analysis JSONB NOT NULL,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        expires_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() + INTERVAL '5 minutes'
-                    )
-                """)
-                
-                # Таблица мыслей психолога
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_psychologist_thoughts (
-                        id SERIAL PRIMARY KEY,
-                        user_id BIGINT NOT NULL REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        test_result_id BIGINT REFERENCES fredi_test_results(id) ON DELETE SET NULL,
-                        thought_type VARCHAR(50) NOT NULL DEFAULT 'psychologist_thought',
-                        thought_text TEXT NOT NULL,
-                        thought_summary VARCHAR(500),
-                        metadata JSONB DEFAULT '{}',
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        is_active BOOLEAN DEFAULT TRUE
-                    )
-                """)
-                
-                # Таблица событий для статистики
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_events (
-                        id BIGSERIAL PRIMARY KEY,
-                        user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        event_type TEXT NOT NULL,
-                        event_data JSONB,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    )
-                """)
-                
-                # Таблица целей пользователя
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_user_goals (
-                        id BIGSERIAL PRIMARY KEY,
-                        user_id BIGINT REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        goal_text TEXT NOT NULL,
-                        status TEXT DEFAULT 'active',
-                        completed_at TIMESTAMP WITH TIME ZONE,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    )
-                """)
-                
-                # ИНДЕКСЫ
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_reminders_remind_at ON fredi_reminders(remind_at) WHERE is_sent = FALSE")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_events_user_id ON fredi_events(user_id)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON fredi_events(event_type)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_events_created ON fredi_events(created_at)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_test_results_user_id ON fredi_test_results(user_id)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_test_results_profile ON fredi_test_results(profile_code)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_weekend_cache_expires ON fredi_weekend_ideas_cache(expires_at)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_question_cache_hash ON fredi_question_analysis_cache(user_id, question_hash)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_question_cache_expires ON fredi_question_analysis_cache(expires_at)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_hypno_anchors_user ON fredi_hypno_anchors(user_id)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_goals_user_id ON fredi_user_goals(user_id)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_goals_status ON fredi_user_goals(status)")
-                
-                # Индексы для таблицы мыслей психолога
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_user_id ON fredi_psychologist_thoughts(user_id)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_test_result ON fredi_psychologist_thoughts(test_result_id)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_type ON fredi_psychologist_thoughts(thought_type)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_created ON fredi_psychologist_thoughts(created_at)")
-                await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_psych_thoughts_text_gin 
-                    ON fredi_psychologist_thoughts 
-                    USING GIN(to_tsvector('russian', thought_text))
-                """)
-                
-                self._tables_checked = True
-                logger.info("✅ Все таблицы созданы или уже существуют")
-    
-    async def create_psychologist_thoughts_table(self):
-        """Создаёт таблицу для мыслей психолога (отдельный вызов)"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS fredi_psychologist_thoughts (
-                        id SERIAL PRIMARY KEY,
-                        user_id BIGINT NOT NULL REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        test_result_id BIGINT REFERENCES fredi_test_results(id) ON DELETE SET NULL,
-                        thought_type VARCHAR(50) NOT NULL DEFAULT 'psychologist_thought',
-                        thought_text TEXT NOT NULL,
-                        thought_summary VARCHAR(500),
-                        metadata JSONB DEFAULT '{}',
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        is_active BOOLEAN DEFAULT TRUE
-                    )
-                """)
-                
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_user_id ON fredi_psychologist_thoughts(user_id)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_test_result ON fredi_psychologist_thoughts(test_result_id)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_type ON fredi_psychologist_thoughts(thought_type)")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_psych_thoughts_created ON fredi_psychologist_thoughts(created_at)")
-                await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_psych_thoughts_text_gin 
-                    ON fredi_psychologist_thoughts 
-                    USING GIN(to_tsvector('russian', thought_text))
-                """)
-                
-                logger.info("✅ Таблица fredi_psychologist_thoughts создана")
-    
-    # ====================== ПОЛЬЗОВАТЕЛИ ======================
-    
-    async def save_telegram_user(
-        self,
-        user_id: int,
-        username: Optional[str] = None,
-        first_name: Optional[str] = None,
-        last_name: Optional[str] = None,
-        language_code: Optional[str] = None
-    ) -> bool:
-        """Сохранение или обновление информации о пользователе Telegram"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                existing = await conn.fetchval(
-                    "SELECT user_id FROM fredi_users WHERE user_id = $1",
-                    user_id
-                )
-                
-                if existing:
-                    await conn.execute("""
-                        UPDATE fredi_users SET
-                            username = $2,
-                            first_name = $3,
-                            last_name = $4,
-                            language_code = $5,
-                            updated_at = NOW(),
-                            last_activity = NOW()
-                        WHERE user_id = $1
-                    """, user_id, username, first_name, last_name, language_code)
-                    return False
+                if is_coro:
+                    return await coro_func
                 else:
-                    await conn.execute("""
-                        INSERT INTO fredi_users (
-                            user_id, username, first_name, last_name, 
-                            language_code, created_at, updated_at, last_activity
-                        ) VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), NOW())
-                    """, user_id, username, first_name, last_name, language_code)
-                    return True
-    
-    async def get_telegram_user(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Получение информации о пользователе"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    "SELECT * FROM fredi_users WHERE user_id = $1",
-                    user_id
-                )
-                return dict(row) if row else None
-    
-    async def update_last_activity(self, user_id: int):
-        """Обновляет время последней активности пользователя"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                await conn.execute("""
-                    UPDATE fredi_users SET last_activity = NOW() WHERE user_id = $1
-                """, user_id)
-    
-    # ====================== КОНТЕКСТ ПОЛЬЗОВАТЕЛЯ ======================
-    
-    async def save_user_context(self, user_id: int, context_obj) -> None:
-        """Сохраняет объект UserContext в БД"""
-        await self.save_telegram_user(user_id)
-        
-        if isinstance(context_obj, dict):
-            from types import SimpleNamespace
-            context_obj = SimpleNamespace(**context_obj)
-        
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                await conn.execute("""
-                    INSERT INTO fredi_user_contexts (
-                        user_id, name, age, gender, city, birth_date,
-                        timezone, timezone_offset, communication_mode, last_context_update,
-                        weather_cache, weather_cache_time,
-                        family_status, has_children, children_ages, work_schedule,
-                        job_title, commute_time, housing_type, has_private_space,
-                        has_car, support_people, resistance_people, energy_level,
-                        life_context_complete, awaiting_context, updated_at
-                    ) VALUES (
-                        $1, $2, $3, $4, $5, $6,
-                        $7, $8, $9, $10,
-                        $11, $12,
-                        $13, $14, $15, $16,
-                        $17, $18, $19, $20,
-                        $21, $22, $23, $24,
-                        $25, $26, NOW()
-                    )
-                    ON CONFLICT (user_id) DO UPDATE SET
-                        name = EXCLUDED.name,
-                        age = EXCLUDED.age,
-                        gender = EXCLUDED.gender,
-                        city = EXCLUDED.city,
-                        birth_date = EXCLUDED.birth_date,
-                        timezone = EXCLUDED.timezone,
-                        timezone_offset = EXCLUDED.timezone_offset,
-                        communication_mode = EXCLUDED.communication_mode,
-                        last_context_update = EXCLUDED.last_context_update,
-                        weather_cache = EXCLUDED.weather_cache,
-                        weather_cache_time = EXCLUDED.weather_cache_time,
-                        family_status = EXCLUDED.family_status,
-                        has_children = EXCLUDED.has_children,
-                        children_ages = EXCLUDED.children_ages,
-                        work_schedule = EXCLUDED.work_schedule,
-                        job_title = EXCLUDED.job_title,
-                        commute_time = EXCLUDED.commute_time,
-                        housing_type = EXCLUDED.housing_type,
-                        has_private_space = EXCLUDED.has_private_space,
-                        has_car = EXCLUDED.has_car,
-                        support_people = EXCLUDED.support_people,
-                        resistance_people = EXCLUDED.resistance_people,
-                        energy_level = EXCLUDED.energy_level,
-                        life_context_complete = EXCLUDED.life_context_complete,
-                        awaiting_context = EXCLUDED.awaiting_context,
-                        updated_at = NOW()
-                """,
-                    user_id,
-                    getattr(context_obj, 'name', None),
-                    getattr(context_obj, 'age', None),
-                    getattr(context_obj, 'gender', None),
-                    getattr(context_obj, 'city', None),
-                    getattr(context_obj, 'birth_date', None),
-                    getattr(context_obj, 'timezone', 'Europe/Moscow'),
-                    getattr(context_obj, 'timezone_offset', 3),
-                    getattr(context_obj, 'communication_mode', 'coach'),
-                    getattr(context_obj, 'last_context_update', None),
-                    self._safe_json_dumps(getattr(context_obj, 'weather_cache', {})),
-                    getattr(context_obj, 'weather_cache_time', None),
-                    getattr(context_obj, 'family_status', None),
-                    getattr(context_obj, 'has_children', False),
-                    getattr(context_obj, 'children_ages', None),
-                    getattr(context_obj, 'work_schedule', None),
-                    getattr(context_obj, 'job_title', None),
-                    getattr(context_obj, 'commute_time', None),
-                    getattr(context_obj, 'housing_type', None),
-                    getattr(context_obj, 'has_private_space', False),
-                    getattr(context_obj, 'has_car', False),
-                    getattr(context_obj, 'support_people', None),
-                    getattr(context_obj, 'resistance_people', None),
-                    getattr(context_obj, 'energy_level', None),
-                    getattr(context_obj, 'life_context_complete', False),
-                    getattr(context_obj, 'awaiting_context', None)
-                )
-    
-    async def load_user_context(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Загружает данные для создания объекта UserContext"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    "SELECT * FROM fredi_user_contexts WHERE user_id = $1",
-                    user_id
-                )
-                
-                if not row:
-                    return None
-                
-                data = dict(row)
-                
-                if data.get('weather_cache'):
-                    data['weather_cache'] = json.loads(data['weather_cache'])
-                
-                return data
-    
-    # ====================== ДАННЫЕ ПОЛЬЗОВАТЕЛЕЙ ======================
-    
-    async def save_user_data(self, user_id: int, data: Dict[str, Any]) -> None:
-        """Сохраняет user_data[user_id] в JSONB поле"""
-        await self.save_telegram_user(user_id)
-        
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                await conn.execute("""
-                    INSERT INTO fredi_user_data (user_id, data, updated_at)
-                    VALUES ($1, $2, NOW())
-                    ON CONFLICT (user_id) DO UPDATE SET
-                        data = $2,
-                        updated_at = NOW()
-                """, user_id, self._safe_json_dumps(data))
-    
-    async def load_user_data(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Загружает user_data для пользователя"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    "SELECT data FROM fredi_user_data WHERE user_id = $1",
-                    user_id
-                )
-                
-                if row and row['data']:
-                    return json.loads(row['data'])
-                
-                return {}
-    
-    # ====================== СЕРИАЛИЗОВАННЫЕ ОБЪЕКТЫ ======================
-    
-    async def save_pickled_context(self, user_id: int, context_obj) -> None:
-        """Сохраняет сериализованный объект UserContext"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                pickled = pickle.dumps(context_obj)
-                await conn.execute("""
-                    INSERT INTO fredi_context_objects (user_id, context_data, updated_at)
-                    VALUES ($1, $2, NOW())
-                    ON CONFLICT (user_id) DO UPDATE SET
-                        context_data = $2,
-                        updated_at = NOW()
-                """, user_id, pickled)
-    
-    async def load_pickled_context(self, user_id: int):
-        """Загружает сериализованный объект UserContext"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    "SELECT context_data FROM fredi_context_objects WHERE user_id = $1",
-                    user_id
-                )
-                
-                if row and row['context_data']:
-                    try:
-                        return pickle.loads(row['context_data'])
-                    except Exception as e:
-                        logger.error(f"Ошибка при десериализации контекста пользователя {user_id}: {e}")
-                
-                return None
-    
-    # ====================== МАРШРУТЫ ======================
-    
-    async def save_user_route(
-        self,
-        user_id: int,
-        route_data: Dict[str, Any],
-        current_step: int = 1,
-        progress: List = None
-    ) -> int:
-        """Сохраняет маршрут пользователя"""
-        if progress is None:
-            progress = []
-        
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                await conn.execute("""
-                    UPDATE fredi_user_routes SET is_active = FALSE
-                    WHERE user_id = $1 AND is_active = TRUE
-                """, user_id)
-                
-                route_id = await conn.fetchval("""
-                    INSERT INTO fredi_user_routes (
-                        user_id, route_data, current_step, progress, is_active
-                    ) VALUES ($1, $2, $3, $4, TRUE)
-                    RETURNING id
-                """, user_id, self._safe_json_dumps(route_data), current_step, self._safe_json_dumps(progress))
-                
-                return route_id
-    
-    async def load_user_route(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Загружает активный маршрут пользователя"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow("""
-                    SELECT * FROM fredi_user_routes
-                    WHERE user_id = $1 AND is_active = TRUE
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                """, user_id)
-                
-                if not row:
-                    return None
-                
-                data = dict(row)
-                data['route_data'] = json.loads(data['route_data'])
-                data['progress'] = json.loads(data['progress'])
-                
-                return data
-    
-    async def update_user_route(
-        self,
-        route_id: int,
-        current_step: int,
-        progress: List,
-        completed: bool = False
-    ):
-        """Обновляет прогресс по маршруту"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                await conn.execute("""
-                    UPDATE fredi_user_routes SET
-                        current_step = $2,
-                        progress = $3,
-                        is_active = NOT $4,
-                        completed_at = CASE WHEN $4 THEN NOW() ELSE completed_at END,
-                        updated_at = NOW()
-                    WHERE id = $1
-                """, route_id, current_step, self._safe_json_dumps(progress), completed)
-    
-    # ====================== РЕЗУЛЬТАТЫ ТЕСТОВ ======================
-    
-    async def save_test_result(
-        self,
-        user_id: int,
-        test_type: str,
-        results: Dict[str, Any],
-        profile_code: Optional[str] = None,
-        perception_type: Optional[str] = None,
-        thinking_level: Optional[int] = None,
-        vectors: Optional[Dict[str, float]] = None,
-        behavioral_levels: Optional[Dict[str, List[int]]] = None,
-        deep_patterns: Optional[Dict] = None,
-        confinement_model: Optional[Dict] = None,
-        current_destination: Optional[Dict] = None,
-        current_route: Optional[Dict] = None
-    ) -> int:
-        """Сохраняет результат тестирования"""
-        
-        if vectors is None and 'behavioral_levels' in results:
-            vectors = {}
-            behavioral = results.get('behavioral_levels', {})
-            for vector in ['СБ', 'ТФ', 'УБ', 'ЧВ']:
-                levels = behavioral.get(vector, [])
-                vectors[vector] = sum(levels) / len(levels) if levels else 3.0
-        
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                test_id = await conn.fetchval("""
-                    INSERT INTO fredi_test_results (
-                        user_id, test_type, results, profile_code,
-                        perception_type, thinking_level, vectors, behavioral_levels,
-                        deep_patterns, confinement_model, current_destination, current_route
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                    RETURNING id
-                """,
-                    user_id,
-                    test_type,
-                    self._safe_json_dumps(results),
-                    profile_code,
-                    perception_type,
-                    thinking_level,
-                    self._safe_json_dumps(vectors) if vectors else None,
-                    self._safe_json_dumps(behavioral_levels) if behavioral_levels else None,
-                    self._safe_json_dumps(deep_patterns) if deep_patterns else None,
-                    self._safe_json_dumps(confinement_model) if confinement_model else None,
-                    self._safe_json_dumps(current_destination) if current_destination else None,
-                    self._safe_json_dumps(current_route) if current_route else None
-                )
-                
-                return test_id
-    
-    async def get_user_test_results(
-        self,
-        user_id: int,
-        limit: int = 10,
-        test_type: Optional[str] = None
-    ) -> List[Dict]:
-        """Получает последние результаты тестов пользователя"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                if test_type:
-                    rows = await conn.fetch("""
-                        SELECT * FROM fredi_test_results
-                        WHERE user_id = $1 AND test_type = $2
-                        ORDER BY created_at DESC
-                        LIMIT $3
-                    """, user_id, test_type, limit)
-                else:
-                    rows = await conn.fetch("""
-                        SELECT * FROM fredi_test_results
-                        WHERE user_id = $1
-                        ORDER BY created_at DESC
-                        LIMIT $2
-                    """, user_id, limit)
-                
-                results = []
-                for row in rows:
-                    data = dict(row)
-                    data['results'] = json.loads(data['results'])
-                    if data.get('vectors'):
-                        data['vectors'] = json.loads(data['vectors'])
-                    if data.get('behavioral_levels'):
-                        data['behavioral_levels'] = json.loads(data['behavioral_levels'])
-                    if data.get('deep_patterns'):
-                        data['deep_patterns'] = json.loads(data['deep_patterns'])
-                    if data.get('confinement_model'):
-                        data['confinement_model'] = json.loads(data['confinement_model'])
-                    if data.get('current_destination'):
-                        data['current_destination'] = json.loads(data['current_destination'])
-                    if data.get('current_route'):
-                        data['current_route'] = json.loads(data['current_route'])
-                    results.append(data)
-                
-                return results
-    
-    async def get_latest_profile(self, user_id: int) -> Optional[Dict]:
-        """Получает последний полный профиль пользователя"""
-        results = await self.get_user_test_results(user_id, limit=1, test_type='full_profile')
-        return results[0] if results else None
-    
-    # ====================== ОТВЕТЫ НА ТЕСТ ======================
-    
-    async def save_test_answer(
-        self,
-        user_id: int,
-        test_result_id: Optional[int],
-        stage: int,
-        question_index: int,
-        question_text: str,
-        answer_text: str,
-        answer_value: str,
-        scores: Optional[Dict] = None,
-        measures: Optional[str] = None,
-        strategy: Optional[str] = None,
-        dilts: Optional[str] = None,
-        pattern: Optional[str] = None,
-        target: Optional[str] = None
-    ):
-        """Сохраняет отдельный ответ на вопрос теста"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                await conn.execute("""
-                    INSERT INTO fredi_test_answers (
-                        user_id, test_result_id, stage, question_index,
-                        question_text, answer_text, answer_value,
-                        scores, measures, strategy, dilts, pattern, target
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                """,
-                    user_id,
-                    test_result_id,
-                    stage,
-                    question_index,
-                    question_text,
-                    answer_text,
-                    answer_value,
-                    self._safe_json_dumps(scores) if scores else None,
-                    measures,
-                    strategy,
-                    dilts,
-                    pattern,
-                    target
-                )
-    
-    async def get_test_answers(self, test_result_id: int) -> List[Dict]:
-        """Получает все ответы для конкретного результата теста"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                rows = await conn.fetch("""
-                    SELECT * FROM fredi_test_answers
-                    WHERE test_result_id = $1
-                    ORDER BY stage, question_index
-                """, test_result_id)
-                
-                answers = []
-                for row in rows:
-                    data = dict(row)
-                    if data.get('scores'):
-                        data['scores'] = json.loads(data['scores'])
-                    answers.append(data)
-                
-                return answers
-    
-    # ====================== ГИПНОТИЧЕСКИЕ ЯКОРЯ ======================
-    
-    async def save_hypno_anchor(
-        self,
-        user_id: int,
-        anchor_name: str,
-        anchor_state: str,
-        anchor_phrase: str,
-        emoji: Optional[str] = None
-    ) -> int:
-        """Сохраняет гипнотический якорь"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                anchor_id = await conn.fetchval("""
-                    INSERT INTO fredi_hypno_anchors (user_id, anchor_name, anchor_state, anchor_phrase, emoji)
-                    VALUES ($1, $2, $3, $4, $5)
-                    ON CONFLICT (user_id, anchor_name) DO UPDATE SET
-                        anchor_state = EXCLUDED.anchor_state,
-                        anchor_phrase = EXCLUDED.anchor_phrase,
-                        emoji = EXCLUDED.emoji,
-                        last_used = NOW(),
-                        use_count = fredi_hypno_anchors.use_count + 1
-                    RETURNING id
-                """, user_id, anchor_name, anchor_state, anchor_phrase, emoji)
-                
-                return anchor_id
-    
-    async def get_user_anchors(self, user_id: int) -> List[Dict]:
-        """Получает все якоря пользователя"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                rows = await conn.fetch("""
-                    SELECT * FROM fredi_hypno_anchors
-                    WHERE user_id = $1
-                    ORDER BY use_count DESC, last_used DESC
-                """, user_id)
-                
-                return [dict(row) for row in rows]
-    
-    async def fire_anchor(self, user_id: int, anchor_name: str) -> Optional[str]:
-        """Активирует якорь и обновляет статистику использования"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow("""
-                    UPDATE fredi_hypno_anchors
-                    SET last_used = NOW(), use_count = use_count + 1
-                    WHERE user_id = $1 AND anchor_name = $2
-                    RETURNING anchor_phrase, emoji
-                """, user_id, anchor_name)
-                
-                if row:
-                    emoji = row['emoji'] or ''
-                    return f"{emoji} {row['anchor_phrase']}".strip()
-                
-                return None
-    
-    # ====================== НАПОМИНАНИЯ ======================
-    
-    async def add_reminder(
-        self,
-        user_id: int,
-        reminder_type: str,
-        remind_at: datetime,
-        data: Optional[Dict] = None
-    ) -> int:
-        """Добавляет напоминание"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                reminder_id = await conn.fetchval("""
-                    INSERT INTO fredi_reminders (user_id, reminder_type, remind_at, data)
-                    VALUES ($1, $2, $3, $4)
-                    RETURNING id
-                """, user_id, reminder_type, remind_at, self._safe_json_dumps(data) if data else None)
-                
-                return reminder_id
-    
-    async def get_pending_reminders(self, limit: int = 100) -> List[Dict]:
-        """Получает список неотправленных напоминаний"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                rows = await conn.fetch("""
-                    SELECT * FROM fredi_reminders
-                    WHERE is_sent = FALSE AND remind_at <= NOW()
-                    ORDER BY remind_at
-                    LIMIT $1
-                """, limit)
-                
-                reminders = []
-                for row in rows:
-                    data = dict(row)
-                    if data.get('data'):
-                        data['data'] = json.loads(data['data'])
-                    reminders.append(data)
-                
-                return reminders
-    
-    async def mark_reminder_sent(self, reminder_id: int):
-        """Отмечает напоминание как отправленное"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                await conn.execute("""
-                    UPDATE fredi_reminders
-                    SET is_sent = TRUE, sent_at = NOW()
-                    WHERE id = $1
-                """, reminder_id)
-    
-    async def get_user_reminders(
-        self,
-        user_id: int,
-        include_sent: bool = False
-    ) -> List[Dict]:
-        """Получает все напоминания пользователя"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                if include_sent:
-                    rows = await conn.fetch("""
-                        SELECT * FROM fredi_reminders
-                        WHERE user_id = $1
-                        ORDER BY remind_at DESC
-                    """, user_id)
-                else:
-                    rows = await conn.fetch("""
-                        SELECT * FROM fredi_reminders
-                        WHERE user_id = $1 AND is_sent = FALSE
-                        ORDER BY remind_at
-                    """, user_id)
-                
-                reminders = []
-                for row in rows:
-                    data = dict(row)
-                    if data.get('data'):
-                        data['data'] = json.loads(data['data'])
-                    reminders.append(data)
-                
-                return reminders
-    
-    # ====================== КЭШ ИДЕЙ НА ВЫХОДНЫЕ ======================
-    
-    async def cache_weekend_ideas(
-        self,
-        user_id: int,
-        ideas_text: str,
-        main_vector: str,
-        main_level: int
-    ) -> int:
-        """Сохраняет сгенерированные идеи на выходные в кэш"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                await conn.execute("""
-                    DELETE FROM fredi_weekend_ideas_cache
-                    WHERE user_id = $1
-                """, user_id)
-                
-                cache_id = await conn.fetchval("""
-                    INSERT INTO fredi_weekend_ideas_cache (user_id, ideas_text, main_vector, main_level)
-                    VALUES ($1, $2, $3, $4)
-                    RETURNING id
-                """, user_id, ideas_text, main_vector, main_level)
-                
-                return cache_id
-    
-    async def get_cached_weekend_ideas(self, user_id: int) -> Optional[str]:
-        """Получает кэшированные идеи на выходные"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow("""
-                    SELECT ideas_text FROM fredi_weekend_ideas_cache
-                    WHERE user_id = $1 AND expires_at > NOW()
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                """, user_id)
-                
-                return row['ideas_text'] if row else None
-    
-    # ====================== КЭШ АНАЛИЗА ВОПРОСОВ ======================
-    
-    async def cache_question_analysis(
-        self,
-        user_id: int,
-        question: str,
-        analysis: Dict[str, Any]
-    ) -> int:
-        """Сохраняет анализ вопроса в кэш"""
-        question_hash = hash(question) % 1000000
-        
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                await conn.execute("""
-                    DELETE FROM fredi_question_analysis_cache
-                    WHERE user_id = $1 AND question_hash = $2
-                """, user_id, question_hash)
-                
-                cache_id = await conn.fetchval("""
-                    INSERT INTO fredi_question_analysis_cache (user_id, question_hash, question_text, analysis)
-                    VALUES ($1, $2, $3, $4)
-                    RETURNING id
-                """, user_id, question_hash, question[:200], self._safe_json_dumps(analysis))
-                
-                return cache_id
-    
-    async def get_cached_question_analysis(self, user_id: int, question: str) -> Optional[Dict]:
-        """Получает кэшированный анализ вопроса"""
-        question_hash = hash(question) % 1000000
-        
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow("""
-                    SELECT analysis FROM fredi_question_analysis_cache
-                    WHERE user_id = $1 AND question_hash = $2 AND expires_at > NOW()
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                """, user_id, question_hash)
-                
-                if row and row['analysis']:
-                    return json.loads(row['analysis'])
-                
-                return None
-    
-    # ====================== МЫСЛИ ПСИХОЛОГА ======================
-    
-    async def save_psychologist_thought(
-        self,
-        user_id: int,
-        thought_text: str,
-        test_result_id: Optional[int] = None,
-        thought_type: str = 'psychologist_thought',
-        thought_summary: Optional[str] = None,
-        metadata: Optional[Dict] = None
-    ) -> Optional[int]:
-        """Сохраняет мысль психолога в отдельную таблицу"""
-        try:
-            if not self._tables_checked:
-                await self.create_psychologist_thoughts_table()
-            
-            await self.save_telegram_user(user_id)
-            
-            async with self.get_connection() as conn:
-                async with conn.transaction():
-                    if test_result_id is None:
-                        row = await conn.fetchrow("""
-                            SELECT id FROM fredi_test_results 
-                            WHERE user_id = $1 
-                            ORDER BY created_at DESC LIMIT 1
-                        """, user_id)
-                        if row:
-                            test_result_id = row['id']
-                    
-                    await conn.execute("""
-                        UPDATE fredi_psychologist_thoughts 
-                        SET is_active = FALSE 
-                        WHERE user_id = $1 AND thought_type = $2 AND is_active = TRUE
-                    """, user_id, thought_type)
-                    
-                    row = await conn.fetchrow("""
-                        INSERT INTO fredi_psychologist_thoughts (
-                            user_id, test_result_id, thought_type, thought_text, 
-                            thought_summary, metadata
-                        ) VALUES ($1, $2, $3, $4, $5, $6)
-                        RETURNING id
-                    """, user_id, test_result_id, thought_type, thought_text,
-                        thought_summary, self._safe_json_dumps(metadata or {}))
-                    
-                    thought_id = row['id']
-                    logger.info(f"💾 Мысль психолога сохранена: user={user_id}, id={thought_id}, type={thought_type}")
-                    return thought_id
-                    
-        except Exception as e:
-            logger.error(f"❌ Ошибка сохранения мысли: {e}")
-            import traceback
-            traceback.print_exc()
+                    return await coro_func(*args, **kwargs)
+            except asyncio.CancelledError:
+                logger.debug(f"Фоновая задача отменена: {coro_func.__name__}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка в фоновой задаче {coro_func.__name__}: {e}")
+                logger.error(traceback.format_exc())
             return None
+        
+        task = asyncio.run_coroutine_threadsafe(_wrapped(), self.loop)
+        self._tasks.add(task)
+        
+        def _cleanup(t):
+            self._tasks.discard(t)
+            if t.exception() and not isinstance(t.exception(), asyncio.CancelledError):
+                logger.error(f"Фоновая задача завершилась с ошибкой: {t.exception()}")
+        
+        task.add_done_callback(_cleanup)
+        return task
     
-    async def get_psychologist_thought(
-        self,
-        user_id: int,
-        thought_type: str = 'psychologist_thought',
-        only_active: bool = True
-    ) -> Optional[str]:
-        """Получает последнюю мысль психолога"""
+    def shutdown(self):
+        """Корректное завершение работы"""
+        with self._lock:
+            if self._shutting_down:
+                return
+            self._shutting_down = True
+        
+        if not self.loop or not self.loop.is_running():
+            logger.info("Цикл БД уже остановлен")
+            return
+        
+        logger.info("🛑 Останавливаем цикл БД...")
+        
+        # Создаём задачу остановки в цикле
+        async def _shutdown():
+            # Отменяем все задачи
+            for task in list(self._tasks):
+                if not task.done():
+                    task.cancel()
+            
+            # Ждём завершения отмены с таймаутом
+            if self._tasks:
+                try:
+                    await asyncio.gather(*self._tasks, return_exceptions=True)
+                except asyncio.CancelledError:
+                    pass
+            
+            # Закрываем пул БД
+            if self._db_instance and self._db_instance.pool:
+                try:
+                    await self._db_instance.disconnect()
+                except Exception as e:
+                    logger.error(f"Ошибка при закрытии пула: {e}")
+        
+        # Запускаем shutdown в цикле
+        future = asyncio.run_coroutine_threadsafe(_shutdown(), self.loop)
         try:
-            async with self.get_connection() as conn:
-                async with conn.transaction():
-                    query = """
-                        SELECT thought_text FROM fredi_psychologist_thoughts 
-                        WHERE user_id = $1 AND thought_type = $2
-                    """
-                    params = [user_id, thought_type]
-                    
-                    if only_active:
-                        query += " AND is_active = TRUE"
-                    
-                    query += " ORDER BY created_at DESC LIMIT 1"
-                    
-                    row = await conn.fetchrow(query, *params)
-                    return row['thought_text'] if row else None
-                    
+            future.result(timeout=10)
+        except TimeoutError:
+            logger.warning("⚠️ Таймаут при остановке задач")
         except Exception as e:
-            logger.error(f"❌ Ошибка получения мысли: {e}")
-            return None
-    
-    async def get_psychologist_thought_history(
-        self,
-        user_id: int,
-        thought_type: Optional[str] = None,
-        limit: int = 10
-    ) -> List[Dict]:
-        """Получает историю мыслей психолога"""
-        try:
-            async with self.get_connection() as conn:
-                async with conn.transaction():
-                    query = """
-                        SELECT 
-                            id, thought_type, thought_text, thought_summary,
-                            created_at, is_active, metadata
-                        FROM fredi_psychologist_thoughts 
-                        WHERE user_id = $1
-                    """
-                    params = [user_id]
-                    
-                    if thought_type:
-                        query += " AND thought_type = $2"
-                        params.append(thought_type)
-                    
-                    query += " ORDER BY created_at DESC LIMIT $3"
-                    params.append(limit)
-                    
-                    rows = await conn.fetch(query, *params)
-                    
-                    return [
-                        {
-                            'id': row['id'],
-                            'type': row['thought_type'],
-                            'text': row['thought_text'],
-                            'summary': row['thought_summary'],
-                            'created_at': row['created_at'].isoformat() if row['created_at'] else None,
-                            'is_active': row['is_active'],
-                            'metadata': row['metadata']
-                        }
-                        for row in rows
-                    ]
-                    
-        except Exception as e:
-            logger.error(f"❌ Ошибка получения истории мыслей: {e}")
+            logger.error(f"❌ Ошибка при остановке: {e}")
+        
+        # Останавливаем цикл
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        
+        # Ждем завершения потока
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=5)
+            if self.thread.is_alive():
+                logger.warning("⚠️ Поток БД не завершился")
+        
+        logger.info("✅ Цикл БД остановлен")
+
+# ============================================
+# ФУНКЦИИ ДЛЯ ЦЕЛЕЙ ПОЛЬЗОВАТЕЛЯ
+# ============================================
+
+async def get_user_goals_async(user_id: int, limit: int = 10) -> List[Dict]:
+    """Асинхронное получение целей пользователя"""
+    try:
+        if not await ensure_db_connection():
             return []
-    
-    # ====================== СОБЫТИЯ И СТАТИСТИКА ======================
-    
-    async def log_event(
-        self,
-        user_id: int,
-        event_type: str,
-        event_data: Optional[Dict] = None
-    ):
-        """Логирует событие для статистики"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                await conn.execute("""
-                    INSERT INTO fredi_events (user_id, event_type, event_data)
-                    VALUES ($1, $2, $3)
-                """, user_id, event_type, self._safe_json_dumps(event_data) if event_data else None)
-                
-                await self.update_last_activity(user_id)
-    
-    async def get_stats(self, days: int = 30) -> Dict[str, Any]:
-        """Получает статистику за указанный период"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                since = datetime.now() - timedelta(days=days)
-                
-                total_users = await conn.fetchval("SELECT COUNT(*) FROM fredi_users")
-                active_users = await conn.fetchval("""
-                    SELECT COUNT(DISTINCT user_id) FROM fredi_events
-                    WHERE created_at >= $1
-                """, since)
-                
-                completed_tests = await conn.fetchval("""
-                    SELECT COUNT(*) FROM fredi_test_results
-                    WHERE created_at >= $1
-                """, since)
-                
-                event_types = await conn.fetch("""
-                    SELECT event_type, COUNT(*) as count
-                    FROM fredi_events
-                    WHERE created_at >= $1
-                    GROUP BY event_type
-                    ORDER BY count DESC
-                """, since)
-                
-                perception_types = await conn.fetch("""
-                    SELECT perception_type, COUNT(*) as count
-                    FROM fredi_test_results
-                    WHERE perception_type IS NOT NULL AND created_at >= $1
-                    GROUP BY perception_type
-                    ORDER BY count DESC
-                """, since)
-                
-                thinking_levels = await conn.fetch("""
-                    SELECT thinking_level, COUNT(*) as count
-                    FROM fredi_test_results
-                    WHERE thinking_level IS NOT NULL AND created_at >= $1
-                    GROUP BY thinking_level
-                    ORDER BY thinking_level
-                """, since)
-                
-                profiles = await conn.fetch("""
-                    SELECT profile_code, COUNT(*) as count
-                    FROM fredi_test_results
-                    WHERE profile_code IS NOT NULL AND created_at >= $1
-                    GROUP BY profile_code
-                    ORDER BY count DESC
-                    LIMIT 20
-                """, since)
-                
-                daily = await conn.fetch("""
-                    SELECT DATE(created_at) as date,
-                           COUNT(DISTINCT user_id) as users,
-                           COUNT(*) as events
-                    FROM fredi_events
-                    WHERE created_at >= $1
-                    GROUP BY DATE(created_at)
-                    ORDER BY date DESC
-                """, since)
-                
-                return {
-                    'period_days': days,
-                    'total_users': total_users,
-                    'active_users': active_users,
-                    'completed_tests': completed_tests,
-                    'event_types': [dict(et) for et in event_types],
-                    'perception_types': [dict(pt) for pt in perception_types],
-                    'thinking_levels': [dict(tl) for tl in thinking_levels],
-                    'profiles': [dict(p) for p in profiles],
-                    'daily': [dict(d) for d in daily]
-                }
-    
-    # ====================== ОЧИСТКА СТАРЫХ ДАННЫХ ======================
-    
-    async def cleanup_old_data(self, days: int = 30):
-        """Очищает старые данные"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                await conn.execute("""
-                    DELETE FROM fredi_events
-                    WHERE created_at < NOW() - INTERVAL '1 day' * $1
-                """, days)
-                
-                await conn.execute("""
-                    UPDATE fredi_user_routes
-                    SET is_active = FALSE
-                    WHERE is_active = TRUE
-                      AND updated_at < NOW() - INTERVAL '90 days'
-                """)
-                
-                await conn.execute("""
-                    DELETE FROM fredi_reminders
-                    WHERE (is_sent = TRUE AND sent_at < NOW() - INTERVAL '7 days')
-                       OR (is_sent = FALSE AND remind_at < NOW() - INTERVAL '7 days')
-                """)
-                
-                await conn.execute("""
-                    DELETE FROM fredi_weekend_ideas_cache WHERE expires_at < NOW()
-                """)
-                await conn.execute("""
-                    DELETE FROM fredi_question_analysis_cache WHERE expires_at < NOW()
-                """)
-                
-                await conn.execute("""
-                    DELETE FROM fredi_psychologist_thoughts
-                    WHERE is_active = FALSE AND created_at < NOW() - INTERVAL '180 days'
-                """)
-                
-                logger.info(f"🧹 Очистка старых данных выполнена")
-    
-    # ====================== ЦЕЛИ ПОЛЬЗОВАТЕЛЯ ======================
-    
-    async def save_user_goal(self, user_id: int, goal_text: str) -> Optional[int]:
-        """Сохраняет цель пользователя"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                goal_id = await conn.fetchval("""
-                    INSERT INTO fredi_user_goals (user_id, goal_text)
-                    VALUES ($1, $2)
-                    RETURNING id
-                """, user_id, goal_text)
-                
-                return goal_id
-    
-    async def get_user_goals(self, user_id: int, limit: int = 10) -> List[Dict]:
-        """Получает цели пользователя"""
-        async with self.get_connection() as conn:
-            async with conn.transaction():
-                rows = await conn.fetch("""
-                    SELECT id, goal_text, status, completed_at, created_at 
-                    FROM fredi_user_goals 
-                    WHERE user_id = $1 
-                    ORDER BY created_at DESC 
-                    LIMIT $2
-                """, user_id, limit)
-                
-                return [dict(row) for row in rows]
-    
-    # ====================== МИГРАЦИЯ ======================
-    
-    async def migrate_existing_users(
-        self,
-        user_data_dict: Dict[int, Dict],
-        user_contexts_dict: Dict[int, Any],
-        user_names_dict: Dict[int, str],
-        user_routes_dict: Dict[int, Dict]
-    ):
-        """Мигрирует существующих пользователей из памяти в БД"""
-        migrated_users = 0
-        migrated_contexts = 0
-        migrated_data = 0
-        migrated_routes = 0
-        migrated_tests = 0
         
-        for user_id in set(
-            list(user_data_dict.keys()) +
-            list(user_contexts_dict.keys()) +
-            list(user_names_dict.keys()) +
-            list(user_routes_dict.keys())
-        ):
-            async with self.get_connection() as conn:
-                async with conn.transaction():
-                    first_name = user_names_dict.get(user_id)
-                    if first_name:
-                        await self.save_telegram_user(
-                            user_id=user_id,
-                            first_name=first_name
-                        )
-                        migrated_users += 1
-                    
-                    if user_id in user_contexts_dict:
-                        context = user_contexts_dict[user_id]
-                        if not hasattr(context, 'name') or not context.name:
-                            context.name = user_names_dict.get(user_id)
-                        await self.save_user_context(user_id, context)
-                        migrated_contexts += 1
-                    
-                    if user_id in user_data_dict:
-                        data = user_data_dict[user_id]
-                        await self.save_user_data(user_id, data)
-                        migrated_data += 1
-                        
-                        if data.get('profile_data') or data.get('ai_generated_profile'):
-                            confinement_model_dict = None
-                            if data.get('confinement_model'):
-                                confinement_model_dict = self._make_json_serializable(data['confinement_model'])
-                            
-                            test_id = await self.save_test_result(
-                                user_id=user_id,
-                                test_type='full_profile',
-                                results=data,
-                                profile_code=data.get('profile_data', {}).get('display_name'),
-                                perception_type=data.get('perception_type'),
-                                thinking_level=data.get('thinking_level'),
-                                vectors=data.get('behavioral_levels'),
-                                deep_patterns=data.get('deep_patterns'),
-                                confinement_model=confinement_model_dict
-                            )
-                            migrated_tests += 1
-                            
-                            if test_id and data.get('all_answers'):
-                                for answer in data['all_answers']:
-                                    await self.save_test_answer(
-                                        user_id=user_id,
-                                        test_result_id=test_id,
-                                        stage=answer.get('stage', 0),
-                                        question_index=answer.get('question_index', 0),
-                                        question_text=answer.get('question', ''),
-                                        answer_text=answer.get('answer', ''),
-                                        answer_value=answer.get('option', ''),
-                                        scores=answer.get('scores'),
-                                        measures=answer.get('measures'),
-                                        strategy=answer.get('strategy'),
-                                        dilts=answer.get('dilts'),
-                                        pattern=answer.get('pattern'),
-                                        target=answer.get('target')
-                                    )
-                    
-                    if user_id in user_routes_dict:
-                        route_data = user_routes_dict[user_id]
-                        await self.save_user_route(
-                            user_id=user_id,
-                            route_data=route_data.get('route_data', {}),
-                            current_step=route_data.get('current_step', 1),
-                            progress=route_data.get('progress', [])
-                        )
-                        migrated_routes += 1
+        async with db.get_connection() as conn:
+            rows = await conn.fetch("""
+                SELECT id, goal_text, status, completed_at, created_at 
+                FROM fredi_user_goals 
+                WHERE user_id = $1 
+                ORDER BY created_at DESC 
+                LIMIT $2
+            """, user_id, limit)
+            
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения целей: {e}")
+        return []
+
+
+def get_user_goals(user_id: int, limit: int = 10) -> List[Dict]:
+    """Синхронная обертка для получения целей"""
+    try:
+        result = db_loop_manager.run_coro(
+            get_user_goals_async,
+            user_id,
+            limit,
+            timeout=10
+        )
+        return result if result is not None else []
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_user_goals: {e}")
+        return []
+
+
+async def save_goal_async(user_id: int, goal_text: str) -> Optional[int]:
+    """Асинхронное сохранение цели"""
+    try:
+        if not await ensure_db_connection():
+            return None
         
-        logger.info(f"✅ Мигрировано: {migrated_users} пользователей, {migrated_contexts} контекстов, "
-                   f"{migrated_data} наборов данных, {migrated_routes} маршрутов, {migrated_tests} тестов")
+        async with db.get_connection() as conn:
+            goal_id = await conn.fetchval("""
+                INSERT INTO fredi_user_goals (user_id, goal_text)
+                VALUES ($1, $2)
+                RETURNING id
+            """, user_id, goal_text)
+            
+            return goal_id
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения цели: {e}")
+        return None
+
+
+def save_goal(user_id: int, goal_text: str) -> Optional[int]:
+    """Синхронная обертка для сохранения цели"""
+    try:
+        result = db_loop_manager.run_coro(
+            save_goal_async,
+            user_id,
+            goal_text,
+            timeout=10
+        )
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_goal: {e}")
+        return None
+
+# ============================================
+# ГЛОБАЛЬНЫЕ ЭКЗЕМПЛЯРЫ
+# ============================================
+
+# Перечитываем DATABASE_URL прямо перед созданием — гарантируем актуальное значение
+_final_url = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://fredi_db_flz2_user:PP1FP91G1P6mn1uS8iBLGlk38bKqzkGy@dpg-d739b31r0fns739a7oj0-a/fredi_db_flz2"
+).replace("?sslmode=require","").replace("?sslmode=disable","").replace("?ssl=true","").strip()
+
+if not _final_url.startswith('postgresql'):
+    print(f"⚠️ DATABASE_URL некорректный: '{_final_url[:50]}' — используем fallback")
+    _final_url = "postgresql://fredi_db_flz2_user:PP1FP91G1P6mn1uS8iBLGlk38bKqzkGy@dpg-d739b31r0fns739a7oj0-a/fredi_db_flz2"
+
+# Обновляем DATABASE_URL финальным значением
+DATABASE_URL = _final_url
+print(f"✅ db_instance создаётся с URL: postgresql://***@{DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else '???'}")
+
+db = BotDatabase(DATABASE_URL)
+db_loop_manager = DBLoopManager()
+
+# ============================================
+# ИНИЦИАЛИЗАЦИЯ
+# ============================================
+
+async def init_db():
+    """Инициализация подключения к БД"""
+    try:
+        db_loop_manager.init(db)
+        logger.info("✅ Подключение к PostgreSQL установлено")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка подключения к PostgreSQL: {e}")
+        return False
+
+
+async def close_db():
+    """Закрытие подключения к БД"""
+    try:
+        db_loop_manager.shutdown()
+        logger.info("🔒 Подключение к PostgreSQL закрыто")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при закрытии подключения: {e}")
+
+# ============================================
+# ПРОВЕРКА СОЕДИНЕНИЯ С ПОВТОРНЫМИ ПОПЫТКАМИ
+# ============================================
+
+_ensure_db_lock = None
+
+async def _get_ensure_lock():
+    global _ensure_db_lock
+    if _ensure_db_lock is None:
+        _ensure_db_lock = asyncio.Lock()
+    return _ensure_db_lock
+
+
+async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
+    """
+    Проверяет соединение с БД с автоматическим восстановлением.
+    """
+    lock = await _get_ensure_lock()
+    
+    async with lock:
+        for attempt in range(max_retries):
+            try:
+                # Проверяем, готов ли менеджер
+                if not db_loop_manager.is_ready():
+                    logger.info(f"🔄 Менеджер БД не готов, инициализация... (попытка {attempt + 1})")
+                    await init_db()
+                
+                # Если пула нет - подключаемся
+                if db.pool is None or db.pool._closed:
+                    logger.info("🔄 Подключаемся к БД...")
+                    async with asyncio.timeout(10):
+                        await db.connect()
+                    logger.info("✅ Подключение к БД установлено")
+                    return True
+                
+                # Быстрая проверка соединения
+                try:
+                    async with asyncio.timeout(3.0):
+                        async with db.get_connection() as conn:
+                            await conn.execute("SELECT 1")
+                    logger.debug("✅ Соединение с БД активно")
+                    return True
+                except asyncio.TimeoutError:
+                    logger.warning("⚠️ Таймаут проверки соединения")
+                except Exception as conn_error:
+                    logger.warning(f"⚠️ Ошибка соединения: {conn_error}")
+                
+                # Если дошли сюда - соединение потеряно, переподключаемся
+                logger.info("🔄 Переподключаемся к БД...")
+                try:
+                    async with asyncio.timeout(5):
+                        await db.disconnect()
+                except:
+                    pass
+                
+                async with asyncio.timeout(15):
+                    await db.connect()
+                logger.info("✅ Переподключение к БД выполнено")
+                return True
+                
+            except asyncio.TimeoutError:
+                logger.warning(f"⚠️ Таймаут (попытка {attempt + 1}/{max_retries})")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка (попытка {attempt + 1}/{max_retries}): {e}")
+            
+            if attempt < max_retries - 1:
+                await asyncio.sleep(delay)
+            else:
+                logger.error("❌ Все попытки исчерпаны")
+                return False
+    
+    return False
+
+# ============================================
+# ВЫПОЛНЕНИЕ С ПОВТОРАМИ
+# ============================================
+
+async def execute_with_retry(coro_func, *args, max_retries=3, **kwargs):
+    """Выполняет функцию с повторными попытками"""
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            # Проверяем соединение перед выполнением
+            if not await ensure_db_connection(max_retries=1):
+                logger.warning(f"⚠️ Нет соединения с БД, попытка {attempt + 1}")
+                await asyncio.sleep(1)
+                continue
+            
+            result = db_loop_manager.run_coro(
+                coro_func, *args, timeout=25, **kwargs
+            )
+            return result
+            
+        except TimeoutError as e:
+            last_error = e
+            logger.warning(f"⚠️ Таймаут (попытка {attempt+1}/{max_retries})")
+        except Exception as e:
+            last_error = e
+            logger.warning(f"⚠️ Ошибка (попытка {attempt+1}/{max_retries}): {e}")
+        
+        if attempt < max_retries - 1:
+            await asyncio.sleep(0.5 * (attempt + 1))
+    
+    logger.error(f"❌ Все попытки исчерпаны: {last_error}")
+    return None
+
+# ============================================
+# ОБЕРТКА ДЛЯ СИНХРОННЫХ ВЫЗОВОВ
+# ============================================
+
+def sync_db_call(coro_func):
+    """Декоратор для синхронных функций"""
+    @wraps(coro_func)
+    def wrapper(*args, **kwargs):
+        try:
+            return db_loop_manager.run_coro(coro_func, *args, **kwargs)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в sync_db_call: {e}")
+            return None
+    return wrapper
+
+# ============================================
+# ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ ПОЛЬЗОВАТЕЛЯ
+# ============================================
+
+async def load_user_from_db_async(user_id: int) -> Optional[Dict[str, Any]]:
+    """Асинхронная загрузка пользователя из БД"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для загрузки пользователя {user_id}")
+            return None
+        
+        user_data = await db.load_user_data(user_id)
+        user_context = await db.load_user_context(user_id)
+        
+        if not user_data and not user_context:
+            return None
         
         return {
-            'users': migrated_users,
-            'contexts': migrated_contexts,
-            'data': migrated_data,
-            'routes': migrated_routes,
-            'tests': migrated_tests
+            'user_data': user_data or {},
+            'user_context': user_context or {}
         }
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки пользователя {user_id}: {e}")
+        return None
+
+
+def load_user_from_db(user_id: int) -> Optional[Dict[str, Any]]:
+    """Синхронная обертка для загрузки пользователя"""
+    try:
+        if not db_loop_manager.is_ready():
+            logger.warning(f"⚠️ Цикл БД не готов, пропускаем загрузку {user_id}")
+            return None
+        
+        result = db_loop_manager.run_coro(
+            load_user_from_db_async,
+            user_id,
+            timeout=15
+        )
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка load_user_from_db: {e}")
+        return None
+
+
+# ============================================
+# СОХРАНЕНИЕ ДАННЫХ
+# ============================================
+
+async def save_telegram_user_async(
+    user_id: int,
+    username: str = None,
+    first_name: str = None,
+    last_name: str = None,
+    language_code: str = None
+) -> bool:
+    """Асинхронная версия сохранения пользователя Telegram"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения пользователя {user_id}")
+            return False
+        
+        result = await db.save_telegram_user(
+            user_id=user_id,
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
+            language_code=language_code
+        )
+        logger.debug(f"💾 Пользователь {user_id} сохранен в БД")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
+        logger.error(traceback.format_exc())
+        return False
+
+
+def save_telegram_user(
+    user_id: int,
+    username: str = None,
+    first_name: str = None,
+    last_name: str = None,
+    language_code: str = None
+) -> bool:
+    """СИНХРОННАЯ обертка для сохранения пользователя Telegram"""
+    try:
+        if not db_loop_manager.is_ready():
+            logger.warning(f"⚠️ Цикл БД не готов, пропускаем сохранение {user_id}")
+            return False
+        
+        result = db_loop_manager.run_coro(
+            save_telegram_user_async,
+            user_id,
+            username,
+            first_name,
+            last_name,
+            language_code,
+            timeout=25
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_telegram_user: {e}")
+        return False
+
+
+def save_user(
+    user_id: int,
+    username: str = None,
+    first_name: str = None,
+    last_name: str = None,
+    language_code: str = None
+) -> bool:
+    """Алиас для save_telegram_user"""
+    return save_telegram_user(user_id, username, first_name, last_name, language_code)
+
+
+async def log_event_async(user_id: int, event_type: str, event_data: Dict = None) -> bool:
+    """Асинхронная версия логирования"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для логирования {user_id}")
+            return False
+        
+        await db.log_event(user_id, event_type, event_data or {})
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка логирования: {e}")
+        return False
+
+
+def log_event(user_id: int, event_type: str, event_data: Dict = None) -> bool:
+    """Синхронная обертка для логирования"""
+    try:
+        if not db_loop_manager.is_ready():
+            logger.warning(f"⚠️ Цикл БД не готов, пропускаем логирование {user_id}")
+            return False
+        
+        result = db_loop_manager.run_coro(
+            log_event_async,
+            user_id,
+            event_type,
+            event_data,
+            timeout=8
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка log_event: {e}")
+        return False
+
+
+# ============================================
+# ФУНКЦИИ ДЛЯ РАБОТЫ С ДАННЫМИ ПОЛЬЗОВАТЕЛЯ
+# ============================================
+
+async def save_user_data_async(user_id: int, data: Dict[str, Any]) -> bool:
+    """Асинхронное сохранение данных пользователя"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения данных пользователя {user_id}")
+            return False
+        
+        await db.save_user_data(user_id, data)
+        logger.debug(f"💾 Данные пользователя {user_id} сохранены в БД")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения данных пользователя {user_id}: {e}")
+        return False
+
+
+def save_user_data(user_id: int, data: Dict[str, Any]) -> bool:
+    """Синхронная обертка для сохранения данных пользователя"""
+    try:
+        if not db_loop_manager.is_ready():
+            return False
+        
+        result = db_loop_manager.run_coro(
+            save_user_data_async,
+            user_id,
+            data,
+            timeout=25
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_user_data: {e}")
+        return False
+
+
+async def get_user_data_async(user_id: int) -> Optional[Dict[str, Any]]:
+    """Асинхронное получение данных пользователя"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для получения данных пользователя {user_id}")
+            return None
+        
+        data = await db.load_user_data(user_id)
+        return data
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения данных пользователя {user_id}: {e}")
+        return None
+
+
+def get_user_data(user_id: int) -> Optional[Dict[str, Any]]:
+    """Синхронная обертка для получения данных пользователя"""
+    try:
+        if not db_loop_manager.is_ready():
+            return None
+        
+        result = db_loop_manager.run_coro(
+            get_user_data_async,
+            user_id,
+            timeout=8
+        )
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_user_data: {e}")
+        return None
+
+
+async def save_user_context_async(user_id: int, context: Dict[str, Any]) -> bool:
+    """Асинхронное сохранение контекста пользователя"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения контекста пользователя {user_id}")
+            return False
+        
+        await db.save_user_context(user_id, context)
+        logger.debug(f"💾 Контекст пользователя {user_id} сохранен в БД")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения контекста пользователя {user_id}: {e}")
+        return False
+
+
+def save_user_context(user_id: int, context: Dict[str, Any]) -> bool:
+    """Синхронная обертка для сохранения контекста пользователя"""
+    try:
+        if not db_loop_manager.is_ready():
+            return False
+        
+        result = db_loop_manager.run_coro(
+            save_user_context_async,
+            user_id,
+            context,
+            timeout=25
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_user_context: {e}")
+        return False
+
+
+async def get_user_context_async(user_id: int) -> Optional[Dict[str, Any]]:
+    """Асинхронное получение контекста пользователя"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для получения контекста пользователя {user_id}")
+            return None
+        
+        context = await db.load_user_context(user_id)
+        return context
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения контекста пользователя {user_id}: {e}")
+        return None
+
+
+def get_user_context(user_id: int) -> Optional[Dict[str, Any]]:
+    """Синхронная обертка для получения контекста пользователя"""
+    try:
+        if not db_loop_manager.is_ready():
+            return None
+        
+        result = db_loop_manager.run_coro(
+            get_user_context_async,
+            user_id,
+            timeout=8
+        )
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_user_context: {e}")
+        return None
+
+
+async def save_route_data_async(user_id: int, route_data: Dict[str, Any]) -> bool:
+    """Асинхронное сохранение маршрута пользователя"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения маршрута пользователя {user_id}")
+            return False
+        
+        await db.save_user_route(
+            user_id=user_id,
+            route_data=route_data,
+            current_step=route_data.get('current_step', 1),
+            progress=route_data.get('progress', [])
+        )
+        logger.debug(f"💾 Маршрут пользователя {user_id} сохранен в БД")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения маршрута пользователя {user_id}: {e}")
+        return False
+
+
+def save_route_data(user_id: int, route_data: Dict[str, Any]) -> bool:
+    """Синхронная обертка для сохранения маршрута пользователя"""
+    try:
+        if not db_loop_manager.is_ready():
+            return False
+        
+        result = db_loop_manager.run_coro(
+            save_route_data_async,
+            user_id,
+            route_data,
+            timeout=25
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_route_data: {e}")
+        return False
+
+
+async def save_user_to_db_async(user_id, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None):
+    """Асинхронная версия сохранения"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения {user_id}")
+            return False
+        
+        if user_data_dict is None:
+            from state import user_data as global_user_data
+            user_data_dict = global_user_data
+        
+        if user_contexts_dict is None:
+            from state import user_contexts as global_user_contexts
+            user_contexts_dict = global_user_contexts
+        
+        if user_routes_dict is None:
+            from state import user_routes as global_user_routes
+            user_routes_dict = global_user_routes
+        
+        if user_id in user_data_dict:
+            user_info = user_data_dict[user_id]
+            first_name = user_info.get('first_name') or user_info.get('name')
+            username = user_info.get('username')
+            
+            await db.save_telegram_user(
+                user_id=user_id,
+                username=username,
+                first_name=first_name
+            )
+        
+        if user_id in user_data_dict:
+            await db.save_user_data(user_id, user_data_dict[user_id])
+        
+        if user_id in user_contexts_dict:
+            context = user_contexts_dict[user_id]
+            await db.save_user_context(user_id, context)
+            await db.save_pickled_context(user_id, context)
+        
+        if user_id in user_routes_dict:
+            route = user_routes_dict[user_id]
+            await db.save_user_route(
+                user_id=user_id,
+                route_data=route.get('route_data', {}),
+                current_step=route.get('current_step', 1),
+                progress=route.get('progress', [])
+            )
+        
+        logger.info(f"💾 Пользователь {user_id} успешно сохранен в БД")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
+        return False
+
+
+def save_user_to_db(user_id, user_data_dict=None, user_contexts_dict=None, user_routes_dict=None):
+    """Синхронная обертка для сохранения"""
+    try:
+        if not db_loop_manager.is_ready():
+            logger.warning(f"⚠️ Цикл БД не готов, пропускаем сохранение {user_id}")
+            return False
+        
+        result = db_loop_manager.run_coro(
+            save_user_to_db_async,
+            user_id,
+            user_data_dict,
+            user_contexts_dict,
+            user_routes_dict,
+            timeout=25
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_user_to_db: {e}")
+        return False
+
+
+# ============================================
+# ФУНКЦИИ ДЛЯ МЫСЛЕЙ ПСИХОЛОГА
+# ============================================
+
+async def create_psychologist_thoughts_table():
+    """Создает таблицу для хранения мыслей психолога"""
+    try:
+        if not await ensure_db_connection():
+            logger.error("❌ Нет соединения с БД")
+            return False
+        
+        async with db.get_connection() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS fredi_psychologist_thoughts (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    test_result_id INTEGER,
+                    thought_type VARCHAR(50) NOT NULL DEFAULT 'psychologist_thought',
+                    thought_text TEXT NOT NULL,
+                    thought_summary VARCHAR(500),
+                    metadata JSONB DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_active BOOLEAN DEFAULT TRUE
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_thoughts_user_id 
+                ON fredi_psychologist_thoughts(user_id)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_thoughts_test_result 
+                ON fredi_psychologist_thoughts(test_result_id)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_thoughts_type 
+                ON fredi_psychologist_thoughts(thought_type)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_thoughts_created 
+                ON fredi_psychologist_thoughts(created_at)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_thoughts_text_gin 
+                ON fredi_psychologist_thoughts 
+                USING GIN(to_tsvector('russian', thought_text))
+            """)
+            
+            logger.info("✅ Таблица fredi_psychologist_thoughts создана")
+            return True
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка создания таблицы: {e}")
+        return False
+
+
+async def save_psychologist_thought_async(
+    user_id: int,
+    thought_text: str,
+    test_result_id: int = None,
+    thought_type: str = 'psychologist_thought',
+    thought_summary: str = None,
+    metadata: Dict = None
+) -> Optional[int]:
+    """Сохраняет мысль психолога"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД")
+            return None
+        
+        await create_psychologist_thoughts_table()
+        
+        async with db.get_connection() as conn:
+            if test_result_id is None:
+                row = await conn.fetchrow("""
+                    SELECT id FROM fredi_test_results 
+                    WHERE user_id = $1 
+                    ORDER BY created_at DESC LIMIT 1
+                """, user_id)
+                if row:
+                    test_result_id = row['id']
+            
+            await conn.execute("""
+                UPDATE fredi_psychologist_thoughts 
+                SET is_active = FALSE 
+                WHERE user_id = $1 AND thought_type = $2 AND is_active = TRUE
+            """, user_id, thought_type)
+            
+            row = await conn.fetchrow("""
+                INSERT INTO fredi_psychologist_thoughts (
+                    user_id, test_result_id, thought_type, thought_text, 
+                    thought_summary, metadata
+                ) VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id
+            """, user_id, test_result_id, thought_type, thought_text,
+                thought_summary, json.dumps(metadata or {}))
+            
+            thought_id = row['id']
+            
+            # ✅ ИСПРАВЛЕНО: используем асинхронный вызов save_user_data_async
+            try:
+                from state import user_data
+                if user_id in user_data:
+                    user_data[user_id]['psychologist_thought'] = thought_text
+                    user_data[user_id]['psychologist_thought_id'] = thought_id
+                    user_data[user_id]['psychologist_thought_type'] = thought_type
+                    user_data[user_id]['psychologist_thought_metadata'] = metadata
+                    # Асинхронный вызов вместо синхронного
+                    await save_user_data_async(user_id, user_data[user_id])
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось сохранить мысль в user_data: {e}")
+            
+            logger.info(f"💾 Мысль психолога сохранена: user={user_id}, id={thought_id}")
+            return thought_id
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения мысли: {e}")
+        return None
+
+
+def save_psychologist_thought(
+    user_id: int,
+    thought_text: str,
+    test_result_id: int = None,
+    thought_type: str = 'psychologist_thought',
+    thought_summary: str = None,
+    metadata: Dict = None
+) -> Optional[int]:
+    """Синхронная обертка для сохранения мысли психолога"""
+    try:
+        if not db_loop_manager.is_ready():
+            return None
+        
+        result = db_loop_manager.run_coro(
+            save_psychologist_thought_async,
+            user_id,
+            thought_text,
+            test_result_id,
+            thought_type,
+            thought_summary,
+            metadata,
+            timeout=25
+        )
+        return result if result is not None else None
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_psychologist_thought: {e}")
+        return None
+
+
+async def get_psychologist_thought_async(
+    user_id: int,
+    thought_type: str = 'psychologist_thought',
+    only_active: bool = True
+) -> Optional[str]:
+    """Получает последнюю мысль психолога"""
+    try:
+        if not await ensure_db_connection():
+            return None
+        
+        async with db.get_connection() as conn:
+            query = """
+                SELECT thought_text FROM fredi_psychologist_thoughts 
+                WHERE user_id = $1 AND thought_type = $2
+            """
+            params = [user_id, thought_type]
+            
+            if only_active:
+                query += " AND is_active = TRUE"
+            
+            query += " ORDER BY created_at DESC LIMIT 1"
+            
+            row = await conn.fetchrow(query, *params)
+            return row['thought_text'] if row else None
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения мысли: {e}")
+        return None
+
+
+def get_psychologist_thought(
+    user_id: int,
+    thought_type: str = 'psychologist_thought',
+    only_active: bool = True
+) -> Optional[str]:
+    """Синхронная обертка для получения мысли психолога"""
+    try:
+        if not db_loop_manager.is_ready():
+            return None
+        
+        result = db_loop_manager.run_coro(
+            get_psychologist_thought_async,
+            user_id,
+            thought_type,
+            only_active,
+            timeout=8
+        )
+        return result
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_psychologist_thought: {e}")
+        return None
+
+
+async def get_psychologist_thought_history_async(
+    user_id: int,
+    thought_type: str = None,
+    limit: int = 10
+) -> List[Dict]:
+    """Получает историю мыслей психолога"""
+    try:
+        if not await ensure_db_connection():
+            return []
+        
+        async with db.get_connection() as conn:
+            query = """
+                SELECT 
+                    id, thought_type, thought_text, thought_summary,
+                    created_at, is_active, metadata
+                FROM fredi_psychologist_thoughts 
+                WHERE user_id = $1
+            """
+            params = [user_id]
+            
+            if thought_type:
+                query += " AND thought_type = $2"
+                params.append(thought_type)
+            
+            query += " ORDER BY created_at DESC LIMIT $3"
+            params.append(limit)
+            
+            rows = await conn.fetch(query, *params)
+            
+            return [
+                {
+                    'id': row['id'],
+                    'type': row['thought_type'],
+                    'text': row['thought_text'],
+                    'summary': row['thought_summary'],
+                    'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                    'is_active': row['is_active'],
+                    'metadata': row['metadata']
+                }
+                for row in rows
+            ]
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения истории мыслей: {e}")
+        return []
+
+
+def get_psychologist_thought_history(
+    user_id: int,
+    thought_type: str = None,
+    limit: int = 10
+) -> List[Dict]:
+    """Синхронная обертка для получения истории мыслей"""
+    try:
+        if not db_loop_manager.is_ready():
+            return []
+        
+        result = db_loop_manager.run_coro(
+            get_psychologist_thought_history_async,
+            user_id,
+            thought_type,
+            limit,
+            timeout=8
+        )
+        return result if result is not None else []
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_psychologist_thought_history: {e}")
+        return []
+
+
+async def get_all_psychologist_thoughts_async(
+    user_id: int,
+    limit: int = 50,
+    include_inactive: bool = False
+) -> List[Dict]:
+    """Получает все мысли психолога для пользователя"""
+    try:
+        if not await ensure_db_connection():
+            return []
+        
+        async with db.get_connection() as conn:
+            query = """
+                SELECT 
+                    id, thought_type, thought_text, thought_summary,
+                    created_at, is_active, metadata,
+                    test_result_id
+                FROM fredi_psychologist_thoughts 
+                WHERE user_id = $1
+            """
+            params = [user_id]
+            
+            if not include_inactive:
+                query += " AND is_active = TRUE"
+            
+            query += " ORDER BY created_at DESC LIMIT $2"
+            params.append(limit)
+            
+            rows = await conn.fetch(query, *params)
+            
+            return [
+                {
+                    'id': row['id'],
+                    'type': row['thought_type'],
+                    'text': row['thought_text'],
+                    'summary': row['thought_summary'],
+                    'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                    'is_active': row['is_active'],
+                    'metadata': row['metadata'],
+                    'test_result_id': row['test_result_id']
+                }
+                for row in rows
+            ]
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения всех мыслей: {e}")
+        return []
+
+
+def get_all_psychologist_thoughts(
+    user_id: int,
+    limit: int = 50,
+    include_inactive: bool = False
+) -> List[Dict]:
+    """Синхронная обертка"""
+    try:
+        if not db_loop_manager.is_ready():
+            return []
+        
+        result = db_loop_manager.run_coro(
+            get_all_psychologist_thoughts_async,
+            user_id,
+            limit,
+            include_inactive,
+            timeout=10
+        )
+        return result if result is not None else []
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_all_psychologist_thoughts: {e}")
+        return []
+
+
+async def delete_psychologist_thought_async(thought_id: int) -> bool:
+    """Удаляет мысль психолога по ID"""
+    try:
+        if not await ensure_db_connection():
+            return False
+        
+        async with db.get_connection() as conn:
+            result = await conn.execute("""
+                DELETE FROM fredi_psychologist_thoughts 
+                WHERE id = $1
+            """, thought_id)
+            
+            deleted = int(result.split()[-1]) > 0
+            if deleted:
+                logger.info(f"🗑️ Удалена мысль психолога id={thought_id}")
+            return deleted
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка удаления мысли: {e}")
+        return False
+
+
+def delete_psychologist_thought(thought_id: int) -> bool:
+    """Синхронная обертка"""
+    try:
+        if not db_loop_manager.is_ready():
+            return False
+        
+        result = db_loop_manager.run_coro(
+            delete_psychologist_thought_async,
+            thought_id,
+            timeout=10
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка delete_psychologist_thought: {e}")
+        return False
+
+
+async def update_psychologist_thought_async(
+    thought_id: int,
+    thought_text: str = None,
+    thought_summary: str = None,
+    is_active: bool = None,
+    metadata: Dict = None
+) -> bool:
+    """Обновляет мысль психолога"""
+    try:
+        if not await ensure_db_connection():
+            return False
+        
+        async with db.get_connection() as conn:
+            updates = []
+            params = []
+            param_index = 2
+            
+            if thought_text is not None:
+                updates.append(f"thought_text = ${param_index}")
+                params.append(thought_text)
+                param_index += 1
+            
+            if thought_summary is not None:
+                updates.append(f"thought_summary = ${param_index}")
+                params.append(thought_summary)
+                param_index += 1
+            
+            if is_active is not None:
+                updates.append(f"is_active = ${param_index}")
+                params.append(is_active)
+                param_index += 1
+            
+            if metadata is not None:
+                updates.append(f"metadata = ${param_index}")
+                params.append(json.dumps(metadata))
+                param_index += 1
+            
+            if not updates:
+                logger.warning(f"⚠️ Нет полей для обновления мысли {thought_id}")
+                return False
+            
+            updates.append("updated_at = NOW()")
+            
+            query = f"""
+                UPDATE fredi_psychologist_thoughts 
+                SET {', '.join(updates)}
+                WHERE id = $1
+            """
+            params.insert(0, thought_id)
+            
+            result = await conn.execute(query, *params)
+            updated = int(result.split()[-1]) > 0
+            
+            if updated:
+                logger.info(f"✏️ Обновлена мысль психолога id={thought_id}")
+            return updated
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка обновления мысли: {e}")
+        return False
+
+
+def update_psychologist_thought(
+    thought_id: int,
+    thought_text: str = None,
+    thought_summary: str = None,
+    is_active: bool = None,
+    metadata: Dict = None
+) -> bool:
+    """Синхронная обертка"""
+    try:
+        if not db_loop_manager.is_ready():
+            return False
+        
+        result = db_loop_manager.run_coro(
+            update_psychologist_thought_async,
+            thought_id,
+            thought_text,
+            thought_summary,
+            is_active,
+            metadata,
+            timeout=10
+        )
+        return result if result is not None else False
+    except Exception as e:
+        logger.error(f"❌ Ошибка update_psychologist_thought: {e}")
+        return False
+
+
+async def get_thoughts_by_test_result_async(test_result_id: int) -> List[Dict]:
+    """Получает мысли по результату теста"""
+    try:
+        if not await ensure_db_connection():
+            return []
+        
+        async with db.get_connection() as conn:
+            rows = await conn.fetch("""
+                SELECT 
+                    id, thought_type, thought_text, thought_summary,
+                    created_at, is_active, metadata, user_id
+                FROM fredi_psychologist_thoughts 
+                WHERE test_result_id = $1
+                ORDER BY created_at DESC
+            """, test_result_id)
+            
+            return [
+                {
+                    'id': row['id'],
+                    'type': row['thought_type'],
+                    'text': row['thought_text'],
+                    'summary': row['thought_summary'],
+                    'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                    'is_active': row['is_active'],
+                    'metadata': row['metadata'],
+                    'user_id': row['user_id']
+                }
+                for row in rows
+            ]
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения мыслей по тесту: {e}")
+        return []
+
+
+def get_thoughts_by_test_result(test_result_id: int) -> List[Dict]:
+    """Синхронная обертка"""
+    try:
+        if not db_loop_manager.is_ready():
+            return []
+        
+        result = db_loop_manager.run_coro(
+            get_thoughts_by_test_result_async,
+            test_result_id,
+            timeout=10
+        )
+        return result if result is not None else []
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_thoughts_by_test_result: {e}")
+        return []
+
+
+async def get_psychologist_thoughts_stats_async(user_id: int) -> Dict[str, Any]:
+    """Получает статистику по мыслям"""
+    try:
+        if not await ensure_db_connection():
+            return {}
+        
+        async with db.get_connection() as conn:
+            total = await conn.fetchval("""
+                SELECT COUNT(*) FROM fredi_psychologist_thoughts 
+                WHERE user_id = $1
+            """, user_id)
+            
+            active = await conn.fetchval("""
+                SELECT COUNT(*) FROM fredi_psychologist_thoughts 
+                WHERE user_id = $1 AND is_active = TRUE
+            """, user_id)
+            
+            by_type = await conn.fetch("""
+                SELECT thought_type, COUNT(*) as count 
+                FROM fredi_psychologist_thoughts 
+                WHERE user_id = $1 
+                GROUP BY thought_type
+            """, user_id)
+            
+            last = await conn.fetchrow("""
+                SELECT thought_text, thought_type, created_at 
+                FROM fredi_psychologist_thoughts 
+                WHERE user_id = $1 
+                ORDER BY created_at DESC LIMIT 1
+            """, user_id)
+            
+            return {
+                'total': total or 0,
+                'active': active or 0,
+                'inactive': (total or 0) - (active or 0),
+                'by_type': {row['thought_type']: row['count'] for row in by_type},
+                'last_thought': {
+                    'text': last['thought_text'][:100] if last else None,
+                    'type': last['thought_type'] if last else None,
+                    'created_at': last['created_at'].isoformat() if last and last['created_at'] else None
+                } if last else None
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения статистики: {e}")
+        return {}
+
+
+def get_psychologist_thoughts_stats(user_id: int) -> Dict[str, Any]:
+    """Синхронная обертка"""
+    try:
+        if not db_loop_manager.is_ready():
+            return {}
+        
+        result = db_loop_manager.run_coro(
+            get_psychologist_thoughts_stats_async,
+            user_id,
+            timeout=10
+        )
+        return result if result is not None else {}
+    except Exception as e:
+        logger.error(f"❌ Ошибка get_psychologist_thoughts_stats: {e}")
+        return {}
+
+
+# ============================================
+# ФУНКЦИИ ДЛЯ СОХРАНЕНИЯ РЕЗУЛЬТАТОВ ТЕСТА
+# ============================================
+
+async def save_test_result_to_db_async(user_id, test_type, user_data_dict=None):
+    """Асинхронная версия сохранения результатов теста"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения результатов {user_id}")
+            return None
+        
+        if user_data_dict is None:
+            from state import user_data as global_user_data
+            user_data_dict = global_user_data
+        
+        data = user_data_dict.get(user_id, {})
+        
+        if not data:
+            logger.warning(f"⚠️ Нет данных для пользователя {user_id}")
+            return None
+        
+        profile_code = None
+        if data.get("profile_data"):
+            profile_code = data["profile_data"].get("display_name")
+        elif data.get("ai_generated_profile"):
+            import re
+            match = re.search(r'СБ-\d+_ТФ-\d+_УБ-\d+_ЧВ-\d+', data.get("ai_generated_profile", ""))
+            if match:
+                profile_code = match.group(0)
+        
+        test_id = await db.save_test_result(
+            user_id=user_id,
+            test_type=test_type,
+            results=data,
+            profile_code=profile_code,
+            perception_type=data.get("perception_type"),
+            thinking_level=data.get("thinking_level"),
+            vectors=data.get("behavioral_levels"),
+            deep_patterns=data.get("deep_patterns"),
+            confinement_model=data.get("confinement_model")
+        )
+        
+        all_answers = data.get("all_answers", [])
+        if all_answers and test_id:
+            for answer in all_answers:
+                await db.save_test_answer(
+                    user_id=user_id,
+                    test_result_id=test_id,
+                    stage=answer.get('stage', 0),
+                    question_index=answer.get('question_index', 0),
+                    question_text=answer.get('question', ''),
+                    answer_text=answer.get('answer', ''),
+                    answer_value=answer.get('option', ''),
+                    scores=answer.get('scores'),
+                    measures=answer.get('measures'),
+                    strategy=answer.get('strategy'),
+                    dilts=answer.get('dilts'),
+                    pattern=answer.get('pattern'),
+                    target=answer.get('target')
+                )
+        
+        thought = data.get('psychologist_thought')
+        if thought:
+            await save_psychologist_thought_async(
+                user_id=user_id,
+                thought_text=thought,
+                test_result_id=test_id,
+                thought_type='psychologist_thought',
+                metadata={
+                    'model_version': data.get('model_version', 'deepseek'),
+                    'generation_time_ms': data.get('generation_time_ms'),
+                    'profile_code': profile_code
+                }
+            )
+        
+        profile_description = data.get('ai_generated_profile')
+        if profile_description:
+            await save_psychologist_thought_async(
+                user_id=user_id,
+                thought_text=profile_description,
+                test_result_id=test_id,
+                thought_type='profile_description',
+                thought_summary=profile_description[:200],
+                metadata={
+                    'profile_code': profile_code,
+                    'vectors': data.get('behavioral_levels'),
+                    'perception_type': data.get('perception_type'),
+                    'thinking_level': data.get('thinking_level')
+                }
+            )
+        
+        logger.info(f"📝 Результаты теста для пользователя {user_id} сохранены (ID: {test_id})")
+        return test_id
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения результатов теста для {user_id}: {e}")
+        return None
+
+
+def save_test_result_to_db(user_id, test_type, user_data_dict=None):
+    """Синхронная обертка"""
+    try:
+        if not db_loop_manager.is_ready():
+            return None
+        
+        result = db_loop_manager.run_coro(
+            save_test_result_to_db_async,
+            user_id,
+            test_type,
+            user_data_dict,
+            timeout=25
+        )
+        return result if result is not None else None
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_test_result_to_db: {e}")
+        return None
+
+
+async def save_test_result_full_async(
+    user_id: int,
+    test_type: str,
+    results: Dict,
+    profile_code: str = None,
+    perception_type: str = None,
+    thinking_level: int = None,
+    vectors: Dict = None,
+    deep_patterns: Dict = None,
+    confinement_model: Dict = None
+) -> Optional[int]:
+    """Асинхронная версия с полными параметрами"""
+    try:
+        if not await ensure_db_connection():
+            logger.error(f"❌ Нет соединения с БД для сохранения результатов {user_id}")
+            return None
+        
+        if vectors is None and results.get("behavioral_levels"):
+            vectors = results.get("behavioral_levels")
+        
+        if profile_code is None:
+            if results.get("profile_data"):
+                profile_code = results["profile_data"].get("display_name")
+            elif results.get("ai_generated_profile"):
+                import re
+                match = re.search(r'СБ-\d+_ТФ-\d+_УБ-\d+_ЧВ-\d+', results.get("ai_generated_profile", ""))
+                if match:
+                    profile_code = match.group(0)
+        
+        if perception_type is None:
+            perception_type = results.get("perception_type")
+        
+        if thinking_level is None:
+            thinking_level = results.get("thinking_level")
+        
+        if deep_patterns is None:
+            deep_patterns = results.get("deep_patterns")
+        
+        if confinement_model is None:
+            confinement_model = results.get("confinement_model")
+        
+        test_id = await db.save_test_result(
+            user_id=user_id,
+            test_type=test_type,
+            results=results,
+            profile_code=profile_code,
+            perception_type=perception_type,
+            thinking_level=thinking_level,
+            vectors=vectors,
+            deep_patterns=deep_patterns,
+            confinement_model=confinement_model
+        )
+        
+        all_answers = results.get("all_answers", [])
+        if all_answers and test_id:
+            for answer in all_answers:
+                await db.save_test_answer(
+                    user_id=user_id,
+                    test_result_id=test_id,
+                    stage=answer.get('stage', 0),
+                    question_index=answer.get('question_index', 0),
+                    question_text=answer.get('question', ''),
+                    answer_text=answer.get('answer', ''),
+                    answer_value=answer.get('option', ''),
+                    scores=answer.get('scores'),
+                    measures=answer.get('measures'),
+                    strategy=answer.get('strategy'),
+                    dilts=answer.get('dilts'),
+                    pattern=answer.get('pattern'),
+                    target=answer.get('target')
+                )
+        
+        thought = results.get('psychologist_thought')
+        if thought:
+            await save_psychologist_thought_async(
+                user_id=user_id,
+                thought_text=thought,
+                test_result_id=test_id,
+                thought_type='psychologist_thought',
+                metadata={
+                    'model_version': results.get('model_version', 'deepseek'),
+                    'generation_time_ms': results.get('generation_time_ms'),
+                    'profile_code': profile_code
+                }
+            )
+        
+        profile_description = results.get('ai_generated_profile')
+        if profile_description:
+            await save_psychologist_thought_async(
+                user_id=user_id,
+                thought_text=profile_description,
+                test_result_id=test_id,
+                thought_type='profile_description',
+                thought_summary=profile_description[:200],
+                metadata={
+                    'profile_code': profile_code,
+                    'vectors': vectors,
+                    'perception_type': perception_type,
+                    'thinking_level': thinking_level
+                }
+            )
+        
+        logger.info(f"📝 Результаты теста для пользователя {user_id} сохранены (ID: {test_id})")
+        return test_id
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения результатов теста для {user_id}: {e}")
+        return None
+
+
+def save_test_result_to_db_full(
+    user_id: int,
+    test_type: str,
+    results: Dict,
+    profile_code: str = None,
+    perception_type: str = None,
+    thinking_level: int = None,
+    vectors: Dict = None,
+    deep_patterns: Dict = None,
+    confinement_model: Dict = None
+) -> Optional[int]:
+    """Синхронная обертка"""
+    try:
+        if not db_loop_manager.is_ready():
+            return None
+        
+        result = db_loop_manager.run_coro(
+            save_test_result_full_async,
+            user_id,
+            test_type,
+            results,
+            profile_code,
+            perception_type,
+            thinking_level,
+            vectors,
+            deep_patterns,
+            confinement_model,
+            timeout=25
+        )
+        return result if result is not None else None
+    except Exception as e:
+        logger.error(f"❌ Ошибка save_test_result_to_db_full: {e}")
+        return None
+
+
+# ============================================
+# ЭКСПОРТ
+# ============================================
+
+__all__ = [
+    'db',
+    'db_loop_manager',
+    'init_db',
+    'close_db',
+    'save_telegram_user',
+    'save_user',
+    'save_user_to_db',
+    'load_user_from_db',
+    'save_test_result_to_db',
+    'save_test_result_to_db_full',
+    'log_event',
+    'ensure_db_connection',
+    'execute_with_retry',
+    'sync_db_call',
+    'save_user_data',
+    'get_user_data',
+    'save_user_context',
+    'get_user_context',
+    'save_route_data',
+    'create_psychologist_thoughts_table',
+    'save_psychologist_thought',
+    'get_psychologist_thought',
+    'get_psychologist_thought_history',
+    'get_all_psychologist_thoughts',
+    'delete_psychologist_thought',
+    'update_psychologist_thought',
+    'get_thoughts_by_test_result',
+    'get_psychologist_thoughts_stats',
+    'get_user_goals',
+    'save_goal', 
+]
+
+logger.info("✅ db_instance инициализирован (версия 3.10 - исправлен асинхронный вызов в save_psychologist_thought_async)")
