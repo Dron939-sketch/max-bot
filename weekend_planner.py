@@ -13,14 +13,12 @@ import asyncio
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 
-# Заменяем aiogram на maxibot
 from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from profiles import VECTORS
 from services import call_deepseek
 
-# ✅ ДОБАВЛЕНО: импорт для БД
-from db_instance import db
+# БД импортируется лениво внутри методов
 
 logger = logging.getLogger(__name__)
 
@@ -29,40 +27,22 @@ class WeekendPlanner:
     """Генератор идей на выходные с учётом профиля и кэшированием в БД"""
     
     def __init__(self):
-        self.cache = {}  # in-memory кэш (для быстрого доступа)
+        self.cache = {}
     
     async def get_weekend_ideas(self, user_id: int, user_name: str, scores: dict, profile_data: dict, context=None) -> str:
-        """
-        Генерирует идеи на выходные на основе профиля
-        
-        Args:
-            user_id: ID пользователя
-            user_name: Имя пользователя
-            scores: Словарь с баллами по векторам
-            profile_data: Данные профиля
-            context: Контекст пользователя (опционально)
-            
-        Returns:
-            Отформатированный текст с идеями
-        """
-        # ✅ СНАЧАЛА ПРОВЕРЯЕМ КЭШ В БД
         cached = await self._get_cached_from_db(user_id)
         if cached:
             logger.info(f"✅ Найдены кэшированные идеи для пользователя {user_id}")
             return cached
         
-        # Проверяем in-memory кэш
         cache_key = f"{user_id}_{datetime.now().strftime('%Y-%m-%d')}"
         if cache_key in self.cache:
             return self.cache[cache_key]
         
-        # Определяем основной вектор (самый слабый)
         if scores:
             min_vector = min(scores.items(), key=lambda x: x[1])
             main_vector = min_vector[0]
             level = self._level(min_vector[1])
-            
-            # Описание вектора
             vector_names = {
                 "СБ": "страх конфликтов и защиту границ",
                 "ТФ": "отношения с деньгами и ресурсами",
@@ -75,7 +55,6 @@ class WeekendPlanner:
             vector_desc = "психологический профиль"
             level = 3
         
-        # Пол для обращения
         gender = context.gender if context else "other"
         address = "друг"
         if gender == "male":
@@ -83,7 +62,6 @@ class WeekendPlanner:
         elif gender == "female":
             address = "сестрёнка"
         
-        # Погода для контекста
         weather_context = ""
         if context and context.weather_cache:
             weather = context.weather_cache
@@ -92,7 +70,6 @@ class WeekendPlanner:
             icon = weather.get('icon', '☁️')
             weather_context = f"Погода: {icon} {desc}, {temp}°C. "
         
-        # Формируем промпт для ИИ
         prompt = f"""
 Ты - психолог Фреди. Сгенерируй идеи для выходных для пользователя.
 
@@ -116,15 +93,13 @@ class WeekendPlanner:
 ФОРМАТ:
 Привет, {address}! Вот несколько идей, как провести выходные с пользой для души:
 
-🌟 *Категория 1*
+🌟 Категория 1
 • Идея 1
 • Идея 2
 
-🎨 *Категория 2*
+🎨 Категория 2
 • Идея 1
 • Идея 2
-
-... и так далее.
 
 Выбери то, что откликается!
 """
@@ -132,80 +107,55 @@ class WeekendPlanner:
         try:
             response = await call_deepseek(prompt, max_tokens=1000)
             if response:
-                # Форматируем ответ
                 formatted = self._format_response(response, address)
-                
-                # ✅ СОХРАНЯЕМ В КЭШ БД
                 await self._cache_to_db(user_id, formatted, main_vector, level)
-                
-                # Сохраняем в in-memory кэш
                 self.cache[cache_key] = formatted
-                
                 return formatted
         except Exception as e:
             logger.error(f"❌ Ошибка генерации идей: {e}")
-            # Логируем ошибку
             await self._log_generation_error(user_id, str(e))
         
-        # Запасной вариант
         fallback = await self._get_fallback_ideas(main_vector, level, address)
-        
-        # ✅ СОХРАНЯЕМ ЗАПАСНОЙ ВАРИАНТ В КЭШ БД
         await self._cache_to_db(user_id, fallback, main_vector, level)
         self.cache[cache_key] = fallback
-        
         return fallback
     
     # ============================================
-    # ✅ ДОБАВЛЕНО: ФУНКЦИИ ДЛЯ РАБОТЫ С БД
+    # ФУНКЦИИ ДЛЯ РАБОТЫ С БД (lazy import)
     # ============================================
     
     async def _cache_to_db(self, user_id: int, ideas_text: str, main_vector: str, main_level: int):
-        """Сохраняет сгенерированные идеи в кэш БД"""
         try:
+            from db_instance import db
             await db.cache_weekend_ideas(
-                user_id=user_id,
-                ideas_text=ideas_text,
-                main_vector=main_vector,
-                main_level=main_level
+                user_id=user_id, ideas_text=ideas_text,
+                main_vector=main_vector, main_level=main_level
             )
-            logger.debug(f"💾 Идеи для пользователя {user_id} сохранены в БД")
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения идей в БД для {user_id}: {e}")
     
     async def _get_cached_from_db(self, user_id: int) -> Optional[str]:
-        """Получает кэшированные идеи из БД"""
         try:
+            from db_instance import db
             return await db.get_cached_weekend_ideas(user_id)
         except Exception as e:
             logger.error(f"❌ Ошибка получения кэша из БД для {user_id}: {e}")
             return None
     
     async def _log_generation_error(self, user_id: int, error: str):
-        """Логирует ошибку генерации в БД"""
         try:
-            await db.log_event(
-                user_id,
-                'weekend_ideas_error',
-                {
-                    'error': error[:200],
-                    'timestamp': time.time()
-                }
-            )
+            from db_instance import db
+            await db.log_event(user_id, 'weekend_ideas_error',
+                {'error': error[:200], 'timestamp': time.time()})
         except Exception as e:
             logger.error(f"❌ Ошибка логирования: {e}")
     
     async def clear_user_cache(self, user_id: int):
-        """Очищает кэш пользователя в БД"""
         try:
+            from db_instance import db
             async with db.get_connection() as conn:
                 await conn.execute(
-                    "DELETE FROM fredi_weekend_ideas_cache WHERE user_id = $1",
-                    user_id
-                )
-            logger.info(f"🧹 Кэш пользователя {user_id} очищен")
-            
-            # Очищаем in-memory кэш
+                    "DELETE FROM fredi_weekend_ideas_cache WHERE user_id = $1", user_id)
             keys_to_delete = [k for k in self.cache.keys() if str(user_id) in k]
             for key in keys_to_delete:
                 del self.cache[key]
@@ -213,32 +163,21 @@ class WeekendPlanner:
             logger.error(f"❌ Ошибка очистки кэша для {user_id}: {e}")
     
     async def get_cache_stats(self, user_id: int = None) -> Dict[str, Any]:
-        """Получает статистику кэша"""
         try:
+            from db_instance import db
             async with db.get_connection() as conn:
                 if user_id:
-                    # Статистика для конкретного пользователя
                     row = await conn.fetchrow("""
-                        SELECT 
-                            COUNT(*) as total,
-                            MAX(created_at) as last_generated,
-                            main_vector,
-                            main_level
-                        FROM fredi_weekend_ideas_cache
-                        WHERE user_id = $1
+                        SELECT COUNT(*) as total, MAX(created_at) as last_generated,
+                               main_vector, main_level
+                        FROM fredi_weekend_ideas_cache WHERE user_id = $1
                         GROUP BY main_vector, main_level
                     """, user_id)
-                    
-                    if row:
-                        return dict(row)
-                    return {}
+                    return dict(row) if row else {}
                 else:
-                    # Общая статистика
                     rows = await conn.fetch("""
-                        SELECT 
-                            COUNT(DISTINCT user_id) as users_with_cache,
-                            COUNT(*) as total_entries,
-                            AVG(EXTRACT(EPOCH FROM (expires_at - created_at))/3600) as avg_cache_hours
+                        SELECT COUNT(DISTINCT user_id) as users_with_cache,
+                               COUNT(*) as total_entries
                         FROM fredi_weekend_ideas_cache
                     """)
                     return dict(rows[0]) if rows else {}
@@ -251,21 +190,14 @@ class WeekendPlanner:
     # ============================================
     
     def _format_response(self, text: str, address: str) -> str:
-        """Форматирует ответ для отправки"""
-        # Убираем markdown
         text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
         text = re.sub(r'__(.*?)__', r'\1', text)
         text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
-        
-        # Убеждаемся, что есть обращение
         if address and not text.lower().startswith(address.lower()):
             text = f"Привет, {address}!\n\n{text}"
-        
         return text
     
     async def _get_fallback_ideas(self, vector: str, level: int, address: str) -> str:
-        """Запасные идеи, если ИИ недоступен"""
-        
         base_ideas = {
             "СБ": [
                 "🚶 Прогулка в новом месте (парк, район, где ты не был)",
@@ -296,50 +228,36 @@ class WeekendPlanner:
                 "💌 Написать письмо благодарности кому-то"
             ]
         }
-        
         ideas = base_ideas.get(vector, base_ideas["ЧВ"])
         random.shuffle(ideas)
-        
         categories = {
             "СБ": "🌿 ГАРМОНИЯ И СПОКОЙСТВИЕ",
             "ТФ": "💰 РЕСУРСЫ И ИЗОБИЛИЕ",
             "УБ": "📚 ПОЗНАНИЕ И СМЫСЛЫ",
             "ЧВ": "🤝 ОТНОШЕНИЯ И ТЕПЛО"
         }
-        
         category = categories.get(vector, "🌟 ИДЕИ НА ВЫХОДНЫЕ")
-        
         text = f"Привет, {address}! Вот несколько идей, как провести выходные с пользой:\n\n"
-        text += f"🌟 *{category}*\n"
+        text += f"🌟 {category}\n"
         for idea in ideas[:4]:
             text += f"• {idea}\n"
         text += "\nВыбери то, что откликается!"
-        
         return text
     
     def _level(self, score: float) -> int:
-        """Дробный балл 1..4 → целый уровень 1..6"""
-        if score <= 1.49:
-            return 1
-        elif score <= 2.00:
-            return 2
-        elif score <= 2.50:
-            return 3
-        elif score <= 3.00:
-            return 4
-        elif score <= 3.50:
-            return 5
-        else:
-            return 6
+        if score <= 1.49: return 1
+        elif score <= 2.00: return 2
+        elif score <= 2.50: return 3
+        elif score <= 3.00: return 4
+        elif score <= 3.50: return 5
+        else: return 6
 
 
 def get_weekend_planner() -> WeekendPlanner:
-    """Возвращает экземпляр планировщика"""
     return WeekendPlanner()
 
 
 def get_weekend_ideas_keyboard() -> InlineKeyboardMarkup:
-    """Возвращает клавиатуру для идей на выходные"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 ЕЩЁ ИДЕИ", callback_data="weekend_ideas")],
         [InlineKeyboardButton(text="❓ ЗАДАТЬ ВОПРОС", callback_data="ask_question")],
@@ -348,12 +266,4 @@ def get_weekend_ideas_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-# ============================================
-# ЭКСПОРТ
-# ============================================
-
-__all__ = [
-    'WeekendPlanner',
-    'get_weekend_planner',
-    'get_weekend_ideas_keyboard'
-]
+__all__ = ['WeekendPlanner', 'get_weekend_planner', 'get_weekend_ideas_keyboard']
