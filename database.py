@@ -507,26 +507,20 @@ class BotDatabase:
                     user_id
                 )
                 
-                if existing:
-                    await conn.execute("""
-                        UPDATE fredi_users SET
-                            username = $2,
-                            first_name = $3,
-                            last_name = $4,
-                            language_code = $5,
-                            updated_at = NOW(),
-                            last_activity = NOW()
-                        WHERE user_id = $1
-                    """, user_id, username, first_name, last_name, language_code)
-                    return False
-                else:
-                    await conn.execute("""
-                        INSERT INTO fredi_users (
-                            user_id, username, first_name, last_name, 
-                            language_code, created_at, updated_at, last_activity
-                        ) VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), NOW())
-                    """, user_id, username, first_name, last_name, language_code)
-                    return True
+                await conn.execute("""
+                    INSERT INTO fredi_users (
+                        user_id, username, first_name, last_name,
+                        language_code, created_at, updated_at, last_activity
+                    ) VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), NOW())
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        username = EXCLUDED.username,
+                        first_name = EXCLUDED.first_name,
+                        last_name = EXCLUDED.last_name,
+                        language_code = EXCLUDED.language_code,
+                        updated_at = NOW(),
+                        last_activity = NOW()
+                """, user_id, username, first_name, last_name, language_code)
+                return True
     
     async def get_telegram_user(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Получение информации о пользователе"""
