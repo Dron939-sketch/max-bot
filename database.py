@@ -52,13 +52,8 @@ class BotDatabase:
             logger.info("🔄 Создаём пул соединений к PostgreSQL...")
             
             # Оптимальные настройки пула
-            # Убираем sslmode из DSN — asyncpg не понимает его в URL
-            dsn = self.dsn
-            for param in ['?sslmode=require', '?sslmode=disable', '?ssl=true']:
-                dsn = dsn.replace(param, '')
-
             self.pool = await asyncpg.create_pool(
-                dsn,
+                self.dsn,
                 min_size=min_size,
                 max_size=max_size,
                 command_timeout=30,
