@@ -1,20 +1,18 @@
 services:
-  # ============================================
-  # БЭКЕНД: MAX бот + API
-  # ============================================
   - type: web
     name: max-bot-1-ywpz
     runtime: python
     buildCommand: |
       pip install -r requirements.txt
-      echo "✅ MAX бот собран"
+      find . -name "*.pyc" -delete
+      find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+      echo "✅ Сборка и очистка кэша завершены"
     startCommand: python main.py
     numInstances: 1
     plan: free
     envVars:
       - key: MAX_TOKEN
         sync: false
-        description: "Токен MAX бота"
       - key: DEEPSEEK_API_KEY
         sync: false
       - key: DEEPGRAM_API_KEY
@@ -32,14 +30,10 @@ services:
     healthCheckPath: /health
     autoDeploy: true
 
-  # ============================================
-  # ФРОНТЕНД: Статический сайт (мини-приложение)
-  # ============================================
   - type: web
     name: max-bot-miniapp
     runtime: static
-    buildCommand: |
-      echo "✅ Статический сайт готов"
+    buildCommand: echo "✅ Статический сайт готов"
     staticPublishPath: .
     headers:
       - path: /*
@@ -56,7 +50,3 @@ services:
         source: /health
         destination: https://max-bot-1-ywpz.onrender.com/health
     autoDeploy: true
-
-# ============================================
-# ЛОКАЛЬНАЯ БД УДАЛЕНА — используем единую fredi_db_flz2
-# ============================================
