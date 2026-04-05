@@ -34,8 +34,7 @@ from state import (
     TestStates, user_names, clear_state
 )
 
-# ✅ ДОБАВЛЕНО: импорт для БД
-from db_instance import db, save_user_to_db
+# БД импортируется лениво внутри функций
 
 # Импорты из formatters.py
 from formatters import bold, italic, clean_text_for_safe_display
@@ -100,6 +99,7 @@ def get_user_name(user_id: int) -> str:
 async def save_goal_to_db(user_id: int, goal_data: Dict[str, Any], status: str = "selected"):
     """Сохраняет выбранную цель в БД"""
     try:
+        from db_instance import db
         await db.log_event(
             user_id,
             'goal_selected',
@@ -119,6 +119,7 @@ async def save_goal_to_db(user_id: int, goal_data: Dict[str, Any], status: str =
 async def save_route_to_db(user_id: int, route_data: Dict[str, Any], goal_data: Dict[str, Any]):
     """Сохраняет маршрут в БД"""
     try:
+        from db_instance import db, save_user_to_db
         # Сохраняем в user_routes
         from state import user_routes
         user_routes[user_id] = {
@@ -1345,6 +1346,7 @@ async def complete_route(call: CallbackQuery, state_data: Dict):
     destination = state_data.get("current_destination", {})
     
     # ✅ ИСПРАВЛЕНО: Логируем завершение в БД через run_async_task
+    from db_instance import db
     run_async_task(db.log_event,
         user_id,
         'route_completed',
