@@ -25,14 +25,19 @@ logger = logging.getLogger(__name__)
 # ============================================
 # URL базы данных
 # ============================================
-DATABASE_URL = os.environ.get(
+# Убираем sslmode из URL — asyncpg не понимает его, передаём отдельно
+_raw_url = os.environ.get(
     "DATABASE_URL",
     "postgresql://fredi_db_flz2_user:PP1FP91G1P6mn1uS8iBLGlk38bKqzkGy@dpg-d739b31r0fns739a7oj0-a/fredi_db_flz2"
 )
+# Очищаем sslmode из URL
+DATABASE_URL = _raw_url.replace("?sslmode=require", "").replace("?sslmode=disable", "").replace("?ssl=true", "").strip()
 
 # Маскируем пароль в логах
 url_parts = DATABASE_URL.split('@')
 safe_url = f"postgresql://{url_parts[1]}" if len(url_parts) > 1 else DATABASE_URL[:50] + "..."
+print(f"🔗 DATABASE_URL из env: {'✅ задан' if _raw_url != DATABASE_URL or 'postgresql' in DATABASE_URL else '❌ ПУСТОЙ!'}")
+print(f"🔗 Используем URL: {safe_url}")
 logger.info(f"🔗 Используем URL базы данных: {safe_url}")
 
 # ============================================
