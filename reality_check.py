@@ -4238,7 +4238,7 @@ def save_feasibility_result(user_id: int, goal_id: str, result: Dict) -> None:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
         # Выносим блокирующий I/O в тредпул
-        await asyncio.to_thread(_save_to_file)
+        asyncio.to_thread(_save_to_file)
             
     except Exception as e:
         logger.error(f"Ошибка при сохранении результата: {e}")
