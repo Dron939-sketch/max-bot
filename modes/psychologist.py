@@ -289,7 +289,7 @@ class PsychologistMode(BaseMode):
 И когда будете готовы, вы можете вернуться... с новым пониманием... с новыми ресурсами..."""
             
             return induction
-        except:
+        except Exception:
             # Запасной вариант, если импорт не удался
             return """Устройтесь поудобнее, закройте глаза, если хотите...
 
@@ -326,7 +326,7 @@ class PsychologistMode(BaseMode):
         try:
             from hypno_module import Truisms
             tru = Truisms()
-        except:
+        except Exception:
             # Запасной вариант
             class Tru:
                 def about_self(self, s): return s

@@ -26,10 +26,9 @@ logger = logging.getLogger(__name__)
 # URL базы данных
 # ============================================
 # Убираем sslmode из URL — asyncpg не понимает его, передаём отдельно
-_raw_url = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://fredi_db_flz2_user:PP1FP91G1P6mn1uS8iBLGlk38bKqzkGy@dpg-d739b31r0fns739a7oj0-a/fredi_db_flz2"
-)
+_raw_url = os.environ.get("DATABASE_URL", "")
+if not _raw_url:
+    raise RuntimeError("DATABASE_URL environment variable is not set")
 # Очищаем sslmode из URL
 DATABASE_URL = _raw_url.replace("?sslmode=require", "").replace("?sslmode=disable", "").replace("?ssl=true", "").strip()
 
@@ -374,14 +373,10 @@ def save_goal(user_id: int, goal_text: str) -> Optional[int]:
 # ============================================
 
 # Перечитываем DATABASE_URL прямо перед созданием — гарантируем актуальное значение
-_final_url = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://fredi_db_flz2_user:PP1FP91G1P6mn1uS8iBLGlk38bKqzkGy@dpg-d739b31r0fns739a7oj0-a/fredi_db_flz2"
-).replace("?sslmode=require","").replace("?sslmode=disable","").replace("?ssl=true","").strip()
+_final_url = os.environ.get("DATABASE_URL", "").replace("?sslmode=require","").replace("?sslmode=disable","").replace("?ssl=true","").strip()
 
 if not _final_url.startswith('postgresql'):
-    print(f"⚠️ DATABASE_URL некорректный: '{_final_url[:50]}' — используем fallback")
-    _final_url = "postgresql://fredi_db_flz2_user:PP1FP91G1P6mn1uS8iBLGlk38bKqzkGy@dpg-d739b31r0fns739a7oj0-a/fredi_db_flz2"
+    raise RuntimeError(f"DATABASE_URL некорректный или не задан: '{_final_url[:50]}'")
 
 # Обновляем DATABASE_URL финальным значением
 DATABASE_URL = _final_url
@@ -465,7 +460,7 @@ async def ensure_db_connection(max_retries: int = 3, delay: float = 1.0):
                 try:
                     async with asyncio.timeout(5):
                         await db.disconnect()
-                except:
+                except Exception:
                     pass
                 
                 async with asyncio.timeout(15):

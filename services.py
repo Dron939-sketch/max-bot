@@ -926,7 +926,7 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
         for k, v in profile_data.items():
             try:
                 simplified[k] = str(v)[:500] if not isinstance(v, (int, float, bool, str)) else v
-            except:
+            except Exception:
                 simplified[k] = str(v)[:200]
         profile_json = json.dumps(simplified, ensure_ascii=False, indent=2)
         logger.warning("⚠️ Используем упрощенные данные")

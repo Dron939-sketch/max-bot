@@ -671,7 +671,7 @@ async def handle_voice_message(message: Message, state=None):
             if status_msg:
                 try:
                     await safe_delete_message(chat_id, status_msg.message_id)
-                except:
+                except Exception:
                     pass
             
             await safe_send_message(

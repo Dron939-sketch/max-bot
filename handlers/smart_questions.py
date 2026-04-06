@@ -266,7 +266,7 @@ async def handle_smart_question(
     if status_msg:
         try:
             safe_delete_message(call.message.chat.id, status_msg.message_id)
-        except:
+        except Exception:
             pass
     
     # ✅ Отправляем ответ БЕЗ форматирования (только текст)

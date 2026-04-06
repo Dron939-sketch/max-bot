@@ -2008,7 +2008,7 @@ def cleanup_resources():
             try:
                 check_single_instance.lock_fp.close()
                 logger.info("🔒 Закрыт файл блокировки")
-            except:
+            except Exception:
                 pass
         if not is_render and os.path.exists(LOCK_FILE):
             os.remove(LOCK_FILE)

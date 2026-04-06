@@ -114,7 +114,7 @@ def parse_life_context_answers(text: str) -> Dict[str, Any]:
                     if energy_match:
                         result['energy_level'] = int(energy_match.group(1))
                         result['energy_level'] = max(1, min(10, result['energy_level']))
-                except:
+                except Exception:
                     pass
             
             if 'комнат' in answer.lower() or 'пространств' in answer.lower():
@@ -169,7 +169,7 @@ def parse_goal_context_answers(text: str) -> Dict[str, Any]:
                 # Реалистичные границы: 1-168 часов в неделю
                 result['time_per_week'] = max(1, min(168, hours))
                 break
-            except:
+            except Exception:
                 pass
     
     # Если не нашли по паттернам, ищем любое число, похожее на часы
@@ -181,7 +181,7 @@ def parse_goal_context_answers(text: str) -> Dict[str, Any]:
                 if 1 <= val <= 168:
                     result['time_per_week'] = val
                     break
-            except:
+            except Exception:
                 pass
     
     # Ищем бюджет
@@ -202,7 +202,7 @@ def parse_goal_context_answers(text: str) -> Dict[str, Any]:
                 else:
                     result['budget'] = amount
                 break
-            except:
+            except Exception:
                 pass
     
     # Ищем упоминания оборудования
@@ -4228,7 +4228,7 @@ def save_feasibility_result(user_id: int, goal_id: str, result: Dict) -> None:
             with open(filename, 'r', encoding='utf-8') as f:
                 try:
                     data = json.load(f)
-                except:
+                except Exception:
                     data = []
         
         # Добавляем новый результат
