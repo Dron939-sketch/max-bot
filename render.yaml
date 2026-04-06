@@ -22,7 +22,7 @@ services:
       - key: OPENWEATHER_API_KEY
         sync: false
       - key: DATABASE_URL
-        value: postgresql://fredi_db_flz2_user:PP1FP91G1P6mn1uS8iBLGlk38bKqzkGy@dpg-d739b31r0fns739a7oj0-a.oregon-postgres.render.com/fredi_db_flz2
+        sync: false
       - key: PORT
         value: 10000
       - key: RENDER
