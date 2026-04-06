@@ -655,7 +655,7 @@ def process_broadcast(message: Message, text: str):
     # Удаляем статусное сообщение
     try:
         safe_delete_message(message.chat.id, status_msg.message_id)
-    except:
+    except Exception:
         pass
     
     # Отправляем отчёт

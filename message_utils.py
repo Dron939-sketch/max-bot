@@ -323,7 +323,7 @@ def send_with_status_cleanup(
                     bot.delete_message(chat_id, msg_id)
                     logger.debug(f"🗑️ Удалено сообщение из истории {msg_id}")
                     time.sleep(0.05)
-                except:
+                except Exception:
                     pass
             
             user_messages_history[chat_id] = history[-keep_last:] if keep_last > 0 else []
@@ -504,7 +504,7 @@ def clear_user_history(chat_id: int, keep_last: int = 0):
             bot.delete_message(chat_id, msg_id)
             logger.debug(f"🗑️ Удалено сообщение {msg_id} при очистке истории")
             time.sleep(0.05)
-        except:
+        except Exception:
             pass
     
     user_messages_history[chat_id] = history

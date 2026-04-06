@@ -3,6 +3,7 @@
 Версия 2.0 - ПОЛНЫЙ НАБОР ЦЕЛЕЙ
 """
 
+import asyncio
 import logging
 import re
 from typing import Dict, List, Any, Tuple, Optional
@@ -114,7 +115,7 @@ def parse_life_context_answers(text: str) -> Dict[str, Any]:
                     if energy_match:
                         result['energy_level'] = int(energy_match.group(1))
                         result['energy_level'] = max(1, min(10, result['energy_level']))
-                except:
+                except Exception:
                     pass
             
             if 'комнат' in answer.lower() or 'пространств' in answer.lower():
@@ -169,7 +170,7 @@ def parse_goal_context_answers(text: str) -> Dict[str, Any]:
                 # Реалистичные границы: 1-168 часов в неделю
                 result['time_per_week'] = max(1, min(168, hours))
                 break
-            except:
+            except Exception:
                 pass
     
     # Если не нашли по паттернам, ищем любое число, похожее на часы
@@ -181,7 +182,7 @@ def parse_goal_context_answers(text: str) -> Dict[str, Any]:
                 if 1 <= val <= 168:
                     result['time_per_week'] = val
                     break
-            except:
+            except Exception:
                 pass
     
     # Ищем бюджет
@@ -202,7 +203,7 @@ def parse_goal_context_answers(text: str) -> Dict[str, Any]:
                 else:
                     result['budget'] = amount
                 break
-            except:
+            except Exception:
                 pass
     
     # Ищем упоминания оборудования
@@ -4216,32 +4217,28 @@ def save_feasibility_result(user_id: int, goal_id: str, result: Dict) -> None:
         import os
         from datetime import datetime
         
-        # Создаем папку для результатов, если её нет
-        os.makedirs("feasibility_results", exist_ok=True)
-        
-        # Формируем имя файла
-        filename = f"feasibility_results/user_{user_id}_{datetime.now().strftime('%Y%m%d')}.json"
-        
-        # Загружаем существующие результаты
-        data = []
-        if os.path.exists(filename):
-            with open(filename, 'r', encoding='utf-8') as f:
-                try:
-                    data = json.load(f)
-                except:
-                    data = []
-        
-        # Добавляем новый результат
-        data.append({
-            "user_id": user_id,
-            "goal_id": goal_id,
-            "result": result,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        # Сохраняем
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        def _save_to_file():
+            """Файловый I/O в отдельном потоке"""
+            os.makedirs("feasibility_results", exist_ok=True)
+            filename = f"feasibility_results/user_{user_id}_{datetime.now().strftime('%Y%m%d')}.json"
+            data = []
+            if os.path.exists(filename):
+                with open(filename, 'r', encoding='utf-8') as f:
+                    try:
+                        data = json.load(f)
+                    except Exception:
+                        data = []
+            data.append({
+                "user_id": user_id,
+                "goal_id": goal_id,
+                "result": result,
+                "timestamp": datetime.now().isoformat()
+            })
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+        # Выносим блокирующий I/O в тредпул
+        await asyncio.to_thread(_save_to_file)
             
     except Exception as e:
         logger.error(f"Ошибка при сохранении результата: {e}")

@@ -9,7 +9,6 @@
 
 import asyncio
 import asyncpg
-import pickle
 import json
 import logging
 from datetime import datetime, timedelta
@@ -219,6 +218,7 @@ class BotDatabase:
                         first_name TEXT,
                         last_name TEXT,
                         language_code TEXT,
+                        platform TEXT DEFAULT 'max',
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                         last_activity TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -273,7 +273,7 @@ class BotDatabase:
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS fredi_context_objects (
                         user_id BIGINT PRIMARY KEY REFERENCES fredi_users(user_id) ON DELETE CASCADE,
-                        context_data BYTEA NOT NULL,
+                        context_data TEXT NOT NULL,  -- JSON объект
                         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                     )
                 """)
@@ -678,30 +678,31 @@ class BotDatabase:
     # ====================== СЕРИАЛИЗОВАННЫЕ ОБЪЕКТЫ ======================
     
     async def save_pickled_context(self, user_id: int, context_obj) -> None:
-        """Сохраняет сериализованный объект UserContext"""
+        """Сохраняет сериализованный объект UserContext как JSON"""
         async with self.get_connection() as conn:
             async with conn.transaction():
-                pickled = pickle.dumps(context_obj)
+                serializable = self._make_json_serializable(context_obj)
+                json_data = json.dumps(serializable, default=str, ensure_ascii=False)
                 await conn.execute("""
                     INSERT INTO fredi_context_objects (user_id, context_data, updated_at)
                     VALUES ($1, $2, NOW())
                     ON CONFLICT (user_id) DO UPDATE SET
                         context_data = $2,
                         updated_at = NOW()
-                """, user_id, pickled)
-    
+                """, user_id, json_data)
+
     async def load_pickled_context(self, user_id: int):
-        """Загружает сериализованный объект UserContext"""
+        """Загружает сериализованный объект UserContext из JSON"""
         async with self.get_connection() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     "SELECT context_data FROM fredi_context_objects WHERE user_id = $1",
                     user_id
                 )
-                
+
                 if row and row['context_data']:
                     try:
-                        return pickle.loads(row['context_data'])
+                        return json.loads(row['context_data'])
                     except Exception as e:
                         logger.error(f"Ошибка при десериализации контекста пользователя {user_id}: {e}")
                 

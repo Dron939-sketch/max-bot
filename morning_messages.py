@@ -116,7 +116,7 @@ class MorningMessageManager:
                     if isinstance(data, str):
                         try:
                             data = json.loads(data)
-                        except:
+                        except Exception:
                             data = {}
                     
                     morning_history.append({

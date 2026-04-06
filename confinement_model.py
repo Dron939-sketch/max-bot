@@ -725,7 +725,7 @@ class ConfinementModel9:
         try:
             model.created_at = datetime.fromisoformat(data.get('created_at', datetime.now().isoformat()))
             model.updated_at = datetime.fromisoformat(data.get('updated_at', datetime.now().isoformat()))
-        except:
+        except Exception:
             model.created_at = datetime.now()
             model.updated_at = datetime.now()
         

@@ -480,9 +480,9 @@ async def show_ai_profile_async(message: Message, user_id: int):
         if status_msg:
             try:
                 await safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
+            except Exception:
                 pass
-        
+
         if ai_profile:
             # Форматируем текст
             formatted_text = format_profile_text(ai_profile)
@@ -645,9 +645,9 @@ async def show_ai_profile_async(message: Message, user_id: int):
         if status_msg:
             try:
                 await safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
+            except Exception:
                 pass
-        
+
         text = f"""
 ⚠️ Ошибка генерации профиля
 
@@ -700,9 +700,9 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
         if status_msg:
             try:
                 await safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
+            except Exception:
                 pass
-        
+
         if thought:
             # Форматируем текст
             formatted_text = format_psychologist_text(thought, user_name)
@@ -805,9 +805,9 @@ async def show_psychologist_thought_async(message: Message, user_id: int):
         if status_msg:
             try:
                 await safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
+            except Exception:
                 pass
-        
+
         text = f"""
 ⚠️ Ошибка генерации
 
@@ -891,9 +891,9 @@ async def show_final_profile_async(message: Message, user_id: int):
         if status_msg:
             try:
                 await safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
+            except Exception:
                 pass
-        
+
         await show_ai_profile_async(message, user_id)
         return
     
@@ -965,13 +965,27 @@ def show_profile(message: Message, user_id: int):
     )
 
 
+def _run_in_new_loop(coro):
+    """Безопасно запускает корутину в новом потоке с отдельным event loop"""
+    def _target():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(coro)
+        except Exception as e:
+            logger.error(f"❌ Ошибка в фоновом потоке: {e}")
+        finally:
+            loop.close()
+    threading.Thread(target=_target, daemon=True).start()
+
+
 def show_ai_profile(message: Message, user_id: int):
     """Синхронная обертка для показа AI профиля"""
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(show_ai_profile_async(message, user_id))
     except RuntimeError:
-        asyncio.run(show_ai_profile_async(message, user_id))
+        _run_in_new_loop(show_ai_profile_async(message, user_id))
 
 
 def show_psychologist_thought(message: Message, user_id: int):
@@ -980,7 +994,7 @@ def show_psychologist_thought(message: Message, user_id: int):
         loop = asyncio.get_running_loop()
         loop.create_task(show_psychologist_thought_async(message, user_id))
     except RuntimeError:
-        asyncio.run(show_psychologist_thought_async(message, user_id))
+        _run_in_new_loop(show_psychologist_thought_async(message, user_id))
 
 
 def show_final_profile(message: Message, user_id: int):
@@ -989,7 +1003,7 @@ def show_final_profile(message: Message, user_id: int):
         loop = asyncio.get_running_loop()
         loop.create_task(show_final_profile_async(message, user_id))
     except RuntimeError:
-        asyncio.run(show_final_profile_async(message, user_id))
+        _run_in_new_loop(show_final_profile_async(message, user_id))
 
 
 def show_old_final_profile(message: Message, user_id: int, status_msg: Optional[Message] = None):
@@ -1022,9 +1036,9 @@ def show_old_final_profile(message: Message, user_id: int, status_msg: Optional[
     if status_msg:
         try:
             safe_delete_message(message.chat.id, status_msg.message_id)
-        except:
+        except Exception:
             pass
-    
+
     safe_send_message(
         message,
         text,

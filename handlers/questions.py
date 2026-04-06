@@ -1359,9 +1359,9 @@ def process_text_question_sync(
         if status_msg:
             try:
                 safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
+            except Exception:
                 pass
-        
+
         # ПОКАЗЫВАЕМ ТЕКСТ ВОПРОСА ТОЛЬКО ЕСЛИ НУЖНО
         if show_question_text:
             safe_send_message(
@@ -1471,7 +1471,7 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
                 if status_msg:
                     try:
                         await safe_delete_message(message.chat.id, status_msg.message_id)
-                    except:
+                    except Exception:
                         pass
                 
                 await safe_send_message(
@@ -1485,9 +1485,9 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
             if status_msg:
                 try:
                     await safe_delete_message(message.chat.id, status_msg.message_id)
-                except:
+                except Exception:
                     pass
-            
+
             # Обрабатываем как обычный вопрос, но НЕ показываем текст вопроса повторно
             await process_text_question_async(message, user_id, recognized_text, show_question_text=False)
             
@@ -1497,9 +1497,9 @@ async def process_voice_message_async(message: Message, user_id: int, file_path:
             if status_msg:
                 try:
                     await safe_delete_message(message.chat.id, status_msg.message_id)
-                except:
+                except Exception:
                     pass
-            
+
             await safe_send_message(
                 message,
                 "❌ Произошла ошибка при обработке голоса",

@@ -279,7 +279,7 @@ def set_mode_coach(call: types.CallbackQuery):
     # Отвечаем на callback (дополнительно)
     try:
         bot.answer_callback_query(call.id, "✅ Режим КОУЧ активирован")
-    except:
+    except Exception:
         pass
 
 
@@ -308,7 +308,7 @@ def set_mode_psychologist(call: types.CallbackQuery):
     # Отвечаем на callback (дополнительно)
     try:
         bot.answer_callback_query(call.id, "✅ Режим ПСИХОЛОГ активирован")
-    except:
+    except Exception:
         pass
 
 
@@ -337,7 +337,7 @@ def set_mode_trainer(call: types.CallbackQuery):
     # Отвечаем на callback (дополнительно)
     try:
         bot.answer_callback_query(call.id, "✅ Режим ТРЕНЕР активирован")
-    except:
+    except Exception:
         pass
 
 

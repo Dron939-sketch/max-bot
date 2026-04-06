@@ -145,7 +145,7 @@ def start_context(message: Message):
             
             try:
                 safe_delete_message(message.chat.id, message.message_id)
-            except:
+            except Exception:
                 pass
             
             safe_send_message(
@@ -380,7 +380,7 @@ def handle_context_message(message: Message) -> bool:
         lock = _get_user_lock(user_id)
         try:
             lock.release()
-        except:
+        except Exception:
             pass
 
 # ============================================

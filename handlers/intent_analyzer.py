@@ -118,7 +118,7 @@ def process_text_question_sync(
         if status_msg:
             try:
                 safe_delete_message(message.chat.id, status_msg.message_id)
-            except:
+            except Exception:
                 pass
         
         # Показываем вопрос (если нужно)

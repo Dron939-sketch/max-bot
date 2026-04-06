@@ -118,7 +118,7 @@ def log_call(func):
 
 # ========== ГЛОБАЛЬНЫЙ КЛИЕНТ ДЛЯ HTTPX ==========
 _http_client = None
-_client_lock = asyncio.Lock()
+_client_lock = None  # Создаётся лениво при первом использовании
 _current_loop_id = None
 
 async def get_http_client():
@@ -140,6 +140,9 @@ async def get_http_client():
         return _http_client
     
     # Иначе создаем новый клиент
+    global _client_lock
+    if _client_lock is None:
+        _client_lock = asyncio.Lock()
     async with _client_lock:
         # Проверяем еще раз после получения блокировки
         if _http_client is not None and _current_loop_id == current_loop_id:
@@ -353,14 +356,11 @@ async def call_deepseek(
     """
     Вызов DeepSeek API с использованием httpx
     """
-    # Гарантируем наличие цикла событий
+    # Проверяем наличие цикла событий (не создаём новый — это может конфликтовать)
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        # Нет цикла - создаем новый
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        logger.info("🔄 Создан новый цикл событий для DeepSeek")
+        logger.warning("⚠️ call_deepseek вызван без event loop — результат может быть некорректным")
     
     logger.info(f"📞 Вызов DeepSeek API (httpx)")
     logger.info(f"📏 Длина промпта: {len(prompt)} символов")
@@ -926,7 +926,7 @@ async def generate_ai_profile(user_id: int, data: dict) -> Optional[str]:
         for k, v in profile_data.items():
             try:
                 simplified[k] = str(v)[:500] if not isinstance(v, (int, float, bool, str)) else v
-            except:
+            except Exception:
                 simplified[k] = str(v)[:200]
         profile_json = json.dumps(simplified, ensure_ascii=False, indent=2)
         logger.warning("⚠️ Используем упрощенные данные")
