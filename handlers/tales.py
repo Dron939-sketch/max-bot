@@ -68,7 +68,7 @@ def show_tale(call: CallbackQuery):
     try:
         tale = tales.get_tale_for_issue(issue)
         tale_title = tale.get("title", "Сказка на ночь")
-    except:
+    except Exception:
         tale = None
         tale_title = "Сказка на ночь"
     
