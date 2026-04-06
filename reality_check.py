@@ -3,6 +3,7 @@
 Версия 2.0 - ПОЛНЫЙ НАБОР ЦЕЛЕЙ
 """
 
+import asyncio
 import logging
 import re
 from typing import Dict, List, Any, Tuple, Optional
@@ -4216,32 +4217,28 @@ def save_feasibility_result(user_id: int, goal_id: str, result: Dict) -> None:
         import os
         from datetime import datetime
         
-        # Создаем папку для результатов, если её нет
-        os.makedirs("feasibility_results", exist_ok=True)
-        
-        # Формируем имя файла
-        filename = f"feasibility_results/user_{user_id}_{datetime.now().strftime('%Y%m%d')}.json"
-        
-        # Загружаем существующие результаты
-        data = []
-        if os.path.exists(filename):
-            with open(filename, 'r', encoding='utf-8') as f:
-                try:
-                    data = json.load(f)
-                except Exception:
-                    data = []
-        
-        # Добавляем новый результат
-        data.append({
-            "user_id": user_id,
-            "goal_id": goal_id,
-            "result": result,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        # Сохраняем
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        def _save_to_file():
+            """Файловый I/O в отдельном потоке"""
+            os.makedirs("feasibility_results", exist_ok=True)
+            filename = f"feasibility_results/user_{user_id}_{datetime.now().strftime('%Y%m%d')}.json"
+            data = []
+            if os.path.exists(filename):
+                with open(filename, 'r', encoding='utf-8') as f:
+                    try:
+                        data = json.load(f)
+                    except Exception:
+                        data = []
+            data.append({
+                "user_id": user_id,
+                "goal_id": goal_id,
+                "result": result,
+                "timestamp": datetime.now().isoformat()
+            })
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+        # Выносим блокирующий I/O в тредпул
+        await asyncio.to_thread(_save_to_file)
             
     except Exception as e:
         logger.error(f"Ошибка при сохранении результата: {e}")

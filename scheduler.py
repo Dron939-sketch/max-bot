@@ -72,7 +72,9 @@ class TaskScheduler:
         
         # Отправляем в 9:00 утра
         if now.hour == 9:
-            for user_id, context in user_contexts.items():
+            # Снимаем снимок, чтобы избежать RuntimeError при изменении dict
+            snapshot = list(user_contexts.items())
+            for user_id, context in snapshot:
                 # Проверяем, есть ли профиль у пользователя
                 user_data_dict = user_data.get(user_id, {})
                 has_profile = user_data_dict.get("profile_data") or user_data_dict.get("ai_generated_profile")
@@ -92,8 +94,8 @@ class TaskScheduler:
             
             user_name = user_names.get(user_id, "друг")
             
-            # Обновляем погоду
-            context.update_weather()
+            # Обновляем погоду в тредпуле, чтобы не блокировать event loop
+            await asyncio.to_thread(context.update_weather)
             
             day_context = context.get_day_context()
             

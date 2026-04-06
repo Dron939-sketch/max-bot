@@ -617,16 +617,17 @@ async def save_test_results(request: Request):
         sync_db.save_user_to_db(user_id)
         
         def run_generation():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(generate_profile_interpretation_async(user_id))
-                finally:
-                    loop.close()
+                loop.run_until_complete(generate_profile_interpretation_async(user_id))
             except Exception as e:
                 logger.error(f"❌ Ошибка в потоке генерации: {e}")
-        
+                import traceback
+                traceback.print_exc()
+            finally:
+                loop.close()
+
         threading.Thread(target=run_generation, daemon=True).start()
         
         logger.info(f"✅ Результаты теста для пользователя {user_id} сохранены")

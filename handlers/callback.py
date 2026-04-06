@@ -7,6 +7,7 @@
 
 import logging
 import asyncio
+import threading
 import time
 import traceback
 from typing import Optional
@@ -708,10 +709,18 @@ def callback_handler(call: CallbackQuery):
     
     try:
         loop = asyncio.get_running_loop()
+        loop.create_task(async_callback_handler(call))
     except RuntimeError:
-        asyncio.run(async_callback_handler(call))
-    else:
-        asyncio.create_task(async_callback_handler(call))
+        def _target():
+            _loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(_loop)
+            try:
+                _loop.run_until_complete(async_callback_handler(call))
+            except Exception as e:
+                logger.error(f"❌ Ошибка callback handler: {e}")
+            finally:
+                _loop.close()
+        threading.Thread(target=_target, daemon=True).start()
 
 
 # ============================================

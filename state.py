@@ -15,6 +15,11 @@ from models import UserContext
 logger = logging.getLogger(__name__)
 
 # ============================================
+# БЛОКИРОВКА ДЛЯ ПОТОКОБЕЗОПАСНОГО ДОСТУПА
+# ============================================
+_state_lock = threading.RLock()
+
+# ============================================
 # ГЛОБАЛЬНЫЕ ХРАНИЛИЩА
 # ============================================
 
@@ -98,21 +103,22 @@ class TestStates:
 
 def set_state(user_id: int, state: str):
     """Устанавливает состояние пользователя"""
-    user_states[user_id] = state
+    with _state_lock:
+        user_states[user_id] = state
     logger.debug(f"🔄 User {user_id} state set to: {state}")
 
 
 def get_state(user_id: int) -> Optional[str]:
     """Возвращает текущее состояние пользователя"""
-    return user_states.get(user_id)
+    with _state_lock:
+        return user_states.get(user_id)
 
 
 def clear_state(user_id: int):
     """Очищает состояние пользователя"""
-    if user_id in user_states:
-        del user_states[user_id]
-    if user_id in user_state_data:
-        del user_state_data[user_id]
+    with _state_lock:
+        user_states.pop(user_id, None)
+        user_state_data.pop(user_id, None)
     logger.debug(f"🧹 User {user_id} state cleared")
 
 
@@ -122,16 +128,18 @@ def clear_state(user_id: int):
 
 def get_state_data(user_id: int) -> Dict[str, Any]:
     """Возвращает данные состояния пользователя"""
-    if user_id not in user_state_data:
-        user_state_data[user_id] = {}
-    return user_state_data[user_id]
+    with _state_lock:
+        if user_id not in user_state_data:
+            user_state_data[user_id] = {}
+        return user_state_data[user_id]
 
 
 def update_state_data(user_id: int, **kwargs):
     """Обновляет данные состояния пользователя"""
-    if user_id not in user_state_data:
-        user_state_data[user_id] = {}
-    user_state_data[user_id].update(kwargs)
+    with _state_lock:
+        if user_id not in user_state_data:
+            user_state_data[user_id] = {}
+        user_state_data[user_id].update(kwargs)
     logger.debug(f"📝 User {user_id} state data updated: {list(kwargs.keys())}")
 
 
@@ -170,22 +178,24 @@ def get_user_route(user_id: int) -> Optional[Dict[str, Any]]:
 
 def set_user_route(user_id: int, route_data: Dict[str, Any]):
     """Устанавливает маршрут пользователя"""
-    user_routes[user_id] = route_data
+    with _state_lock:
+        user_routes[user_id] = route_data
     logger.debug(f"🗺 User {user_id} route set")
 
 
 def update_user_route(user_id: int, **kwargs):
     """Обновляет данные маршрута пользователя"""
-    if user_id not in user_routes:
-        user_routes[user_id] = {}
-    user_routes[user_id].update(kwargs)
+    with _state_lock:
+        if user_id not in user_routes:
+            user_routes[user_id] = {}
+        user_routes[user_id].update(kwargs)
     logger.debug(f"🗺 User {user_id} route updated: {list(kwargs.keys())}")
 
 
 def clear_user_route(user_id: int):
     """Очищает маршрут пользователя"""
-    if user_id in user_routes:
-        del user_routes[user_id]
+    with _state_lock:
+        user_routes.pop(user_id, None)
     logger.debug(f"🗺 User {user_id} route cleared")
 
 
@@ -204,9 +214,10 @@ def get_user_data(user_id: int) -> Dict[str, Any]:
     """
     Получает данные пользователя
     """
-    if user_id not in user_data:
-        user_data[user_id] = {}
-    return user_data[user_id]
+    with _state_lock:
+        if user_id not in user_data:
+            user_data[user_id] = {}
+        return user_data[user_id]
 
 
 # ============================================
@@ -220,12 +231,12 @@ def is_voice_processing(user_id: int) -> bool:
 
 def set_voice_processing(user_id: int, value: bool):
     """Устанавливает флаг обработки голоса"""
-    if value:
-        _voice_processing[user_id] = True
-        logger.debug(f"🎤 Установлен флаг обработки голоса для {user_id}")
-    else:
-        if user_id in _voice_processing:
-            del _voice_processing[user_id]
+    with _state_lock:
+        if value:
+            _voice_processing[user_id] = True
+            logger.debug(f"🎤 Установлен флаг обработки голоса для {user_id}")
+        else:
+            _voice_processing.pop(user_id, None)
             logger.debug(f"🎤 Снят флаг обработки голоса для {user_id}")
 
 
@@ -305,12 +316,13 @@ def setup_auto_save(interval_seconds: int = 300):
                 from db_sync import sync_db
                 
                 saved_count = 0
-                # Сохраняем всех пользователей, у которых есть данные
-                all_users = set(
-                    list(user_data.keys()) + 
-                    list(user_contexts.keys()) + 
-                    list(user_routes.keys())
-                )
+                # Снимаем снимок ключей под блокировкой
+                with _state_lock:
+                    all_users = set(
+                        list(user_data.keys()) +
+                        list(user_contexts.keys()) +
+                        list(user_routes.keys())
+                    )
                 
                 for uid in all_users:
                     try:
@@ -343,19 +355,20 @@ def save_all_users_to_db() -> int:
     from db_sync import sync_db
     
     saved_count = 0
-    all_users = set(
-        list(user_data.keys()) + 
-        list(user_contexts.keys()) + 
-        list(user_routes.keys())
-    )
-    
+    with _state_lock:
+        all_users = set(
+            list(user_data.keys()) +
+            list(user_contexts.keys()) +
+            list(user_routes.keys())
+        )
+
     for uid in all_users:
         try:
             if sync_db.save_user_to_db(uid):
                 saved_count += 1
         except Exception as e:
             logger.error(f"❌ Ошибка финального сохранения {uid}: {e}")
-    
+
     logger.info(f"✅ Финальное сохранение: сохранено {saved_count} пользователей")
     return saved_count
 
@@ -384,6 +397,8 @@ def get_stats() -> Dict[str, Any]:
 # ============================================
 
 __all__ = [
+    # Блокировка
+    '_state_lock',
     # Глобальные хранилища
     'user_data',
     'user_names',
