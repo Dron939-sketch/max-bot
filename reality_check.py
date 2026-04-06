@@ -3,7 +3,6 @@
 Версия 2.0 - ПОЛНЫЙ НАБОР ЦЕЛЕЙ
 """
 
-import asyncio
 import logging
 import re
 from typing import Dict, List, Any, Tuple, Optional
@@ -4216,7 +4215,7 @@ def save_feasibility_result(user_id: int, goal_id: str, result: Dict) -> None:
         import json
         import os
         from datetime import datetime
-        
+
         def _save_to_file():
             """Файловый I/O в отдельном потоке"""
             os.makedirs("feasibility_results", exist_ok=True)
@@ -4237,9 +4236,8 @@ def save_feasibility_result(user_id: int, goal_id: str, result: Dict) -> None:
             with open(filename, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
-        # Выносим блокирующий I/O в тредпул
         _save_to_file()
-            
+
     except Exception as e:
         logger.error(f"Ошибка при сохранении результата: {e}")
 
