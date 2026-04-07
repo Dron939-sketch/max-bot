@@ -155,7 +155,56 @@ def cmd_start(message: Message):
     """Обработчик команды /start"""
     user_id = message.from_user.id
     user_name = message.from_user.first_name or "Пользователь"
-    
+
+    # Deep-link payload: /start web_<id> — связываем web-юзера с этим Max-чатом
+    text = getattr(message, "body", None)
+    if text is None:
+        text = getattr(message, "text", "") or ""
+    else:
+        text = getattr(text, "text", "") or text or ""
+    m = re.match(r"^/start(?:@\w+)?\s+web_(\d+)\s*$", str(text).strip())
+    if m:
+        web_user_id = int(m.group(1))
+        try:
+            import os, requests
+            api_base = os.environ.get("FREDI_API_BASE", "https://fredi-backend-flz2.onrender.com")
+            chat_id = getattr(message, "chat", None)
+            chat_id = getattr(chat_id, "id", None) if chat_id else message.from_user.id
+            username = getattr(message.from_user, "username", None)
+            r = requests.post(
+                f"{api_base}/api/messenger/link",
+                json={
+                    "user_id": web_user_id,
+                    "platform": "max",
+                    "chat_id": str(chat_id),
+                    "username": username,
+                },
+                timeout=15,
+            )
+            ok = r.status_code == 200 and r.json().get("success")
+        except Exception as e:
+            logger.error(f"link_web_user (max) error: {e}")
+            ok = False
+
+        try:
+            if ok:
+                bot.send_message(
+                    user_id=user_id,
+                    text=(
+                        f"✅ Аккаунт связан!\n\n"
+                        f"Теперь утренние сообщения от Фреди в 9:00 будут приходить сюда. "
+                        f"Хорошего дня, {user_name}!"
+                    ),
+                )
+            else:
+                bot.send_message(
+                    user_id=user_id,
+                    text="⚠️ Не удалось связать аккаунт. Попробуйте позже.",
+                )
+        except Exception as e:
+            logger.error(f"Error sending link confirmation: {e}")
+        return
+
     # Сохраняем имя в памяти
     user_names[user_id] = user_name
     clear_state(user_id)
