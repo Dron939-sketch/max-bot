@@ -134,18 +134,13 @@ def ensure_user_loaded_sync(user_id: int, user_name: str = None) -> bool:
     logger.info(f"🔄 Загружаем пользователя {user_id} из БД...")
     
     try:
-        # Используем асинхронную загрузку через отдельный цикл
-        from db_instance import load_user_from_db as async_load
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loaded = loop.run_until_complete(async_load(user_id))
-        finally:
-            loop.close()
-        
+        # load_user_from_db — синхронная обёртка, использующая db_loop_manager.run_coro
+        from db_instance import load_user_from_db
+        loaded = load_user_from_db(user_id)
+
         if loaded and user_name:
             user_names[user_id] = user_name
-        
+
         return loaded
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки пользователя {user_id}: {e}")

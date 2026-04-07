@@ -117,84 +117,80 @@ def log_call(func):
 
 
 # ========== ГЛОБАЛЬНЫЙ КЛИЕНТ ДЛЯ HTTPX ==========
-_http_client = None
+# Словарь клиентов: {loop_id: AsyncClient}
+# Каждый event loop имеет свой собственный клиент.
+# Не закрываем старые клиенты вручную — Python GC их соберёт.
+_http_clients = {}
 _client_lock = None  # Создаётся лениво при первом использовании
-_current_loop_id = None
 
 async def get_http_client():
     """
-    Возвращает глобальный HTTPX клиент для всех API-вызовов.
-    Создает новый клиент, если цикл изменился.
+    Возвращает HTTPX клиент привязанный к текущему event loop.
+    Если для текущего loop клиента нет — создаёт новый.
     """
-    global _http_client, _current_loop_id
-    
+    global _http_clients
+
     try:
         current_loop = asyncio.get_running_loop()
         current_loop_id = id(current_loop)
     except RuntimeError:
-        # Нет запущенного цикла - создаем временный
-        current_loop_id = None
-    
-    # Если клиент существует и цикл не изменился - используем его
-    if _http_client is not None and _current_loop_id == current_loop_id:
-        return _http_client
-    
-    # Иначе создаем новый клиент
+        raise RuntimeError("get_http_client() должен вызываться из async контекста")
+
+    # Если клиент для этого loop уже есть — возвращаем
+    client = _http_clients.get(current_loop_id)
+    if client is not None and not client.is_closed:
+        return client
+
+    # Создаём новый клиент для текущего loop
     global _client_lock
     if _client_lock is None:
         _client_lock = asyncio.Lock()
     async with _client_lock:
-        # Проверяем еще раз после получения блокировки
-        if _http_client is not None and _current_loop_id == current_loop_id:
-            return _http_client
-        
-        # Закрываем старый клиент, если есть
-        if _http_client is not None:
-            try:
-                await _http_client.aclose()
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка при закрытии старого клиента: {e}")
-        
+        # Проверяем ещё раз после получения блокировки
+        client = _http_clients.get(current_loop_id)
+        if client is not None and not client.is_closed:
+            return client
+
         logger.info(f"🔄 Создаём новый HTTPX клиент для цикла {current_loop_id}")
-        
-        # Настройки лимитов соединений
+
         limits = httpx.Limits(
             max_keepalive_connections=10,
             max_connections=50,
             keepalive_expiry=30
         )
-        
-        # Настройки таймаутов
         timeouts = httpx.Timeout(
             connect=30.0,
             read=60.0,
             write=30.0,
             pool=None
         )
-        
-        # Создаём клиент
-        _http_client = httpx.AsyncClient(
+
+        client = httpx.AsyncClient(
             limits=limits,
             timeout=timeouts,
             follow_redirects=True
         )
-        _current_loop_id = current_loop_id
-        logger.info("✅ Глобальный HTTPX клиент создан")
-    
-    return _http_client
+        _http_clients[current_loop_id] = client
+        logger.info("✅ HTTPX клиент создан для loop %s", current_loop_id)
+
+    return client
 
 
 async def close_http_client():
-    """Закрывает глобальный HTTPX клиент при завершении работы"""
-    global _http_client, _current_loop_id
-    if _http_client:
-        logger.info("🔒 Закрываем глобальный HTTPX клиент")
+    """Закрывает HTTPX клиент текущего loop при завершении работы"""
+    global _http_clients
+    try:
+        current_loop = asyncio.get_running_loop()
+        current_loop_id = id(current_loop)
+    except RuntimeError:
+        return
+    client = _http_clients.pop(current_loop_id, None)
+    if client and not client.is_closed:
+        logger.info("🔒 Закрываем HTTPX клиент для loop %s", current_loop_id)
         try:
-            await _http_client.aclose()
+            await client.aclose()
         except Exception as e:
             logger.warning(f"⚠️ Ошибка при закрытии клиента: {e}")
-        _http_client = None
-        _current_loop_id = None
 # =================================================
 
 
