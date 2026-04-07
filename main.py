@@ -616,19 +616,21 @@ async def save_test_results(request: Request):
         
         sync_db.save_user_to_db(user_id)
         
-        def run_generation():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(generate_profile_interpretation_async(user_id))
-            except Exception as e:
-                logger.error(f"❌ Ошибка в потоке генерации: {e}")
-                import traceback
-                traceback.print_exc()
-            finally:
-                loop.close()
-
-        threading.Thread(target=run_generation, daemon=True).start()
+        # Планируем через единый event loop менеджера БД,
+        # чтобы избежать "Event loop is closed" / "Future attached to a different loop"
+        try:
+            from db_instance import db_loop_manager
+            if db_loop_manager.is_ready():
+                asyncio.run_coroutine_threadsafe(
+                    generate_profile_interpretation_async(user_id),
+                    db_loop_manager.loop
+                )
+            else:
+                logger.warning("⚠️ db_loop_manager не готов для генерации профиля")
+        except Exception as e:
+            logger.error(f"❌ Ошибка планирования генерации профиля: {e}")
+            import traceback
+            traceback.print_exc()
         
         logger.info(f"✅ Результаты теста для пользователя {user_id} сохранены")
         
@@ -1738,9 +1740,17 @@ def cmd_weekend(message: types.Message):
     if not data.get("profile_data") and not data.get("ai_generated_profile"):
         safe_send_message(message, "❓ Сначала нужно пройти тест, чтобы я понимал твой профиль. Используй /start", delete_previous=True)
         return
-    def run_async():
-        asyncio.run(show_weekend_ideas(message, user_id))
-    threading.Thread(target=run_async, daemon=True).start()
+    try:
+        from db_instance import db_loop_manager
+        if db_loop_manager.is_ready():
+            asyncio.run_coroutine_threadsafe(
+                show_weekend_ideas(message, user_id),
+                db_loop_manager.loop
+            )
+        else:
+            logger.warning("⚠️ db_loop_manager не готов для weekend ideas")
+    except Exception as e:
+        logger.error(f"❌ Ошибка планирования weekend ideas: {e}")
 
 @bot.message_handler(commands=['dbstats'])
 def cmd_dbstats(message: types.Message):
@@ -1874,10 +1884,18 @@ def handle_voice_wrapper(message: types.Message):
     logger.error(f"   file_id: {message.voice.file_id if message.voice else 'нет'}")
     logger.error("=" * 80)
     
-    def run_async():
-        asyncio.run(handle_voice_message(message))
-    
-    threading.Thread(target=run_async, daemon=True).start()
+    # Через единый event loop менеджера БД
+    try:
+        from db_instance import db_loop_manager
+        if db_loop_manager.is_ready():
+            asyncio.run_coroutine_threadsafe(
+                handle_voice_message(message),
+                db_loop_manager.loop
+            )
+        else:
+            logger.warning("⚠️ db_loop_manager не готов для голосового сообщения")
+    except Exception as e:
+        logger.error(f"❌ Ошибка планирования голосового сообщения: {e}")
 
 # ============================================
 # ОСТАЛЬНЫЕ ОБРАБОТЧИКИ (ОСТАЮТСЯ КАК ЕСТЬ)
@@ -1912,9 +1930,17 @@ def handle_custom_goal_message(message: types.Message):
     user_id = message.from_user.id
     text = message.text
     logger.info(f"🎯 Получена пользовательская цель от пользователя {user_id}: {text[:50]}...")
-    def run_async():
-        asyncio.run(process_custom_goal_async(message, user_id, text))
-    threading.Thread(target=run_async, daemon=True).start()
+    try:
+        from db_instance import db_loop_manager
+        if db_loop_manager.is_ready():
+            asyncio.run_coroutine_threadsafe(
+                process_custom_goal_async(message, user_id, text),
+                db_loop_manager.loop
+            )
+        else:
+            logger.warning("⚠️ db_loop_manager не готов для обработки цели")
+    except Exception as e:
+        logger.error(f"❌ Ошибка планирования цели: {e}")
 
 @bot.message_handler(func=lambda message: get_state(message.from_user.id) == TestStates.pretest_question)
 def handle_pretest_question(message: types.Message):

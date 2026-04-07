@@ -39,12 +39,23 @@ logger = logging.getLogger(__name__)
 # ============================================
 
 def run_async_task(coro_func, *args, **kwargs):
+    """Планирует корутину в едином event loop менеджера БД."""
+    try:
+        from db_instance import db_loop_manager
+        if db_loop_manager.is_ready():
+            asyncio.run_coroutine_threadsafe(
+                coro_func(*args, **kwargs),
+                db_loop_manager.loop
+            )
+            return
+    except Exception as e:
+        logger.error(f"❌ Ошибка планирования через db_loop_manager: {e}")
+    # Fallback: отдельный поток с новым loop (без DB операций)
     def _wrapper():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            coro = coro_func(*args, **kwargs)
-            loop.run_until_complete(coro)
+            loop.run_until_complete(coro_func(*args, **kwargs))
         except Exception as e:
             logger.error(f"❌ Ошибка в асинхронной задаче: {e}")
         finally:

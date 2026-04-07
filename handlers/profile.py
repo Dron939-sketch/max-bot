@@ -579,30 +579,27 @@ async def show_ai_profile_async(message: Message, user_id: int):
                     profile_data = data.get("profile_data", {})
                     user_name_for_morning = get_user_name(user_id) or "друг"
                     
-                    def schedule_in_background():
-                        try:
-                            # Создаем новый event loop для этого потока
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            try:
-                                loop.run_until_complete(
-                                    morning_manager.schedule_morning_message(
-                                        user_id=user_id,
-                                        user_name=user_name_for_morning,
-                                        scores=scores,
-                                        profile_data=profile_data
-                                    )
-                                )
-                                logger.info(f"📅 Утренние сообщения запланированы для пользователя {user_id}")
-                            finally:
-                                loop.close()
-                        except Exception as e:
-                            logger.error(f"❌ Ошибка в фоне при планировании: {e}")
-                            import traceback
-                            traceback.print_exc()
-                    
-                    # Запускаем в отдельном потоке
-                    threading.Thread(target=schedule_in_background, daemon=True).start()
+                    # Планируем через db_loop_manager — корутина будет
+                    # выполняться в том же loop, где живёт DB pool.
+                    try:
+                        from db_instance import db_loop_manager
+                        if db_loop_manager.is_ready():
+                            asyncio.run_coroutine_threadsafe(
+                                morning_manager.schedule_morning_message(
+                                    user_id=user_id,
+                                    user_name=user_name_for_morning,
+                                    scores=scores,
+                                    profile_data=profile_data
+                                ),
+                                db_loop_manager.loop
+                            )
+                            logger.info(f"📅 Утренние сообщения запланированы для пользователя {user_id}")
+                        else:
+                            logger.warning("⚠️ db_loop_manager не готов, утренние сообщения пропущены")
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка в фоне при планировании: {e}")
+                        import traceback
+                        traceback.print_exc()
                     
             except Exception as e:
                 logger.error(f"❌ Ошибка при планировании утренних сообщений: {e}")
@@ -965,18 +962,20 @@ def show_profile(message: Message, user_id: int):
     )
 
 
-def _run_in_new_loop(coro):
-    """Безопасно запускает корутину в новом потоке с отдельным event loop"""
-    def _target():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(coro)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в фоновом потоке: {e}")
-        finally:
-            loop.close()
-    threading.Thread(target=_target, daemon=True).start()
+def _schedule_via_db_loop(coro_fn, *args):
+    """
+    Запускает корутину в существующем event loop менеджера БД.
+    Это гарантирует, что DB pool и порождённые задачи живут в одном loop.
+    """
+    try:
+        from db_instance import db_loop_manager
+        if db_loop_manager.is_ready():
+            # Используем asyncio.run_coroutine_threadsafe — fire-and-forget
+            asyncio.run_coroutine_threadsafe(coro_fn(*args), db_loop_manager.loop)
+            return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка планирования через db_loop_manager: {e}")
+    return False
 
 
 def show_ai_profile(message: Message, user_id: int):
@@ -985,7 +984,7 @@ def show_ai_profile(message: Message, user_id: int):
         loop = asyncio.get_running_loop()
         loop.create_task(show_ai_profile_async(message, user_id))
     except RuntimeError:
-        _run_in_new_loop(show_ai_profile_async(message, user_id))
+        _schedule_via_db_loop(show_ai_profile_async, message, user_id)
 
 
 def show_psychologist_thought(message: Message, user_id: int):
@@ -994,7 +993,7 @@ def show_psychologist_thought(message: Message, user_id: int):
         loop = asyncio.get_running_loop()
         loop.create_task(show_psychologist_thought_async(message, user_id))
     except RuntimeError:
-        _run_in_new_loop(show_psychologist_thought_async(message, user_id))
+        _schedule_via_db_loop(show_psychologist_thought_async, message, user_id)
 
 
 def show_final_profile(message: Message, user_id: int):
@@ -1003,7 +1002,7 @@ def show_final_profile(message: Message, user_id: int):
         loop = asyncio.get_running_loop()
         loop.create_task(show_final_profile_async(message, user_id))
     except RuntimeError:
-        _run_in_new_loop(show_final_profile_async(message, user_id))
+        _schedule_via_db_loop(show_final_profile_async, message, user_id)
 
 
 def show_old_final_profile(message: Message, user_id: int, status_msg: Optional[Message] = None):

@@ -711,16 +711,19 @@ def callback_handler(call: CallbackQuery):
         loop = asyncio.get_running_loop()
         loop.create_task(async_callback_handler(call))
     except RuntimeError:
-        def _target():
-            _loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(_loop)
-            try:
-                _loop.run_until_complete(async_callback_handler(call))
-            except Exception as e:
-                logger.error(f"❌ Ошибка callback handler: {e}")
-            finally:
-                _loop.close()
-        threading.Thread(target=_target, daemon=True).start()
+        # Планируем через единый event loop менеджера БД,
+        # чтобы все DB-задачи внутри работали с тем же pool.
+        try:
+            from db_instance import db_loop_manager
+            if db_loop_manager.is_ready():
+                asyncio.run_coroutine_threadsafe(
+                    async_callback_handler(call),
+                    db_loop_manager.loop
+                )
+            else:
+                logger.warning("⚠️ db_loop_manager не готов для callback")
+        except Exception as e:
+            logger.error(f"❌ Ошибка планирования callback: {e}")
 
 
 # ============================================
