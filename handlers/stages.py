@@ -49,6 +49,7 @@ from state import (
 
 # Импорты из db_sync
 from db_sync import sync_db
+from mirror_service import complete_mirror_if_needed_sync
 
 # Импорты для генерации
 from services import generate_ai_profile, generate_psychologist_thought
@@ -1687,6 +1688,9 @@ def finish_stage_5(message, user_id: int, state_data: dict):
     )
     background_thread.start()
     
+    
+    # --- Mirror completion ---
+    complete_mirror_if_needed_sync(user_id, user_data_dict)
     # Показываем финальный профиль
     try:
         from handlers.profile import show_final_profile

@@ -206,8 +206,17 @@ def cmd_start(message: Message):
         return
 
     # Сохраняем имя в памяти
+    # Извлекаем mirror_code из deep-link
+    _m_mirror = re.match(r"^/start(?:@\w+)?\s+(mirror_\w+)\s*$", str(text).strip())
+    _mirror_code = _m_mirror.group(1) if _m_mirror else None
     user_names[user_id] = user_name
     clear_state(user_id)
+    # Восстанавливаем mirror_code после очистки
+    if _mirror_code:
+        if user_id not in user_data:
+            user_data[user_id] = {}
+        user_data[user_id]["mirror_code"] = _mirror_code
+        logger.info(f"🪞 Mirror code saved: user={user_id}, code={_mirror_code}")
     
     # Безопасно получаем атрибуты from_user
     def run_save_user():
