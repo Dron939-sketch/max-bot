@@ -162,6 +162,7 @@ def cmd_start(message: Message):
         text = getattr(message, "text", "") or ""
     else:
         text = getattr(text, "text", "") or text or ""
+    logger.info(f"🔍 /start raw: text={repr(text)}, update_type={getattr(message, 'update_type', '?')}, message.text={repr(getattr(message, 'text', None))}")
     m = re.match(r"^/start(?:@\w+)?\s+web_(\d+)\s*$", str(text).strip())
     if m:
         web_user_id = int(m.group(1))
