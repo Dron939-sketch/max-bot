@@ -2112,7 +2112,7 @@ def main():
     try:
         while retry_count < max_retries:
             try:
-                bot.polling()
+                bot.polling(allowed_updates=["message_created", "message_callback", "bot_started"])
             except KeyboardInterrupt:
                 logger.info("👋 Бот остановлен пользователем")
                 loop.run_until_complete(shutdown_handler())
