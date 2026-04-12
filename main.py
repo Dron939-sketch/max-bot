@@ -2012,9 +2012,29 @@ async def check_api_on_startup():
 # ФУНКЦИЯ ЗАПУСКА FASTAPI
 # ============================================
 
+def setup_bot_started_webhook():
+    """Регистрирует webhook для bot_started (deep-link) событий."""
+    max_token = os.environ.get("MAX_TOKEN", "").strip()
+    bot_url = os.environ.get("BOT_URL", "https://max-bot-1-ywpz.onrender.com").strip()
+    if not max_token:
+        return
+    try:
+        import requests as req
+        resp = req.post(
+            "https://platform-api.max.ru/subscriptions",
+            json={"url": f"{bot_url}/webhook", "update_types": ["bot_started"]},
+            headers={"Authorization": max_token},
+            timeout=15,
+        )
+        logger.info(f"🪞 Webhook subscription: {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        logger.error(f"🪞 Webhook subscription error: {e}")
+
+
 def run_fastapi():
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск FastAPI на порту {port}")
+    setup_bot_started_webhook()
     uvicorn.run(api_app, host="0.0.0.0", port=port, log_level="info")
 
 def run_async_tasks():
@@ -2937,11 +2957,24 @@ async def webhook(request: Request):
     """POST-обработчик для получения обновлений от MAX"""
     try:
         data = await request.json()
-        logger.info(f"📨 Получен POST-запрос на webhook: {data}")
-        
-        # Здесь можно обработать входящие обновления
-        # и извлечь user_id из данных
-        
+        logger.info(f"📨 Webhook: {data}")
+
+        update_type = data.get("update_type", "")
+
+        # Обработка bot_started с mirror payload
+        if update_type == "bot_started":
+            payload = data.get("payload", "")
+            user_info = data.get("user", {})
+            user_id = user_info.get("user_id")
+            logger.info(f"🪞 bot_started: user={user_id}, payload={payload}")
+
+            if payload and payload.startswith("mirror_") and user_id:
+                from state import user_data
+                if user_id not in user_data:
+                    user_data[user_id] = {}
+                user_data[user_id]["mirror_code"] = payload
+                logger.info(f"🪞 Mirror code saved via webhook: user={user_id}, code={payload}")
+
         return JSONResponse({"status": "ok", "message": "Webhook received"})
     except Exception as e:
         logger.error(f"❌ Ошибка webhook: {e}")
