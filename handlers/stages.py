@@ -394,7 +394,11 @@ def background_generate_profile(user_id: int, test_id: int, user_data_dict: dict
         
         # Сохраняем обновленные данные пользователя
         sync_db.save_user_to_db(user_id)
-        
+
+        # Mirror completion: отправляем результаты владельцу зеркала
+        # (делаем здесь, а не в finish_stage_5, чтобы AI-профиль был готов)
+        complete_mirror_if_needed_sync(user_id, user_data.get(user_id, {}))
+
         logger.info(f"🎉 Фоновая генерация завершена для {user_id}")
         
     except Exception as e:
@@ -1687,10 +1691,7 @@ def finish_stage_5(message, user_id: int, state_data: dict):
         daemon=True
     )
     background_thread.start()
-    
-    
-    # --- Mirror completion ---
-    complete_mirror_if_needed_sync(user_id, user_data_dict)
+
     # Показываем финальный профиль
     try:
         from handlers.profile import show_final_profile
