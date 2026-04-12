@@ -15,7 +15,13 @@ def complete_mirror_if_needed_sync(user_id: int, user_data_dict: dict):
     """Если пользователь пришёл по mirror-ссылке, отправляем результаты владельцу зеркала."""
     from state import user_data, user_names
 
+    # Сначала проверяем локально (если /start mirror_ попал в polling)
     mirror_code = user_data.get(user_id, {}).get("mirror_code")
+
+    # Если нет локально — проверяем базу (mirror_code сохранён через Frederick webhook)
+    if not mirror_code:
+        mirror_code = _check_db_for_mirror(user_id)
+
     if not mirror_code:
         return
 
@@ -42,7 +48,25 @@ def complete_mirror_if_needed_sync(user_id: int, user_data_dict: dict):
         resp = requests.post(f"{FREDI_API_BASE}/api/mirrors/complete", json=payload, timeout=15)
         logger.info(f"🪞 Mirror complete: {mirror_code} -> {resp.status_code}")
 
-        # Очищаем mirror_code после использования
+        # Очищаем mirror_code
         user_data.get(user_id, {}).pop("mirror_code", None)
     except Exception as e:
         logger.error(f"🪞 Mirror complete error: {e}")
+
+
+def _check_db_for_mirror(user_id: int):
+    """Проверяет базу: есть ли активное зеркало где friend_user_id = этот пользователь."""
+    try:
+        resp = requests.get(
+            f"{FREDI_API_BASE}/api/mirrors/pending/{user_id}",
+            timeout=10
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            code = data.get("mirror_code")
+            if code:
+                logger.info(f"🪞 Found pending mirror in DB: user={user_id}, code={code}")
+                return code
+    except Exception as e:
+        logger.error(f"🪞 DB mirror check error: {e}")
+    return None
