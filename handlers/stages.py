@@ -1681,7 +1681,13 @@ def finish_stage_5(message, user_id: int, state_data: dict):
         )
     
     logger.info(f"💾 Все ответы сохранены для user {user_id}")
-    
+
+    # Mirror completion: вызываем СРАЗУ, не дожидаясь фоновой генерации AI-профиля
+    try:
+        complete_mirror_if_needed_sync(user_id, user_data.get(user_id, {}))
+    except Exception as e:
+        logger.error(f"🪞 [MIRROR] Error in finish_stage_5: {e}")
+
     # Запускаем фоновую генерацию AI-профиля и мыслей психолога
     logger.info(f"🚀 Запускаем фоновую генерацию для пользователя {user_id}")
     
