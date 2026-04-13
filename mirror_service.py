@@ -17,12 +17,15 @@ def complete_mirror_if_needed_sync(user_id: int, user_data_dict: dict):
 
     # Сначала проверяем локально (если /start mirror_ попал в polling)
     mirror_code = user_data.get(user_id, {}).get("mirror_code")
+    logger.info(f"🪞 [MIRROR] complete check: user={user_id}, local_mirror_code={mirror_code}")
 
     # Если нет локально — проверяем базу (mirror_code сохранён через Frederick webhook)
     if not mirror_code:
         mirror_code = _check_db_for_mirror(user_id)
+        logger.info(f"🪞 [MIRROR] DB fallback: user={user_id}, db_mirror_code={mirror_code}")
 
     if not mirror_code:
+        logger.info(f"🪞 [MIRROR] No mirror_code found for user={user_id}, skipping")
         return
 
     try:
@@ -45,13 +48,16 @@ def complete_mirror_if_needed_sync(user_id: int, user_data_dict: dict):
             "friend_thinking_level": user_data_dict.get("thinking_level"),
         }
 
+        logger.info(f"🪞 [MIRROR] Sending to {FREDI_API_BASE}/api/mirrors/complete: code={mirror_code}, user={user_id}, vectors={vectors}")
+
         resp = requests.post(f"{FREDI_API_BASE}/api/mirrors/complete", json=payload, timeout=15)
-        logger.info(f"🪞 Mirror complete: {mirror_code} -> {resp.status_code}")
+        body = resp.text[:200]
+        logger.info(f"🪞 [MIRROR] Response: {mirror_code} -> HTTP {resp.status_code}, body={body}")
 
         # Очищаем mirror_code
         user_data.get(user_id, {}).pop("mirror_code", None)
     except Exception as e:
-        logger.error(f"🪞 Mirror complete error: {e}")
+        logger.error(f"🪞 [MIRROR] Error completing mirror {mirror_code}: {e}", exc_info=True)
 
 
 def _check_db_for_mirror(user_id: int):
@@ -65,8 +71,8 @@ def _check_db_for_mirror(user_id: int):
             data = resp.json()
             code = data.get("mirror_code")
             if code:
-                logger.info(f"🪞 Found pending mirror in DB: user={user_id}, code={code}")
+                logger.info(f"🪞 [MIRROR] Found pending mirror in DB: user={user_id}, code={code}")
                 return code
     except Exception as e:
-        logger.error(f"🪞 DB mirror check error: {e}")
+        logger.error(f"🪞 [MIRROR] DB mirror check error: {e}")
     return None
