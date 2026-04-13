@@ -13,6 +13,14 @@ import random
 import re
 import time
 import threading
+
+# Настройка логирования — ВСЕ логи в stdout
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
+logger = logging.getLogger(__name__)
 import fcntl
 import socket
 import asyncio
