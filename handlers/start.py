@@ -5,6 +5,7 @@
 ВЕРСИЯ 2.9 - УНИФИЦИРОВАНО HTML ФОРМАТИРОВАНИЕ
 """
 import logging
+import os
 import time
 import threading
 import asyncio
@@ -217,7 +218,21 @@ def cmd_start(message: Message):
         if user_id not in user_data:
             user_data[user_id] = {}
         user_data[user_id]["mirror_code"] = _mirror_code
-        logger.info(f"🪞 Mirror code saved: user={user_id}, code={_mirror_code}")
+        logger.info(f"🪞 [MIRROR] Mirror code saved: user={user_id}, code={_mirror_code}")
+        # Сразу сохраняем friend_user_id в БД — не зависим от памяти
+        def _save_to_db():
+            try:
+                import requests
+                api = os.environ.get("FREDI_API_BASE", "https://fredi-backend-flz2.onrender.com")
+                resp = requests.post(f"{api}/api/mirrors/register-friend", json={
+                    "mirror_code": _mirror_code,
+                    "friend_user_id": user_id,
+                    "friend_name": user_name
+                }, timeout=10)
+                logger.info(f"🪞 [MIRROR] Registered friend in DB: {_mirror_code} -> {user_id}, status={resp.status_code}")
+            except Exception as e:
+                logger.error(f"🪞 [MIRROR] Failed to register friend: {e}")
+        threading.Thread(target=_save_to_db, daemon=True).start()
     
     # Безопасно получаем атрибуты from_user
     def run_save_user():
