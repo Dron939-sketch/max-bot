@@ -2012,8 +2012,25 @@ async def check_api_on_startup():
 # ФУНКЦИЯ ЗАПУСКА FASTAPI
 # ============================================
 
+def remove_webhook_subscription():
+    """Удаляет webhook-подписку чтобы polling работал."""
+    max_token = os.environ.get("MAX_TOKEN", "").strip()
+    if not max_token:
+        return
+    try:
+        import requests as req
+        resp = req.delete(
+            "https://platform-api.max.ru/subscriptions",
+            headers={"Authorization": max_token},
+            timeout=15,
+        )
+        logger.info(f"🗑 Webhook unsubscribed: {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        logger.error(f"Webhook unsubscribe error: {e}")
+
+
 def setup_bot_started_webhook():
-    """Регистрирует webhook для bot_started (deep-link) событий."""
+    """Регистрирует webhook для bot_started (deep-link) событий. ОТКЛЮЧЕНО — конфликтует с polling."""
     max_token = os.environ.get("MAX_TOKEN", "").strip()
     bot_url = os.environ.get("BOT_URL", "https://max-bot-1-ywpz.onrender.com").strip()
     if not max_token:
@@ -2034,7 +2051,8 @@ def setup_bot_started_webhook():
 def run_fastapi():
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск FastAPI на порту {port}")
-    setup_bot_started_webhook()
+    # Удаляем старую webhook-подписку — она блокирует polling
+    remove_webhook_subscription()
     uvicorn.run(api_app, host="0.0.0.0", port=port, log_level="info")
 
 def run_async_tasks():
