@@ -323,11 +323,40 @@ def continue_start_in_thread(message: Message, user_id: int, user_name: str, loa
     
     # Регистрируем старт
     stats.register_start(user_id)
-    
+
+    # Проверяем, есть ли mirror_code (пришёл по ссылке зеркала)
+    user_data_dict = user_data.get(user_id, {})
+    has_mirror = bool(user_data_dict.get("mirror_code"))
+
+    if has_mirror:
+        logger.info(f"🪞 [MIRROR] User {user_id} came via mirror link, auto-starting test")
+        mirror_text = f"""
+<b>{user_name}</b>, привет! 👋
+
+🪞 Тебя пригласили пройти психологический тест от Фреди.
+
+<b>⏱ 15 минут</b> — и ты узнаешь свой психологический профиль, а твой друг увидит ваше сравнение.
+
+🚀 Давай начнём!
+"""
+        try:
+            if context.city and context.gender and context.age:
+                # Контекст уже есть — сразу начинаем тест
+                bot.send_message(message.chat.id, mirror_text, parse_mode='HTML')
+                from handlers.stages import show_stage_1_intro
+                show_stage_1_intro(message, user_id, user_data_dict)
+            else:
+                # Нужен контекст — запускаем сбор
+                keyboard = InlineKeyboardMarkup()
+                keyboard.row(InlineKeyboardButton("🚀 Начать!", callback_data="start_context"))
+                bot.send_message(message.chat.id, mirror_text, reply_markup=keyboard, parse_mode='HTML')
+        except Exception as e:
+            logger.error(f"❌ Ошибка mirror auto-start: {e}")
+        return
+
     # Проверяем, есть ли уже профиль
     profile_data = get_user_profile(user_id)
-    user_data_dict = user_data.get(user_id, {})
-    
+
     if profile_data or is_test_completed(user_data_dict):
         # У пользователя уже есть профиль
         profile_code = get_profile_code(user_id)
