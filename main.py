@@ -2015,32 +2015,21 @@ async def check_api_on_startup():
 def remove_webhook_subscription():
     """Удаляет webhook-подписку чтобы polling работал."""
     max_token = os.environ.get("MAX_TOKEN", "").strip()
+    bot_url = os.environ.get("BOT_URL", "https://max-bot-1-ywpz.onrender.com").strip()
     if not max_token:
         print("⚠️ MAX_TOKEN не найден, пропускаем удаление webhook")
         return
     try:
         import requests as req
-        # Пробуем несколько вариантов API для удаления подписки
-        for url in [
+        webhook_url = f"{bot_url}/webhook"
+        # Max API требует url в теле DELETE-запроса
+        resp = req.delete(
             "https://platform-api.max.ru/subscriptions",
-            f"https://api.max.ru/bot/{max_token}/deleteWebhook",
-        ]:
-            try:
-                resp = req.delete(url, headers={"Authorization": max_token}, timeout=15)
-                print(f"🗑 Webhook DELETE {url}: {resp.status_code} {resp.text[:200]}")
-            except Exception as e:
-                print(f"🗑 Webhook DELETE {url}: error {e}")
-        # Также пробуем POST с пустым url
-        try:
-            resp = req.post(
-                "https://platform-api.max.ru/subscriptions",
-                json={"url": "", "update_types": []},
-                headers={"Authorization": max_token},
-                timeout=15,
-            )
-            print(f"🗑 Webhook POST empty: {resp.status_code} {resp.text[:200]}")
-        except Exception as e:
-            print(f"🗑 Webhook POST empty: error {e}")
+            json={"url": webhook_url},
+            headers={"Authorization": max_token},
+            timeout=15,
+        )
+        print(f"🗑 Webhook DELETE (url={webhook_url}): {resp.status_code} {resp.text[:200]}")
     except Exception as e:
         print(f"🗑 Webhook unsubscribe error: {e}")
 
