@@ -2016,17 +2016,33 @@ def remove_webhook_subscription():
     """Удаляет webhook-подписку чтобы polling работал."""
     max_token = os.environ.get("MAX_TOKEN", "").strip()
     if not max_token:
+        print("⚠️ MAX_TOKEN не найден, пропускаем удаление webhook")
         return
     try:
         import requests as req
-        resp = req.delete(
+        # Пробуем несколько вариантов API для удаления подписки
+        for url in [
             "https://platform-api.max.ru/subscriptions",
-            headers={"Authorization": max_token},
-            timeout=15,
-        )
-        logger.info(f"🗑 Webhook unsubscribed: {resp.status_code} {resp.text[:200]}")
+            f"https://api.max.ru/bot/{max_token}/deleteWebhook",
+        ]:
+            try:
+                resp = req.delete(url, headers={"Authorization": max_token}, timeout=15)
+                print(f"🗑 Webhook DELETE {url}: {resp.status_code} {resp.text[:200]}")
+            except Exception as e:
+                print(f"🗑 Webhook DELETE {url}: error {e}")
+        # Также пробуем POST с пустым url
+        try:
+            resp = req.post(
+                "https://platform-api.max.ru/subscriptions",
+                json={"url": "", "update_types": []},
+                headers={"Authorization": max_token},
+                timeout=15,
+            )
+            print(f"🗑 Webhook POST empty: {resp.status_code} {resp.text[:200]}")
+        except Exception as e:
+            print(f"🗑 Webhook POST empty: error {e}")
     except Exception as e:
-        logger.error(f"Webhook unsubscribe error: {e}")
+        print(f"🗑 Webhook unsubscribe error: {e}")
 
 
 def setup_bot_started_webhook():
@@ -2143,10 +2159,17 @@ def main():
     except Exception as e:
         logger.warning(f"⚠️ Не удалось установить обработчик сигналов: {e}")
     
+    # Удаляем webhook-подписку ПЕРЕД запуском polling
+    print("🗑 Удаляем webhook-подписку перед polling...")
+    remove_webhook_subscription()
+    import time
+    time.sleep(2)  # Даём Max API время обработать удаление
+    print("✅ Запускаем polling...")
+
     is_render = os.environ.get('RENDER') is not None
     retry_count = 0
     max_retries = 5 if not is_render else 1
-    
+
     try:
         while retry_count < max_retries:
             try:
