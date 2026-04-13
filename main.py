@@ -2022,14 +2022,13 @@ def remove_webhook_subscription():
     try:
         import requests as req
         webhook_url = f"{bot_url}/webhook"
-        # Max API требует url в теле DELETE-запроса
+        # Max API: url передаётся как query-параметр
         resp = req.delete(
-            "https://platform-api.max.ru/subscriptions",
-            json={"url": webhook_url},
+            f"https://platform-api.max.ru/subscriptions?url={webhook_url}",
             headers={"Authorization": max_token},
             timeout=15,
         )
-        print(f"🗑 Webhook DELETE (url={webhook_url}): {resp.status_code} {resp.text[:200]}")
+        print(f"🗑 Webhook DELETE: {resp.status_code} {resp.text[:200]}")
     except Exception as e:
         print(f"🗑 Webhook unsubscribe error: {e}")
 
