@@ -2966,14 +2966,46 @@ async def webhook(request: Request):
             payload = data.get("payload", "")
             user_info = data.get("user", {})
             user_id = user_info.get("user_id")
-            logger.info(f"🪞 bot_started: user={user_id}, payload={payload}")
+            user_name = user_info.get("name", "Друг")
+            logger.info(f"🪞 bot_started: user={user_id}, payload={payload}, name={user_name}")
 
-            if payload and payload.startswith("mirror_") and user_id:
-                from state import user_data
-                if user_id not in user_data:
-                    user_data[user_id] = {}
-                user_data[user_id]["mirror_code"] = payload
-                logger.info(f"🪞 Mirror code saved via webhook: user={user_id}, code={payload}")
+            if user_id:
+                # Сохраняем mirror_code если есть
+                if payload and payload.startswith("mirror_"):
+                    from state import user_data
+                    if user_id not in user_data:
+                        user_data[user_id] = {}
+                    user_data[user_id]["mirror_code"] = payload
+                    logger.info(f"🪞 Mirror code saved via webhook: user={user_id}, code={payload}")
+
+                    # Отправляем приветствие через Max API
+                    try:
+                        requests.post(
+                            f"https://api.max.ru/bot/{MAX_TOKEN}/sendMessage",
+                            json={"chat_id": user_id, "text": (
+                                f"🪞 {user_name}, привет! Тебя пригласили пройти психологический тест от Фреди.\n\n"
+                                f"⏱ 15 минут — и ты узнаешь свой профиль, а друг увидит сравнение.\n\n"
+                                f"👇 Напиши /start чтобы начать!"
+                            )},
+                            timeout=10
+                        )
+                        logger.info(f"🪞 Mirror welcome sent to user {user_id}")
+                    except Exception as e:
+                        logger.error(f"🪞 Failed to send mirror welcome: {e}")
+
+                elif not payload or not payload.startswith("web_"):
+                    # Обычный bot_started без payload — отправляем приветствие
+                    try:
+                        requests.post(
+                            f"https://api.max.ru/bot/{MAX_TOKEN}/sendMessage",
+                            json={"chat_id": user_id, "text": (
+                                f"👋 {user_name}, привет! Я Фреди — виртуальный психолог.\n\n"
+                                f"Напиши /start чтобы начать!"
+                            )},
+                            timeout=10
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to send welcome: {e}")
 
         return JSONResponse({"status": "ok", "message": "Webhook received"})
     except Exception as e:
