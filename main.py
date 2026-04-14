@@ -2063,8 +2063,8 @@ def setup_bot_started_webhook():
 def run_fastapi():
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск FastAPI на порту {port}")
-    # Удаляем старую webhook-подписку — она блокирует polling
-    remove_webhook_subscription()
+    # bot_started обрабатывается Frederick бэкендом через его webhook
+    # Max бот использует только polling для message_created и message_callback
     uvicorn.run(api_app, host="0.0.0.0", port=port, log_level="info")
 
 def run_async_tasks():
@@ -2155,12 +2155,9 @@ def main():
     except Exception as e:
         logger.warning(f"⚠️ Не удалось установить обработчик сигналов: {e}")
     
-    # Удаляем webhook-подписку ПЕРЕД запуском polling
-    print("🗑 Удаляем webhook-подписку перед polling...")
-    remove_webhook_subscription()
-    import time
-    time.sleep(2)  # Даём Max API время обработать удаление
-    print("✅ Запускаем polling...")
+    # bot_started → Frederick backend webhook
+    # message_created + message_callback → polling здесь
+    print("✅ Запускаем polling (bot_started → Frederick backend)...")
 
     is_render = os.environ.get('RENDER') is not None
     retry_count = 0
@@ -2169,7 +2166,7 @@ def main():
     try:
         while retry_count < max_retries:
             try:
-                bot.polling(allowed_updates=["message_created", "message_callback", "bot_started"])
+                bot.polling(allowed_updates=["message_created", "message_callback"])
             except KeyboardInterrupt:
                 logger.info("👋 Бот остановлен пользователем")
                 loop.run_until_complete(shutdown_handler())
